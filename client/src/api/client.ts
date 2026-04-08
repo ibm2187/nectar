@@ -126,6 +126,9 @@ export interface Environment {
   currentBranch: string | null
   lastChecked: string | null
   reachable: boolean | null
+  versionSetManually?: boolean
+  versionSetBy?: string | null
+  versionSetAt?: string | null
   disabled: boolean
   ascendEnabled?: boolean
   disableOutgoingCommunication?: boolean

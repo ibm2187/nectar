@@ -76,17 +76,28 @@ class RepoManager {
    * Fetch latest from origin for a repo.
    * Uses explicit refspec because --bare clones don't auto-configure one,
    * which means `git fetch origin` alone only updates FETCH_HEAD, not branch refs.
+   *
+   * Force-flag is needed because force-pushes on feature branches would
+   * otherwise cause ref lock errors.
    */
   async fetch(repoName) {
     const repoPath = this._repoPath(repoName);
     if (!fs.existsSync(repoPath)) {
       throw new Error(`Repo ${repoName} not cloned yet`);
     }
-    await this._git(repoName, [
-      'fetch', 'origin',
-      '+refs/heads/*:refs/heads/*',
-      '--prune',
-    ]);
+    try {
+      await this._git(repoName, [
+        'fetch', 'origin',
+        '+refs/heads/*:refs/heads/*',
+        '--prune',
+        '--force',
+      ]);
+    } catch (err) {
+      // Log but don't throw on partial failures (common with force-pushes).
+      // The important branches (master, releases/*) usually succeed even if
+      // some feature branches have ref conflicts.
+      log.warn(`Fetch warning for ${repoName}: ${err.message.split('\n')[0]}`);
+    }
   }
 
   /**

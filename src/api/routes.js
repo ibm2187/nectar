@@ -228,8 +228,29 @@ module.exports = function createRoutes(services, config) {
     res.json(customerStore.listEnvironments(filter));
   });
 
+  // Bulk set the same version across many environments
+  // IMPORTANT: must be declared BEFORE /environments/:id/* routes to avoid
+  // Express matching "bulk" as the :id parameter.
+  // Body: { environmentIds: ['ck-615', 'ck-1097', ...], version: '4.2.1', setBy: 'nukulb' }
+  router.patch('/environments/bulk/version', (req, res) => {
+    const { environmentIds, version, branch, setBy } = req.body;
+    if (!Array.isArray(environmentIds) || environmentIds.length === 0) {
+      return res.status(400).json({ error: 'environmentIds must be a non-empty array' });
+    }
+    const updated = customerStore.setManualVersionBulk(environmentIds, { version, branch, setBy });
+    res.json({ updated: updated.length, environments: updated });
+  });
+
   router.get('/environments/:id', (req, res) => {
     const env = customerStore.getEnvironment(req.params.id);
+    if (!env) return res.status(404).json({ error: 'Environment not found' });
+    res.json(env);
+  });
+
+  // Manually set the version for a single environment
+  router.patch('/environments/:id/version', (req, res) => {
+    const { version, branch, setBy } = req.body;
+    const env = customerStore.setManualVersion(req.params.id, { version, branch, setBy });
     if (!env) return res.status(404).json({ error: 'Environment not found' });
     res.json(env);
   });

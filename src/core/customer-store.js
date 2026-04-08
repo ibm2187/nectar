@@ -114,24 +114,42 @@ class CustomerStore extends EventEmitter {
 
   /**
    * Update an environment's live state (called by poller).
+   *
+   * Behavior vs manual override:
+   * - Poller SUCCESS (reachable=true, version present) → takes over, clears
+   *   any manual flag. The real endpoint is now the source of truth.
+   * - Poller FAILURE (unreachable or no version) → leaves manual version
+   *   untouched. Only updates lastChecked/reachable.
    */
   updateLiveState(envId, { version, branch, reachable, error }) {
     const env = this.environments.get(envId);
     if (!env) return null;
 
     const oldVersion = env.currentVersion;
-    env.currentVersion = version ?? env.currentVersion;
-    env.currentBranch = branch ?? env.currentBranch;
-    env.reachable = reachable;
+
+    // Always update the poll metadata
     env.lastChecked = new Date().toISOString();
+    env.reachable = reachable;
     env.lastError = error || null;
     env.updatedAt = env.lastChecked;
+
+    // Only replace the version if the poll succeeded with a version
+    if (reachable && version) {
+      env.currentVersion = version;
+      env.currentBranch = branch ?? env.currentBranch;
+      // Successful poll clears any manual override
+      env.versionSetManually = false;
+      env.versionSetBy = null;
+      env.versionSetAt = null;
+    }
+    // If poll failed and we have no manual value, clear currentVersion? No —
+    // leave the last-known value so the UI doesn't lose data on transient errors.
 
     this.emit('environment:updated', env);
 
     // If version changed, record a deployment
-    if (version && version !== oldVersion) {
-      this._recordDeployment(env, oldVersion);
+    if (version && reachable && version !== oldVersion) {
+      this._recordDeployment(env, oldVersion, 'api-poll');
       this.emit('environment:version', env, { old: oldVersion, new: version });
     }
 
@@ -139,9 +157,49 @@ class CustomerStore extends EventEmitter {
     return env;
   }
 
+  /**
+   * Manually set the version for an environment (from UI).
+   * Bypasses the poller — records a deployment with source='manual'.
+   */
+  setManualVersion(envId, { version, branch, setBy }) {
+    const env = this.environments.get(envId);
+    if (!env) return null;
+
+    const oldVersion = env.currentVersion;
+    env.currentVersion = version || null;
+    env.currentBranch = branch || (version ? `releases/${version}` : null);
+    env.versionSetManually = true;
+    env.versionSetBy = setBy || null;
+    env.versionSetAt = new Date().toISOString();
+    env.updatedAt = env.versionSetAt;
+
+    this.emit('environment:updated', env);
+
+    if (version && version !== oldVersion) {
+      this._recordDeployment(env, oldVersion, 'manual');
+      this.emit('environment:version', env, { old: oldVersion, new: version });
+    }
+
+    this._debounceSave();
+    return env;
+  }
+
+  /**
+   * Bulk set the same version across multiple environments.
+   * Useful for CK where all franchises get deployed together.
+   */
+  setManualVersionBulk(envIds, { version, branch, setBy }) {
+    const updated = [];
+    for (const id of envIds) {
+      const env = this.setManualVersion(id, { version, branch, setBy });
+      if (env) updated.push(env);
+    }
+    return updated;
+  }
+
   // ── Deployments ─────────────────────────────────────
 
-  _recordDeployment(env, previousVersion) {
+  _recordDeployment(env, previousVersion, source = 'api-poll') {
     // Mark previous active deployment as ended
     const active = this.deployments.find(d => d.environmentId === env.id && !d.endedAt);
     const now = new Date().toISOString();
@@ -156,7 +214,7 @@ class CustomerStore extends EventEmitter {
       previousVersion: previousVersion || null,
       detectedAt: now,
       endedAt: null,
-      source: 'api-poll',
+      source,
     };
     this.deployments.push(deployment);
 
