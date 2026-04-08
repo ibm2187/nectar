@@ -137,6 +137,68 @@ export interface Environment {
   createdAt: string
   updatedAt: string
   notes?: string | null
+
+  // Live data from /api/status/* endpoints
+  features?: EnvFeatures | null
+  integrations?: EnvIntegrations | null
+  upgrades?: EnvUpgrades | null
+  lastFeaturesCheckedAt?: string | null
+  lastIntegrationsCheckedAt?: string | null
+  lastUpgradesCheckedAt?: string | null
+}
+
+export interface EnvFeatures {
+  portalFeatureFlag: Record<string, unknown>
+  mobileFeatureFlag: Record<string, unknown>
+  workflow: Record<string, unknown>
+}
+
+export interface EnvIntegrations {
+  ascend: { enabled: boolean; syncAllData?: boolean; partnerApiConfigured?: boolean }
+  bayadaHub: { enabled: boolean }
+  hah: { enabled: boolean }
+  sqsOutbound: { enabled: boolean }
+  sqsInbound: { enabled: boolean }
+  dataPublishing: Record<string, boolean>
+  disableOutgoingCommunication: boolean
+  sqsQueues: Record<string, Record<string, string[]>>
+}
+
+export interface EnvUpgradeItem {
+  upgradeName: string
+  desiredEnvs: string[]
+  nonBlocking: boolean
+  enforceDesiredEnvs: boolean
+  hasVerify: boolean
+  startedAt?: string | null
+  completedAt?: string | null
+  verificationStatus?: 'SUCCESS' | 'FAILED' | null
+  verificationError?: string | null
+  verificationMetadata?: Record<string, unknown> | null
+  forceRun?: boolean
+  version?: string | null
+  skippedReason?: string | null
+  skippedBy?: string | null
+}
+
+export interface EnvUpgrades {
+  summary: {
+    totalInPool: number
+    applied: number
+    pending: number
+    inProgress: number
+    skipped: number
+    failedVerification: number
+  }
+  latest: {
+    upgradeName: string
+    completedAt: string
+    verificationStatus: string | null
+  } | null
+  pending: EnvUpgradeItem[]
+  inProgress: EnvUpgradeItem[]
+  failedVerification: EnvUpgradeItem[]
+  skipped: EnvUpgradeItem[]
 }
 
 export interface EnvDeployment {

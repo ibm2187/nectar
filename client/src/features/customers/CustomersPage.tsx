@@ -169,9 +169,7 @@ export function CustomersPage() {
                 expanded={expandedFranchises.has(customer.id)}
                 onToggleFranchises={() => toggleFranchises(customer.id)}
                 onEnvDrilldown={(env) => {
-                  if (env.currentVersion) {
-                    navigate(`/releases/webplatform:${encodeURIComponent(env.currentVersion)}`)
-                  }
+                  navigate(`/environments/${encodeURIComponent(env.id)}`)
                 }}
                 onEnvEdit={(env) => setEditingEnv(env)}
                 onBulkSetFranchises={() => {
@@ -325,24 +323,14 @@ function EnvTile({
   onEdit: () => void
 }) {
   const tierColor = TIER_COLORS[env.tier] || TIER_COLORS.other
-  const hasVersion = !!env.currentVersion
 
   return (
-    <div
-      className={cn(
-        "group relative rounded-lg border p-3 transition-all",
-        hasVersion && "hover:border-primary/50 hover:bg-accent/30"
-      )}
-    >
-      {/* Main clickable body (drill-down) — disabled if no version */}
+    <div className="group relative rounded-lg border p-3 transition-all hover:border-primary/50 hover:bg-accent/30">
+      {/* Main clickable body — drill into env detail */}
       <button
         type="button"
-        onClick={hasVersion ? onDrilldown : undefined}
-        disabled={!hasVersion}
-        className={cn(
-          "text-left w-full",
-          hasVersion ? "cursor-pointer" : "cursor-default"
-        )}
+        onClick={onDrilldown}
+        className="text-left w-full cursor-pointer"
       >
         <div className="flex items-center gap-2 mb-1">
           <Badge className={cn("text-xs", tierColor)} variant="outline">

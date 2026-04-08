@@ -101,38 +101,132 @@ class EnvironmentPoller extends EventEmitter {
   }
 
   /**
-   * Poll one environment.
+   * Fetch a status endpoint from an environment with timeout.
+   */
+  async _fetchEndpoint(baseUrl, path) {
+    const url = `${baseUrl.replace(/\/$/, '')}${path}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: { 'Accept': 'application/json' },
+      });
+      clearTimeout(timeout);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    } catch (err) {
+      clearTimeout(timeout);
+      throw err;
+    }
+  }
+
+  /**
+   * Poll one environment — hits /version, /features, /integrations, /upgrades
+   * in parallel. Each endpoint failure is independent: a /features 404 doesn't
+   * prevent /version from being recorded.
    */
   async _pollOne(env) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
+    if (!env.url) return { versionChanged: false };
+    const previousVersion = env.currentVersion;
 
+    // Kick off all four in parallel
+    const [versionResult, featuresResult, integrationsResult, upgradesResult] = await Promise.allSettled([
+      this._fetchEndpoint(env.url, '/api/status/version'),
+      this._fetchEndpoint(env.url, '/api/status/features'),
+      this._fetchEndpoint(env.url, '/api/status/integrations'),
+      this._fetchEndpoint(env.url, '/api/status/upgrades'),
+    ]);
+
+    // /version → updates currentVersion + reachable + lastChecked
+    if (versionResult.status === 'fulfilled') {
+      const data = versionResult.value;
+      const version = data.version || null;
+      this.customerStore.updateLiveState(env.id, {
+        version,
+        branch: data.branch || (version ? `releases/${version}` : null),
+        reachable: true,
+      });
+      this.emit('env:reachable', env);
+    } else {
+      this.customerStore.updateLiveState(env.id, {
+        reachable: false,
+        error: versionResult.reason ? versionResult.reason.message : 'unknown',
+      });
+      this.emit('env:unreachable', env, versionResult.reason);
+    }
+
+    // /features → updates feature flags
+    if (featuresResult.status === 'fulfilled') {
+      this.customerStore.updateFeatures(env.id, {
+        portalFeatureFlag: featuresResult.value.portalFeatureFlag || {},
+        mobileFeatureFlag: featuresResult.value.mobileFeatureFlag || {},
+        workflow: featuresResult.value.workflow || {},
+      });
+    }
+
+    // /integrations → updates integration toggles
+    if (integrationsResult.status === 'fulfilled') {
+      const d = integrationsResult.value;
+      this.customerStore.updateIntegrations(env.id, {
+        ascend: d.ascend || { enabled: false },
+        bayadaHub: d.bayadaHub || { enabled: false },
+        hah: d.hah || { enabled: false },
+        sqsOutbound: d.sqsOutbound || { enabled: false },
+        sqsInbound: d.sqsInbound || { enabled: false },
+        dataPublishing: d.dataPublishing || {},
+        disableOutgoingCommunication: !!d.disableOutgoingCommunication,
+        sqsQueues: d.sqsQueues || {},
+      });
+    }
+
+    // /upgrades → updates upgrade status summary
+    if (upgradesResult.status === 'fulfilled') {
+      const d = upgradesResult.value;
+      this.customerStore.updateUpgrades(env.id, {
+        summary: d.summary || {},
+        latest: d.latest || null,
+        pending: d.pending || [],
+        inProgress: d.inProgress || [],
+        failedVerification: d.failedVerification || [],
+        skipped: d.skipped || [],
+      });
+    }
+
+    // Track per-env reachability for rollup (consider reachable if at least version succeeded)
+    const anySucceeded = [versionResult, featuresResult, integrationsResult, upgradesResult]
+      .some(r => r.status === 'fulfilled');
+    if (!anySucceeded) {
+      throw new Error('All endpoints failed');
+    }
+
+    const version = versionResult.status === 'fulfilled' ? versionResult.value.version : null;
+    return {
+      versionChanged: !!(previousVersion && version && previousVersion !== version),
+    };
+  }
+
+  /**
+   * Legacy single-endpoint version (no longer used, kept for reference).
+   * @deprecated
+   */
+  async _pollOneVersionOnly(env) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
     try {
       const res = await fetch(env.versionEndpoint, {
         signal: controller.signal,
         headers: { 'Accept': 'application/json' },
       });
       clearTimeout(timeout);
-
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      const version = data.version || null;
-      const previousVersion = env.currentVersion;
-
       this.customerStore.updateLiveState(env.id, {
-        version,
-        branch: data.branch || (version ? `releases/${version}` : null),
+        version: data.version,
+        branch: data.branch || (data.version ? `releases/${data.version}` : null),
         reachable: true,
       });
-
-      this.emit('env:reachable', env);
-
-      return {
-        versionChanged: previousVersion && version && previousVersion !== version,
-      };
+      return { versionChanged: false };
     } catch (err) {
       clearTimeout(timeout);
       this.customerStore.updateLiveState(env.id, {

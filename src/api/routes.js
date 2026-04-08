@@ -297,6 +297,70 @@ module.exports = function createRoutes(services, config) {
     res.json(envPoller.getStatus());
   });
 
+  // ── Upgrade script content (from local webplatform clone) ─
+  // Reads the actual script file from master so users can see the code.
+  // Extracts the JIRA key from the git commit message (reliable, not filename).
+  router.get('/upgrades/:upgradeName/source', async (req, res) => {
+    try {
+      const upgradeName = req.params.upgradeName;
+      // Sanitize — no path traversal, no absolute paths
+      if (upgradeName.includes('..') || upgradeName.startsWith('/')) {
+        return res.status(400).json({ error: 'Invalid upgrade name' });
+      }
+
+      // The file could have .upgrade.js suffix or not — try both
+      const candidates = upgradeName.endsWith('.upgrade.js')
+        ? [upgradeName]
+        : [`${upgradeName}.upgrade.js`, upgradeName];
+
+      let content = null;
+      let foundPath = null;
+      for (const c of candidates) {
+        const path = `server/upgrade/upgradePool/${c}`;
+        try {
+          content = await repoManager.readFile('webplatform', 'master', path);
+          if (content) { foundPath = path; break; }
+        } catch { /* try next */ }
+      }
+
+      if (!content) {
+        return res.status(404).json({ error: 'Upgrade script not found' });
+      }
+
+      // Get the introducing commit (--follow handles renames)
+      let jiraKey = null;
+      let introCommit = null;
+      let introAuthor = null;
+      let introDate = null;
+      try {
+        const logOutput = await repoManager._git('webplatform', [
+          'log', '--follow', '--format=%H|%s|%an|%aI', '--reverse', '--', foundPath,
+        ]);
+        const firstLine = logOutput.trim().split('\n')[0];
+        if (firstLine) {
+          const [sha, subject, author, date] = firstLine.split('|');
+          introCommit = sha;
+          introAuthor = author;
+          introDate = date;
+          const match = (subject || '').match(/\b(DEV|MAV)-\d+\b/);
+          if (match) jiraKey = match[0];
+        }
+      } catch { /* ok */ }
+
+      res.json({
+        upgradeName,
+        path: foundPath,
+        content,
+        jiraKey,
+        introCommit,
+        introAuthor,
+        introDate,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Ticket lookup ─────────────────────────────────────
 
   router.get('/tickets/:key/releases', (req, res) => {

@@ -158,6 +158,48 @@ class CustomerStore extends EventEmitter {
   }
 
   /**
+   * Update an environment's feature flags data (from poller).
+   */
+  updateFeatures(envId, features) {
+    const env = this.environments.get(envId);
+    if (!env) return null;
+    env.features = features;
+    env.lastFeaturesCheckedAt = new Date().toISOString();
+    env.updatedAt = env.lastFeaturesCheckedAt;
+    this.emit('environment:updated', env);
+    this._debounceSave();
+    return env;
+  }
+
+  /**
+   * Update an environment's integrations data (from poller).
+   */
+  updateIntegrations(envId, integrations) {
+    const env = this.environments.get(envId);
+    if (!env) return null;
+    env.integrations = integrations;
+    env.lastIntegrationsCheckedAt = new Date().toISOString();
+    env.updatedAt = env.lastIntegrationsCheckedAt;
+    this.emit('environment:updated', env);
+    this._debounceSave();
+    return env;
+  }
+
+  /**
+   * Update an environment's upgrades data (from poller).
+   */
+  updateUpgrades(envId, upgrades) {
+    const env = this.environments.get(envId);
+    if (!env) return null;
+    env.upgrades = upgrades;
+    env.lastUpgradesCheckedAt = new Date().toISOString();
+    env.updatedAt = env.lastUpgradesCheckedAt;
+    this.emit('environment:updated', env);
+    this._debounceSave();
+    return env;
+  }
+
+  /**
    * Manually set the version for an environment (from UI).
    * Bypasses the poller — records a deployment with source='manual'.
    */
