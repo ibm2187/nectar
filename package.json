@@ -1,0 +1,37 @@
+{
+  "name": "nectar",
+  "version": "0.1.0",
+  "description": "Release cycle management for Viv",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "dev:client": "cd client && npx vite",
+    "build:client": "cd client && npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "release-management",
+    "jira",
+    "github",
+    "cherry-pick",
+    "deployment"
+  ],
+  "author": "Nukul Bhasin",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mavencare/nectar.git"
+  },
+  "dependencies": {
+    "@slack/bolt": "^4.6.0",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.3",
+    "node-cron": "^4.2.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "vitest": "^1.6.1"
+  }
+}

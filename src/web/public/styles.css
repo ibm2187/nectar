@@ -1,0 +1,297 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --yellow: #d29922;
+  --red: #f85149;
+  --purple: #bc8cff;
+  --radius: 8px;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+/* ── Header ─────────────────────────────────────── */
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+nav { display: flex; gap: 4px; }
+
+.nav-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 13px;
+}
+.nav-btn:hover { color: var(--text); }
+.nav-btn.active {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.connection-status {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.connection-status.connected { color: var(--green); }
+.connection-status.error { color: var(--red); }
+
+/* ── Views ──────────────────────────────────────── */
+
+main { padding: 20px; max-width: 960px; margin: 0 auto; }
+
+.view { display: none; }
+.view.active { display: block; }
+
+/* ── Toolbar ────────────────────────────────────── */
+
+.toolbar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #000;
+  border: none;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-primary:hover { opacity: 0.9; }
+
+select {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.btn-back {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 14px;
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+
+/* ── Release Cards ──────────────────────────────── */
+
+.release-list { display: flex; flex-direction: column; gap: 12px; }
+
+.release-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.release-card:hover { border-color: var(--accent); }
+
+.release-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.release-version {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: 'SF Mono', Menlo, monospace;
+}
+
+.state-badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 12px;
+  letter-spacing: 0.5px;
+}
+.state-planning    { background: #1f2937; color: var(--text-dim); }
+.state-cutting     { background: #1c2333; color: var(--purple); }
+.state-stabilizing { background: #2b1d0e; color: var(--yellow); }
+.state-approved    { background: #0d2818; color: var(--green); }
+.state-deploying   { background: #0d1f3c; color: var(--accent); }
+.state-done        { background: #1a1a1a; color: var(--text-dim); }
+
+.release-meta {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.8;
+}
+.release-meta span { margin-right: 16px; }
+
+/* ── Release Detail ─────────────────────────────── */
+
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.detail-header h2 {
+  font-size: 24px;
+  font-family: 'SF Mono', Menlo, monospace;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-sm:hover { border-color: var(--accent); }
+.btn-sm:disabled { opacity: 0.4; cursor: default; }
+
+.detail-section {
+  margin-bottom: 20px;
+}
+.detail-section h3 {
+  font-size: 14px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.ticket-list, .cp-list, .deploy-list, .audit-list {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.ticket-row, .cp-row, .deploy-row, .audit-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.ticket-row:last-child, .cp-row:last-child, .deploy-row:last-child, .audit-row:last-child {
+  border-bottom: none;
+}
+
+.tag {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.tag-pending { background: #2b1d0e; color: var(--yellow); }
+.tag-merged, .tag-cherry-picked { background: #0d2818; color: var(--green); }
+.tag-in-progress { background: #0d1f3c; color: var(--accent); }
+
+.empty { color: var(--text-dim); font-size: 13px; font-style: italic; padding: 16px; }
+
+/* ── Customer Map ───────────────────────────────── */
+
+.customer-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.customer-table th, .customer-table td {
+  padding: 10px 14px;
+  text-align: left;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.customer-table th {
+  color: var(--text-dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 11px;
+}
+
+/* ── Modal ──────────────────────────────────────── */
+
+dialog {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  padding: 24px;
+  max-width: 400px;
+  width: 90%;
+}
+dialog::backdrop { background: rgba(0,0,0,0.6); }
+
+dialog h2 { margin-bottom: 16px; font-size: 18px; }
+
+dialog label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+dialog input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}

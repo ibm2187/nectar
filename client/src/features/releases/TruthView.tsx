@@ -1,0 +1,402 @@
+import { useState, useEffect, useMemo } from 'react'
+import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
+import { Badge } from '../../components/ui/badge'
+import { Button } from '../../components/ui/button'
+import { Input } from '../../components/ui/input'
+import { JiraLink } from '../../components/JiraLink'
+import { apiFetch } from '../../api/client'
+import type { ReleaseTruthReport, VerifiedTicket, Health, HealthCategory } from '../../api/client'
+import { cn, timeAgo } from '../../lib/utils'
+
+interface Props {
+  repo: string
+  version: string
+}
+
+// Health styling — color, emoji, label, sort priority (worst first)
+const HEALTH_INFO: Record<Health, { label: string; color: string; emoji: string; priority: number }> = {
+  'lying':       { label: 'Lying',       color: 'bg-red-500/20 text-red-400 border-red-500/40',         emoji: '🔴', priority: 1 },
+  'stale-cert':  { label: 'Stale Cert',  color: 'bg-red-500/20 text-red-400 border-red-500/40',         emoji: '🔴', priority: 2 },
+  'failed-qa':   { label: 'Failed QA',   color: 'bg-red-500/20 text-red-400 border-red-500/40',         emoji: '🔴', priority: 3 },
+  'blocked':     { label: 'Blocked',     color: 'bg-red-500/20 text-red-400 border-red-500/40',         emoji: '🚫', priority: 4 },
+  'unknown':     { label: 'Unknown',     color: 'bg-gray-500/20 text-gray-400 border-gray-500/40',      emoji: '?',  priority: 5 },
+  'needs-review':{ label: 'Needs Review', color: 'bg-orange-500/20 text-orange-400 border-orange-500/40', emoji: '🔎', priority: 6 },
+  'pre-dev':     { label: 'Pre-Dev',     color: 'bg-orange-500/20 text-orange-400 border-orange-500/40', emoji: '○',  priority: 7 },
+  'in-dev':      { label: 'In Dev',      color: 'bg-orange-500/20 text-orange-400 border-orange-500/40', emoji: '🛠', priority: 8 },
+  'awaiting-cp': { label: 'Awaiting CP', color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40', emoji: '⏳', priority: 9 },
+  'pr-pending':  { label: 'PR Pending',  color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40', emoji: '⏳', priority: 10 },
+  'status-stale':{ label: 'JIRA Stale',  color: 'bg-blue-500/20 text-blue-400 border-blue-500/40',       emoji: 'ℹ', priority: 11 },
+  'in-qa':       { label: 'In QA',       color: 'bg-blue-500/20 text-blue-400 border-blue-500/40',       emoji: '🔬', priority: 12 },
+  'healthy':     { label: 'Healthy',     color: 'bg-green-500/20 text-green-400 border-green-500/40',    emoji: '✓',  priority: 13 },
+  'no-code':     { label: 'No Code',     color: 'bg-gray-500/20 text-gray-300 border-gray-500/40',       emoji: '⊘',  priority: 14 },
+}
+
+const PILL_FILTERS: { key: 'all' | HealthCategory; label: string; color: string }[] = [
+  { key: 'all',          label: 'Planned',     color: 'bg-muted' },
+  { key: 'done',         label: 'Done',        color: 'bg-green-500/15 text-green-400' },
+  { key: 'in-qa',        label: 'In QA',       color: 'bg-blue-500/15 text-blue-400' },
+  { key: 'awaiting-cp',  label: 'Awaiting CP', color: 'bg-yellow-500/15 text-yellow-400' },
+  { key: 'in-dev',       label: 'In Dev',      color: 'bg-orange-500/15 text-orange-400' },
+  { key: 'attention',    label: 'Attention',   color: 'bg-red-500/15 text-red-400' },
+]
+
+type SortKey = 'health' | 'key' | 'jiraStatus' | 'assignee'
+type SortDir = 'asc' | 'desc'
+
+export function TruthView({ repo, version }: Props) {
+  const [truth, setTruth] = useState<ReleaseTruthReport | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [filter, setFilter] = useState<'all' | HealthCategory>('all')
+  const [search, setSearch] = useState('')
+  const [sortKey, setSortKey] = useState<SortKey>('health')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+
+  async function loadTruth() {
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await apiFetch<ReleaseTruthReport>(
+        `/releases/${encodeURIComponent(repo)}/${encodeURIComponent(version)}/truth`
+      )
+      setTruth(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load truth')
+    }
+    setLoading(false)
+  }
+
+  useEffect(() => { loadTruth() }, [repo, version])
+
+  const filtered = useMemo(() => {
+    if (!truth) return []
+    let rows = truth.verified
+
+    if (filter !== 'all') {
+      rows = rows.filter(t => t.healthCategory === filter)
+    }
+
+    if (search) {
+      const q = search.toLowerCase()
+      rows = rows.filter(t =>
+        t.key.toLowerCase().includes(q) ||
+        (t.summary || '').toLowerCase().includes(q) ||
+        (t.assignee || '').toLowerCase().includes(q)
+      )
+    }
+
+    rows = [...rows].sort((a, b) => {
+      let cmp = 0
+      switch (sortKey) {
+        case 'health':
+          cmp = HEALTH_INFO[a.health].priority - HEALTH_INFO[b.health].priority
+          break
+        case 'key':
+          cmp = a.key.localeCompare(b.key)
+          break
+        case 'jiraStatus':
+          cmp = a.jiraStatus.localeCompare(b.jiraStatus)
+          break
+        case 'assignee':
+          cmp = (a.assignee || 'zzz').localeCompare(b.assignee || 'zzz')
+          break
+      }
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+
+    return rows
+  }, [truth, filter, search, sortKey, sortDir])
+
+  function setSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
+
+  if (loading && !truth) {
+    return (
+      <Card>
+        <CardContent className="p-6 text-center text-muted-foreground text-sm">
+          Computing truth from JIRA + Git + GitHub...
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <CardContent className="p-6 text-center">
+          <p className="text-sm text-destructive">{error}</p>
+          <Button variant="outline" size="sm" onClick={loadTruth} className="mt-2">Retry</Button>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (!truth) return null
+
+  function pillCount(key: typeof PILL_FILTERS[number]['key']): number {
+    if (!truth) return 0
+    if (key === 'all') return truth.rollup.planned
+    const r = truth.rollup
+    switch (key) {
+      case 'done': return r.done
+      case 'in-qa': return r.inQa
+      case 'awaiting-cp': return r.awaitingCp
+      case 'in-dev': return r.inDev
+      case 'attention': return r.attention
+    }
+    return 0
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header / rollup */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base">Release Truth</CardTitle>
+            <Button variant="outline" size="sm" onClick={loadTruth} disabled={loading}>
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {/* Pill filters */}
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-4">
+            {PILL_FILTERS.map(p => {
+              const count = pillCount(p.key)
+              const active = filter === p.key
+              const disabled = count === 0 && p.key !== 'all'
+              return (
+                <button
+                  key={p.key}
+                  type="button"
+                  onClick={() => !disabled && setFilter(p.key)}
+                  disabled={disabled}
+                  className={cn(
+                    "rounded-lg border p-3 text-center transition-all",
+                    p.color,
+                    active && "ring-2 ring-primary",
+                    disabled ? "opacity-40 cursor-default" : "cursor-pointer hover:scale-[1.02] hover:brightness-125"
+                  )}
+                >
+                  <div className="text-2xl font-bold">{count}</div>
+                  <div className="text-xs uppercase tracking-wider opacity-80">{p.label}</div>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Meta info */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs pt-2 border-t">
+            <div>
+              <div className="text-muted-foreground">JIRA</div>
+              <div className="font-medium">
+                {truth.jira.released ? 'Released' : 'Unreleased'}
+                {truth.jira.releaseDate && <span className="text-muted-foreground ml-1">({truth.jira.releaseDate})</span>}
+              </div>
+            </div>
+            <div>
+              <div className="text-muted-foreground">Branch</div>
+              <div className="font-mono text-xs truncate" title={truth.branch || ''}>
+                {truth.git.branchExists ? truth.branch : '—'}
+              </div>
+              {truth.git.branchExists && (
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  {truth.git.cherryPickCount} cherry-picks
+                </div>
+              )}
+            </div>
+            <div>
+              <div className="text-muted-foreground">Open PRs</div>
+              <div>{truth.pullRequests.open} targeting branch</div>
+            </div>
+            <div>
+              <div className="text-muted-foreground">Derived State</div>
+              <div className="flex items-center gap-1.5">
+                <Badge variant="outline" className={`state-${truth.derivedState}`}>{truth.derivedState}</Badge>
+                {!truth.stateMatchesReality && (
+                  <span className="text-yellow-400" title={`Currently: ${truth.currentState}`}>⚠</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Filter / search row */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          placeholder="Search by key, title, assignee..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="max-w-sm"
+        />
+        <span className="text-sm text-muted-foreground">
+          {filtered.length} of {truth.verified.length}
+        </span>
+        {(filter !== 'all' || search) && (
+          <Button variant="ghost" size="sm" onClick={() => { setFilter('all'); setSearch('') }}>
+            Clear filters
+          </Button>
+        )}
+      </div>
+
+      {/* Tickets table */}
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm table-fixed">
+              <colgroup>
+                <col className="w-28" />
+                <col />{/* title takes remaining */}
+                <col className="w-40" />
+                <col className="w-32" />
+                <col className="w-20" />
+                <col className="w-64" />
+              </colgroup>
+              <thead>
+                <tr className="border-b text-left">
+                  <SortHeader label="Key"        active={sortKey === 'key'}        dir={sortDir} onClick={() => setSort('key')} />
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Title</th>
+                  <SortHeader label="JIRA Status" active={sortKey === 'jiraStatus'} dir={sortDir} onClick={() => setSort('jiraStatus')} />
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cherry-Pick</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center">Branch</th>
+                  <SortHeader label="Health"     active={sortKey === 'health'}     dir={sortDir} onClick={() => setSort('health')} />
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-8 text-center text-sm text-muted-foreground italic">
+                      No tickets match the current filter
+                    </td>
+                  </tr>
+                ) : (
+                  filtered.map(t => <TicketRow key={t.key} ticket={t} />)
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Rogue commits */}
+      {truth.rogues.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border bg-purple-500/15 text-purple-400 border-purple-500/30">
+                ⚡ Rogue Commits
+              </span>
+              <span className="text-muted-foreground font-normal text-sm">{truth.rogues.length}</span>
+              <span className="text-xs text-muted-foreground font-normal ml-2">(JIRA keys in commits but not in fixVersion)</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-1 max-h-64 overflow-auto">
+              {truth.rogues.map(r => (
+                <div key={r.key} className="flex items-center gap-2 text-sm py-1">
+                  <JiraLink jiraKey={r.key} className="text-purple-400 hover:text-purple-300" />
+                  {r.commitSha && <span className="font-mono text-xs text-muted-foreground">{r.commitSha.substring(0, 7)}</span>}
+                  <span className="text-muted-foreground truncate flex-1">{r.commitMessage}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="text-xs text-muted-foreground text-right">
+        Computed in {truth.durationMs}ms · {timeAgo(truth.computedAt)}
+      </div>
+    </div>
+  )
+}
+
+function SortHeader({
+  label, active, dir, onClick,
+}: {
+  label: string; active: boolean; dir: SortDir; onClick: () => void
+}) {
+  return (
+    <th
+      onClick={onClick}
+      className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer hover:text-foreground select-none"
+    >
+      {label}
+      {active && <span className="ml-1">{dir === 'asc' ? '↑' : '↓'}</span>}
+    </th>
+  )
+}
+
+function TicketRow({ ticket: t }: { ticket: VerifiedTicket }) {
+  const info = HEALTH_INFO[t.health]
+  return (
+    <tr className="border-b border-border/30 hover:bg-accent/30 transition-colors">
+      {/* Key */}
+      <td className="px-3 py-2 align-top">
+        <JiraLink jiraKey={t.key} />
+      </td>
+
+      {/* Title */}
+      <td className="px-3 py-2 align-top">
+        <div className="text-foreground line-clamp-2" title={t.summary}>{t.summary}</div>
+        <div className="text-xs text-muted-foreground mt-0.5 truncate">
+          {t.type && <span>{t.type}</span>}
+          {t.assignee && <span>{t.type ? ' · ' : ''}{t.assignee}</span>}
+        </div>
+      </td>
+
+      {/* JIRA Status */}
+      <td className="px-3 py-2 align-top">
+        <span className="text-xs">{t.jiraStatus}</span>
+      </td>
+
+      {/* Cherry-pick PR */}
+      <td className="px-3 py-2 align-top">
+        {t.pr ? (
+          <a
+            href={t.pr.prUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline text-xs"
+          >
+            #{t.pr.prNumber} (open)
+          </a>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </td>
+
+      {/* On Branch */}
+      <td className="px-3 py-2 align-top text-center">
+        {!t.branchHasCommits ? (
+          <span className="text-muted-foreground text-xs italic" title="Branch not cut yet">n/a</span>
+        ) : t.onBranch ? (
+          <span className="text-green-400 text-base">✓</span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </td>
+
+      {/* Health */}
+      <td className="px-3 py-2 align-top">
+        <div
+          className={cn("inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border", info.color)}
+          title={t.healthMessage}
+        >
+          {info.emoji} {info.label}
+        </div>
+        <div className="text-xs text-muted-foreground mt-0.5 truncate" title={t.healthMessage}>
+          {t.healthMessage}
+        </div>
+      </td>
+    </tr>
+  )
+}

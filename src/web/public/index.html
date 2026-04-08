@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nectar — Release Management</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <h1>Nectar</h1>
+    <nav>
+      <button class="nav-btn active" data-view="releases">Releases</button>
+      <button class="nav-btn" data-view="customers">Customers</button>
+    </nav>
+    <div class="connection-status" id="connStatus">connecting...</div>
+  </header>
+
+  <main>
+    <!-- Release List View -->
+    <section id="view-releases" class="view active">
+      <div class="toolbar">
+        <button id="btnNewRelease" class="btn-primary">+ New Release</button>
+        <select id="filterState">
+          <option value="">All states</option>
+          <option value="planning">Planning</option>
+          <option value="cutting">Cutting</option>
+          <option value="stabilizing">Stabilizing</option>
+          <option value="approved">Approved</option>
+          <option value="deploying">Deploying</option>
+          <option value="done">Done</option>
+        </select>
+      </div>
+      <div id="releaseList" class="release-list"></div>
+    </section>
+
+    <!-- Release Detail View -->
+    <section id="view-detail" class="view">
+      <button class="btn-back" id="btnBack">&larr; Back</button>
+      <div id="releaseDetail"></div>
+    </section>
+
+    <!-- Customer Map View -->
+    <section id="view-customers" class="view">
+      <div id="customerMap"></div>
+    </section>
+  </main>
+
+  <!-- New Release Modal -->
+  <dialog id="newReleaseModal">
+    <form id="newReleaseForm">
+      <h2>Create Release</h2>
+      <label>Version <input name="version" placeholder="4.2.1" required></label>
+      <label>Branch <input name="branch" placeholder="releases/4.2.1"></label>
+      <label>Cut from (SHA) <input name="cutFrom" placeholder="abc1234"></label>
+      <label>Cut by <input name="cutBy" placeholder="nukulb"></label>
+      <div class="modal-actions">
+        <button type="button" id="btnCancelNew">Cancel</button>
+        <button type="submit" class="btn-primary">Create</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/app.js"></script>
+</body>
+</html>
