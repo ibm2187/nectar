@@ -36,10 +36,24 @@ const SKIP_PATTERNS = [
 // Map a filename to its tier
 function detectTier(filename, brandId) {
   const base = filename.replace('.js', '');
+  const lower = base.toLowerCase();
+
   // Exact brand name = production
   if (base === brandId || base === `${brandId}-production` || base === `${brandId}prod` || base === 'lumen-production') return 'production';
-  // Suffix detection
-  const lower = base.toLowerCase();
+
+  // viv brand has special bare-filename envs (no brand prefix)
+  if (brandId === 'viv') {
+    if (lower === 'production') return 'production';
+    if (lower === 'preprod' || lower === 'preprod-staging') return 'staging';
+    if (lower === 'development' || lower === 'dev' || /^dev\d+$/.test(lower)) return 'dev';
+    if (lower === 'demo') return 'demo';
+    if (lower === 'test' || lower === 'testing') return 'test';
+    if (lower === 'integration') return 'integration';
+    if (lower === 'sandbox' || /^sandbox\d+$/.test(lower)) return 'sandbox';
+    if (lower.startsWith('dev-')) return 'dev';
+  }
+
+  // Suffix detection (for envs prefixed with brand name like bayada-staging)
   if (lower.endsWith('-staging') || lower.endsWith('prod-staging')) return 'staging';
   if (lower.endsWith('-uat')) return 'uat';
   if (lower.endsWith('-training')) return 'training';
@@ -148,22 +162,35 @@ class WebplatformScanner {
         if (!content) continue;
 
         const parsed = parseConfigFile(content);
-        if (!parsed.env) continue; // Not a real env file
+
+        // The env name is ALWAYS derived from the filename — that's how
+        // webplatform's config loader works (it does require(`./brand/${NODE_ENV}`)).
+        // Many files (e.g. viv/demo.js, viv/development.js) don't declare `env:` in
+        // their content but are still valid environments keyed by filename.
+        const envName = file.replace(/\.js$/, '');
+        // Safety: if the file explicitly sets env: '...' and it conflicts, prefer the
+        // explicit value (this handles edge cases like legacy files).
+        const effectiveEnvName = parsed.env || envName;
 
         const tier = detectTier(file, brand.id);
         const franchise = extractFranchise(file, brand.id);
 
+        // Derive URL / domainPrefix from parsed content, or fall back to defaults
+        const domainPrefix = parsed.domainPrefix || effectiveEnvName;
+        const derivedUrl = parsed.link
+          || (parsed.eppDomain ? `https://${domainPrefix}.${parsed.eppDomain}` : null);
+
         // Build environment
         const env = {
-          id: parsed.env, // use the NODE_ENV value as stable ID
-          nodeEnv: parsed.env,
+          id: effectiveEnvName,
+          nodeEnv: effectiveEnvName,
           customerId: brand.id,
           franchise,
           franchiseDisplayName: franchise ? (parsed.mobileOrgName || `CK ${franchise}`) : null,
           tier,
-          name: parsed.mobileOrgName || parsed.env,
-          url: parsed.link || null,
-          versionEndpoint: parsed.link ? `${parsed.link.replace(/\/$/, '')}/api/status/version` : null,
+          name: parsed.mobileOrgName || effectiveEnvName,
+          url: derivedUrl,
+          versionEndpoint: derivedUrl ? `${derivedUrl.replace(/\/$/, '')}/api/status/version` : null,
 
           // Live state — default unknown
           currentVersion: null,
