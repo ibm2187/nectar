@@ -87,7 +87,7 @@ module.exports = {
   polling: {
     discovery: 5 * 60 * 1000,           // 5 min — git repo discovery
     jiraSync: 10 * 60 * 1000,           // 10 min — JIRA version/ticket sync
-    customerVersions: 15 * 60 * 1000,   // 15 min
+    environmentVersions: 10 * 60 * 1000, // 10 min — poll each env's /api/status/version
     githubPRs: 60 * 1000,               // 1 min
   },
 

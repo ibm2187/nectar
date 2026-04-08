@@ -13,7 +13,7 @@ const log = require('../core/log');
  * @returns {{ app, httpServer, wss, close }}
  */
 function createWebServer(services, config) {
-  const { releases, customers, discovery, jiraSync } = services;
+  const { releases, customers, discovery, jiraSync, customerStore, envPoller } = services;
   const port = parseInt(process.env.WEB_PORT) || 4000;
   const token = process.env.WEB_TOKEN;
 
@@ -127,7 +127,8 @@ function createWebServer(services, config) {
     ws.send(JSON.stringify({
       type: 'init',
       releases: releases.list(),
-      customers: customers.getMap(),
+      customers: customerStore ? customerStore.listCustomers() : [],
+      environments: customerStore ? customerStore.listEnvironments() : [],
       config: {
         jiraBaseUrl: (process.env.JIRA_BASE_URL || process.env.JIRA_URL || '').replace(/\/$/, ''),
       },
@@ -162,9 +163,28 @@ function createWebServer(services, config) {
   releases.audit.on('entry', (entry) =>
     broadcast({ type: 'audit:entry', entry })
   );
-  customers.on('customer:updated', (data) =>
-    broadcast({ type: 'customer:updated', ...data, customers: customers.getMap() })
-  );
+  if (customerStore) {
+    customerStore.on('customer:updated', (customer) =>
+      broadcast({ type: 'customer:updated', customer })
+    );
+    customerStore.on('environment:updated', (env) =>
+      broadcast({ type: 'environment:updated', environment: env })
+    );
+    customerStore.on('environment:version', (env, change) =>
+      broadcast({ type: 'environment:version', environment: env, change })
+    );
+    customerStore.on('deployment:recorded', (deployment) =>
+      broadcast({ type: 'deployment:recorded', deployment })
+    );
+    customerStore.on('scan:completed', (results) =>
+      broadcast({
+        type: 'webplatform:scan-completed',
+        results,
+        customers: customerStore.listCustomers(),
+        environments: customerStore.listEnvironments(),
+      })
+    );
+  }
   if (discovery) {
     discovery.on('discovery:completed', (results) =>
       broadcast({ type: 'discovery:completed', results, releases: releases.list() })
@@ -173,6 +193,15 @@ function createWebServer(services, config) {
   if (jiraSync) {
     jiraSync.on('sync:completed', (results) =>
       broadcast({ type: 'jira:sync-completed', results, releases: releases.list() })
+    );
+  }
+  if (envPoller) {
+    envPoller.on('poll:completed', (results) =>
+      broadcast({
+        type: 'env:poll-completed',
+        results,
+        environments: customerStore.listEnvironments(),
+      })
     );
   }
 

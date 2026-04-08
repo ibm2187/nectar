@@ -70,6 +70,7 @@ export interface Approval {
   at: string
 }
 
+// Legacy type — kept for backwards compat with old poller
 export interface CustomerVersion {
   name: string
   staging: string | null
@@ -78,6 +79,73 @@ export interface CustomerVersion {
   production: string | null
   productionReachable: boolean | null
   productionLastChecked: string | null
+}
+
+// New entity types
+export interface Customer {
+  id: string
+  name: string
+  configName: string | null
+  domain: string | null
+  domainPrefix: string
+  integrations: string[]
+  hasFranchises: boolean
+  active: boolean
+  syncedFrom: string
+  lastSyncedAt: string
+  createdAt: string
+  updatedAt: string
+  notes?: string | null
+}
+
+export type EnvTier =
+  | 'production'
+  | 'staging'
+  | 'uat'
+  | 'training'
+  | 'sandbox'
+  | 'loadtest'
+  | 'demo'
+  | 'integration'
+  | 'test'
+  | 'qa'
+  | 'dev'
+  | 'other'
+
+export interface Environment {
+  id: string
+  nodeEnv: string
+  customerId: string
+  franchise: string | null
+  franchiseDisplayName: string | null
+  tier: EnvTier
+  name: string
+  url: string | null
+  versionEndpoint: string | null
+  currentVersion: string | null
+  currentBranch: string | null
+  lastChecked: string | null
+  reachable: boolean | null
+  disabled: boolean
+  ascendEnabled?: boolean
+  disableOutgoingCommunication?: boolean
+  syncedFrom: string
+  lastSyncedAt: string
+  createdAt: string
+  updatedAt: string
+  notes?: string | null
+}
+
+export interface EnvDeployment {
+  id: string
+  environmentId: string
+  customerId: string
+  version: string
+  branch: string | null
+  previousVersion: string | null
+  detectedAt: string
+  endedAt: string | null
+  source: string
 }
 
 export interface AuditEntry {

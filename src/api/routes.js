@@ -7,7 +7,7 @@ const ReleaseManager = require('../core/release');
  * @param {object} config
  */
 module.exports = function createRoutes(services, config) {
-  const { releases, repoManager, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth } = services;
+  const { releases, repoManager, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller } = services;
   const router = Router();
 
   // ── Token auth middleware (optional) ────────────────────
@@ -199,17 +199,81 @@ module.exports = function createRoutes(services, config) {
   // ── Customers ─────────────────────────────────────────
 
   router.get('/customers', (req, res) => {
-    res.json(customers.getMap());
+    const includeEnvs = req.query.includeEnvs === 'true';
+    const list = customerStore.listCustomers();
+    if (includeEnvs) {
+      res.json(list.map(c => ({
+        ...c,
+        environments: customerStore.listEnvironments({ customerId: c.id }),
+      })));
+    } else {
+      res.json(list);
+    }
   });
 
-  router.get('/customers/:name', (req, res) => {
-    const customer = customers.getCustomer(req.params.name);
+  router.get('/customers/:id', (req, res) => {
+    const customer = customerStore.getCustomer(req.params.id);
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
-    res.json(customer);
+    const environments = customerStore.listEnvironments({ customerId: customer.id });
+    res.json({ ...customer, environments });
   });
 
-  router.get('/customers/version/:version', (req, res) => {
-    res.json(customers.getCustomersOnVersion(req.params.version));
+  // ── Environments ──────────────────────────────────────
+
+  router.get('/environments', (req, res) => {
+    const filter = {};
+    if (req.query.customerId) filter.customerId = req.query.customerId;
+    if (req.query.tier) filter.tier = req.query.tier;
+    if (req.query.franchise) filter.franchise = req.query.franchise;
+    res.json(customerStore.listEnvironments(filter));
+  });
+
+  router.get('/environments/:id', (req, res) => {
+    const env = customerStore.getEnvironment(req.params.id);
+    if (!env) return res.status(404).json({ error: 'Environment not found' });
+    res.json(env);
+  });
+
+  // ── Deployments ───────────────────────────────────────
+
+  router.get('/deployments', (req, res) => {
+    const filter = {};
+    if (req.query.customerId) filter.customerId = req.query.customerId;
+    if (req.query.environmentId) filter.environmentId = req.query.environmentId;
+    if (req.query.version) filter.version = req.query.version;
+    if (req.query.active === 'true') filter.active = true;
+    res.json(customerStore.listDeployments(filter));
+  });
+
+  // ── Webplatform scan ──────────────────────────────────
+
+  router.post('/webplatform/scan', async (req, res) => {
+    try {
+      const scanResults = await webplatformScanner.scan();
+      const applied = customerStore.applyScanResults(scanResults);
+      res.json({ ok: true, ...applied, scanStatus: webplatformScanner.getStatus() });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/webplatform/scan/status', (req, res) => {
+    res.json(webplatformScanner.getStatus() || { neverRun: true });
+  });
+
+  // ── Environment poller ────────────────────────────────
+
+  router.post('/environments/poll', async (req, res) => {
+    try {
+      const results = await envPoller.run();
+      res.json({ ok: true, ...results });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/environments/poll/status', (req, res) => {
+    res.json(envPoller.getStatus());
   });
 
   // ── Ticket lookup ─────────────────────────────────────

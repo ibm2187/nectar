@@ -75,6 +75,8 @@ const validator = new ReleaseValidator(releases, jira, github, jenkins, config);
 const ApprovalEngine = require('./core/approvals');
 const approvals = new ApprovalEngine(releases, config);
 
+// Legacy CustomerPoller kept for backwards compat but no longer started;
+// replaced by EnvironmentPoller which operates on CustomerStore environments.
 const CustomerPoller = require('./core/customers');
 const customers = new CustomerPoller(config);
 
@@ -89,6 +91,15 @@ const jiraSync = new JiraSync(releases, jira, config);
 
 const ReleaseTruth = require('./core/release-truth');
 const releaseTruth = new ReleaseTruth(releases, repoManager, github, config);
+
+const CustomerStore = require('./core/customer-store');
+const customerStore = new CustomerStore();
+
+const WebplatformScanner = require('./core/webplatform-scanner');
+const webplatformScanner = new WebplatformScanner(repoManager, config);
+
+const EnvironmentPoller = require('./core/environment-poller');
+const envPoller = new EnvironmentPoller(customerStore, config);
 
 // ── Wire Slack lifecycle notifications ──────────────────
 // Skip notifications for automated actions (discovery, jira-sync)
@@ -130,6 +141,7 @@ const { createWebServer } = require('./web/server');
 const services = {
   releases, repoManager, jira, github, jenkins, slack,
   risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth,
+  customerStore, webplatformScanner, envPoller,
 };
 const webServer = createWebServer(services, config);
 
@@ -141,13 +153,33 @@ const webServer = createWebServer(services, config);
 
   await slack.start();
   cherryPickWatcher.start();
-  customers.start();
 
   // Start JIRA sync (primary source of truth for releases)
   jiraSync.start();
 
   // Start git discovery (cross-references JIRA with git branches)
   discovery.start();
+
+  // Run initial webplatform scan to seed customers/environments
+  try {
+    const scanResults = await webplatformScanner.scan();
+    customerStore.applyScanResults(scanResults);
+  } catch (err) {
+    log.error('Initial webplatform scan failed:', err.message);
+  }
+
+  // Re-scan periodically (customers get added continuously)
+  setInterval(async () => {
+    try {
+      const scanResults = await webplatformScanner.scan();
+      customerStore.applyScanResults(scanResults);
+    } catch (err) {
+      log.warn('Webplatform scan failed:', err.message);
+    }
+  }, 30 * 60 * 1000); // every 30 min
+
+  // Start environment version poller (hits /api/status/version on each env)
+  envPoller.start();
 })();
 
 // ── Graceful shutdown ─────────────────────────────────────
@@ -156,9 +188,10 @@ function shutdown() {
   jiraSync.stop();
   discovery.stop();
   cherryPickWatcher.stop();
-  customers.stop();
+  envPoller.stop();
   slack.stop().catch(() => {});
   releases.flush();
+  customerStore.flush();
   if (webServer) webServer.close();
   process.exit(0);
 }

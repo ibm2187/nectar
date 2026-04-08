@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Release, CustomerVersion } from '../api/client'
+import type { Release, Customer, Environment } from '../api/client'
 
 interface AppConfig {
   jiraBaseUrl: string
@@ -8,24 +8,30 @@ interface AppConfig {
 interface WsState {
   connected: boolean
   releases: Release[]
-  customers: CustomerVersion[]
+  customers: Customer[]
+  environments: Environment[]
   config: AppConfig
   setConnected: (v: boolean) => void
   setReleases: (r: Release[]) => void
-  setCustomers: (c: CustomerVersion[]) => void
+  setCustomers: (c: Customer[]) => void
+  setEnvironments: (e: Environment[]) => void
   setConfig: (c: AppConfig) => void
   upsertRelease: (r: Release) => void
   removeRelease: (version: string) => void
+  upsertCustomer: (c: Customer) => void
+  upsertEnvironment: (e: Environment) => void
 }
 
 export const useWsStore = create<WsState>((set) => ({
   connected: false,
   releases: [],
   customers: [],
+  environments: [],
   config: { jiraBaseUrl: '' },
   setConnected: (connected) => set({ connected }),
   setReleases: (releases) => set({ releases }),
   setCustomers: (customers) => set({ customers }),
+  setEnvironments: (environments) => set({ environments }),
   setConfig: (config) => set({ config }),
   upsertRelease: (release) => set((state) => {
     const idx = state.releases.findIndex(r => r.id === release.id)
@@ -37,6 +43,20 @@ export const useWsStore = create<WsState>((set) => ({
   removeRelease: (version) => set((state) => ({
     releases: state.releases.filter(r => r.version !== version),
   })),
+  upsertCustomer: (customer) => set((state) => {
+    const idx = state.customers.findIndex(c => c.id === customer.id)
+    const next = [...state.customers]
+    if (idx >= 0) next[idx] = customer
+    else next.push(customer)
+    return { customers: next }
+  }),
+  upsertEnvironment: (env) => set((state) => {
+    const idx = state.environments.findIndex(e => e.id === env.id)
+    const next = [...state.environments]
+    if (idx >= 0) next[idx] = env
+    else next.push(env)
+    return { environments: next }
+  }),
 }))
 
 let ws: WebSocket | null = null
@@ -59,6 +79,7 @@ export function connectWebSocket() {
       case 'init':
         s.setReleases(msg.releases)
         if (msg.customers) s.setCustomers(msg.customers)
+        if (msg.environments) s.setEnvironments(msg.environments)
         if (msg.config) s.setConfig(msg.config)
         break
       case 'release:created':
@@ -72,7 +93,15 @@ export function connectWebSocket() {
         s.removeRelease(msg.version)
         break
       case 'customer:updated':
+        if (msg.customer) s.upsertCustomer(msg.customer)
+        break
+      case 'environment:updated':
+      case 'environment:version':
+        if (msg.environment) s.upsertEnvironment(msg.environment)
+        break
+      case 'webplatform:scan-completed':
         if (msg.customers) s.setCustomers(msg.customers)
+        if (msg.environments) s.setEnvironments(msg.environments)
         break
       case 'discovery:completed':
       case 'jira:sync-completed':
