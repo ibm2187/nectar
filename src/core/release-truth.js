@@ -357,13 +357,13 @@ class ReleaseTruth {
       return result;
     }
 
-    // Failed QA — needs rework. If not on branch, it's clearly waiting for a fix.
+    // Failed QA — needs rework. Language differs based on whether code is on branch.
     if (stage === 'failed-qa') {
       result.health = 'failed-qa';
       result.healthCategory = 'attention';
       result.healthMessage = onBranch
-        ? 'Failed QA — fix needed on branch'
-        : 'Failed QA — needs rework + cherry-pick';
+        ? 'Failed QA — awaiting re-test or new fix'
+        : 'Failed QA — rework required, not yet on branch';
       return result;
     }
 
@@ -433,9 +433,12 @@ class ReleaseTruth {
           result.healthCategory = 'in-qa';
           result.healthMessage = `Cherry-pick PR open (#${pr.prNumber})`;
         } else {
-          result.health = 'stale-cert';
+          // Neutral framing: the code isn't on the branch yet.
+          // Could be: already shipped in a prior release, pending cherry-pick,
+          // or tagged with wrong fixVersion. We can't tell which without more data.
+          result.health = 'not-on-branch';
           result.healthCategory = 'attention';
-          result.healthMessage = 'Marked certified but NOT on branch — possibly reverted or never picked';
+          result.healthMessage = `${jiraStatus} in JIRA but not found on this branch — needs cherry-pick or wrong fixVersion`;
         }
         break;
 
@@ -449,9 +452,9 @@ class ReleaseTruth {
           result.healthCategory = 'in-qa';
           result.healthMessage = `Cherry-pick PR open (#${pr.prNumber})`;
         } else {
-          result.health = 'lying';
+          result.health = 'not-on-branch';
           result.healthCategory = 'attention';
-          result.healthMessage = `JIRA says "${jiraStatus}" but no cherry-pick exists`;
+          result.healthMessage = `${jiraStatus} in JIRA but not found on this branch — needs cherry-pick`;
         }
         break;
 
@@ -654,11 +657,11 @@ class ReleaseTruth {
 
 // Health priority for sorting (worst first)
 ReleaseTruth.HEALTH_PRIORITY = {
-  'lying': 1,
-  'stale-cert': 2,
-  'failed-qa': 3,
-  'blocked': 4,
-  'unknown': 5,
+  'failed-qa': 1,
+  'not-on-branch': 2,
+  'blocked': 3,
+  'unknown': 4,
+  'needs-review': 5,
   'pre-dev': 6,
   'in-dev': 7,
   'awaiting-cp': 8,
@@ -666,6 +669,7 @@ ReleaseTruth.HEALTH_PRIORITY = {
   'status-stale': 10,
   'in-qa': 11,
   'healthy': 12,
+  'no-code': 13,
 };
 
 module.exports = ReleaseTruth;

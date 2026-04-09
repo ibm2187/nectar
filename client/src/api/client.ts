@@ -263,20 +263,22 @@ export interface ValidationReport {
 export type HealthCategory = 'done' | 'in-qa' | 'awaiting-cp' | 'in-dev' | 'attention'
 
 export type Health =
-  | 'healthy'      // Certified + on branch
-  | 'no-code'      // Resolved without code change
-  | 'in-qa'        // In QA, on branch — expected
-  | 'pr-pending'   // Cherry-pick PR open, not yet merged
-  | 'status-stale' // On branch but JIRA hasn't caught up
-  | 'awaiting-cp'  // Waiting for cherry-pick
-  | 'pre-dev'      // Not started
-  | 'in-dev'       // In development
-  | 'needs-review' // Needs re-verification (e.g. "Re-verify Bug") — pre-work investigation
-  | 'lying'        // JIRA says past code review but not on branch — RED FLAG
-  | 'stale-cert'   // Certified but not on branch — possibly reverted
-  | 'failed-qa'    // Failed QA
-  | 'blocked'      // Blocked / Needs Requirements
-  | 'unknown'      // Unrecognized JIRA status
+  | 'healthy'       // Certified + on branch
+  | 'no-code'       // Resolved without code change
+  | 'in-qa'         // In QA, on branch — expected
+  | 'pr-pending'    // Cherry-pick PR open, not yet merged
+  | 'status-stale'  // On branch but JIRA hasn't caught up
+  | 'awaiting-cp'   // Waiting for cherry-pick
+  | 'pre-dev'       // Not started
+  | 'in-dev'        // In development
+  | 'needs-review'  // Needs re-verification (e.g. "Re-verify Bug")
+  | 'not-on-branch' // In JIRA fixVersion but not found on the branch — needs cherry-pick or wrong fixVersion
+  | 'failed-qa'     // Failed QA
+  | 'blocked'       // Blocked / On hold
+  | 'unknown'       // Unrecognized JIRA status
+  // Deprecated — kept for backward compatibility with old truth data
+  | 'lying'
+  | 'stale-cert'
 
 export interface VerifiedTicket {
   key: string

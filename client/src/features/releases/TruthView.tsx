@@ -18,20 +18,22 @@ interface Props {
 
 // Health styling — color, emoji, label, sort priority (worst first)
 const HEALTH_INFO: Record<Health, { label: string; color: string; emoji: string; priority: number }> = {
-  'lying':       { label: 'Lying',       color: 'bg-red-500/20 text-red-400 border-red-500/40',         emoji: '🔴', priority: 1 },
-  'stale-cert':  { label: 'Stale Cert',  color: 'bg-red-500/20 text-red-400 border-red-500/40',         emoji: '🔴', priority: 2 },
-  'failed-qa':   { label: 'Failed QA',   color: 'bg-red-500/20 text-red-400 border-red-500/40',         emoji: '🔴', priority: 3 },
-  'blocked':     { label: 'Blocked',     color: 'bg-red-500/20 text-red-400 border-red-500/40',         emoji: '🚫', priority: 4 },
-  'unknown':     { label: 'Unknown',     color: 'bg-gray-500/20 text-gray-400 border-gray-500/40',      emoji: '?',  priority: 5 },
-  'needs-review':{ label: 'Needs Review', color: 'bg-orange-500/20 text-orange-400 border-orange-500/40', emoji: '🔎', priority: 6 },
-  'pre-dev':     { label: 'Pre-Dev',     color: 'bg-orange-500/20 text-orange-400 border-orange-500/40', emoji: '○',  priority: 7 },
-  'in-dev':      { label: 'In Dev',      color: 'bg-orange-500/20 text-orange-400 border-orange-500/40', emoji: '🛠', priority: 8 },
-  'awaiting-cp': { label: 'Awaiting CP', color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40', emoji: '⏳', priority: 9 },
-  'pr-pending':  { label: 'PR Pending',  color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40', emoji: '⏳', priority: 10 },
-  'status-stale':{ label: 'JIRA Stale',  color: 'bg-blue-500/20 text-blue-400 border-blue-500/40',       emoji: 'ℹ', priority: 11 },
-  'in-qa':       { label: 'In QA',       color: 'bg-blue-500/20 text-blue-400 border-blue-500/40',       emoji: '🔬', priority: 12 },
-  'healthy':     { label: 'Healthy',     color: 'bg-green-500/20 text-green-400 border-green-500/40',    emoji: '✓',  priority: 13 },
-  'no-code':     { label: 'No Code',     color: 'bg-gray-500/20 text-gray-300 border-gray-500/40',       emoji: '⊘',  priority: 14 },
+  'failed-qa':     { label: 'Failed QA',     color: 'bg-red-500/20 text-red-400 border-red-500/40',         emoji: '🔴', priority: 1 },
+  'not-on-branch': { label: 'Not on Branch', color: 'bg-red-500/20 text-red-400 border-red-500/40',         emoji: '🔴', priority: 2 },
+  'blocked':       { label: 'Blocked',       color: 'bg-red-500/20 text-red-400 border-red-500/40',         emoji: '🚫', priority: 3 },
+  'unknown':       { label: 'Unknown',       color: 'bg-gray-500/20 text-gray-400 border-gray-500/40',      emoji: '?',  priority: 4 },
+  'needs-review':  { label: 'Needs Review',  color: 'bg-orange-500/20 text-orange-400 border-orange-500/40', emoji: '🔎', priority: 5 },
+  'pre-dev':       { label: 'Pre-Dev',       color: 'bg-orange-500/20 text-orange-400 border-orange-500/40', emoji: '○',  priority: 6 },
+  'in-dev':        { label: 'In Dev',        color: 'bg-orange-500/20 text-orange-400 border-orange-500/40', emoji: '🛠', priority: 7 },
+  'awaiting-cp':   { label: 'Awaiting CP',   color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40', emoji: '⏳', priority: 8 },
+  'pr-pending':    { label: 'PR Pending',    color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40', emoji: '⏳', priority: 9 },
+  'status-stale':  { label: 'JIRA Stale',    color: 'bg-blue-500/20 text-blue-400 border-blue-500/40',       emoji: 'ℹ', priority: 10 },
+  'in-qa':         { label: 'In QA',         color: 'bg-blue-500/20 text-blue-400 border-blue-500/40',       emoji: '🔬', priority: 11 },
+  'healthy':       { label: 'Healthy',       color: 'bg-green-500/20 text-green-400 border-green-500/40',    emoji: '✓',  priority: 12 },
+  'no-code':       { label: 'No Code',       color: 'bg-gray-500/20 text-gray-300 border-gray-500/40',       emoji: '⊘',  priority: 13 },
+  // Deprecated — kept for backward compat
+  'lying':         { label: 'Not on Branch', color: 'bg-red-500/20 text-red-400 border-red-500/40',         emoji: '🔴', priority: 2 },
+  'stale-cert':    { label: 'Not on Branch', color: 'bg-red-500/20 text-red-400 border-red-500/40',         emoji: '🔴', priority: 2 },
 }
 
 const PILL_FILTERS: { key: 'all' | HealthCategory; label: string; color: string }[] = [
