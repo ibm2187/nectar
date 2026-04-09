@@ -3,6 +3,7 @@ import type { Release, Customer, Environment } from '../api/client'
 
 interface AppConfig {
   jiraBaseUrl: string
+  jiraProject?: string
 }
 
 interface WsState {

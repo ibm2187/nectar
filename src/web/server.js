@@ -131,6 +131,7 @@ function createWebServer(services, config) {
       environments: customerStore ? customerStore.listEnvironments() : [],
       config: {
         jiraBaseUrl: (process.env.JIRA_BASE_URL || process.env.JIRA_URL || '').replace(/\/$/, ''),
+        jiraProject: (config.jira && config.jira.project) || 'DEV',
       },
     }));
   }

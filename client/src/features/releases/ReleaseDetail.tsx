@@ -52,6 +52,8 @@ export function ReleaseDetail() {
   })
 
   const version = release?.version ?? key
+  const jiraBaseUrl = useWsStore(s => s.config.jiraBaseUrl)
+  const jiraProject = useWsStore(s => s.config.jiraProject || 'DEV')
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [validation, setValidation] = useState<ValidationReport | null>(null)
   useEffect(() => {
@@ -89,7 +91,7 @@ export function ReleaseDetail() {
       </Button>
 
       {/* Header */}
-      <div className="flex items-center gap-4 mb-6">
+      <div className="flex items-center gap-4 mb-6 flex-wrap">
         {release.repo && (
           <Badge variant="secondary" className="text-sm">{release.repo}</Badge>
         )}
@@ -97,6 +99,22 @@ export function ReleaseDetail() {
         <Badge className={cn(stateColors[release.state], "text-sm px-3 py-1")} variant="outline">
           {release.state}
         </Badge>
+        {jiraBaseUrl && release.jiraVersionId && (
+          <a
+            href={`${jiraBaseUrl}/projects/${jiraProject}/versions/${release.jiraVersionId}/tab/release-report-all-issues`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 hover:underline"
+            title="Open this release in JIRA to edit release date, description, or mark as released"
+          >
+            Open in JIRA
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+              <polyline points="15 3 21 3 21 9"/>
+              <line x1="10" y1="14" x2="21" y2="3"/>
+            </svg>
+          </a>
+        )}
       </div>
 
       {/* Actions */}
