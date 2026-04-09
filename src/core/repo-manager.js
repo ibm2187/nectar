@@ -199,18 +199,27 @@ class RepoManager {
    */
   async commitsWithJiraKeys(repoName, branch, jiraProjectPrefix = 'DEV') {
     try {
-      // --grep with ERE matches commits whose message contains the prefix
-      // -E enables extended regex
+      // Include BOTH subject (%s) and body (%b) in the output — JIRA keys
+      // often live only in the commit body (e.g., merge commits, CI bots).
+      // Records are null-delimited so embedded newlines in bodies don't break parsing.
+      const NULL = '\x00';
       const output = await this._git(repoName, [
-        'log', '--oneline', '-E', `--grep=${jiraProjectPrefix}-[0-9]+`, branch,
+        'log',
+        '-E', `--grep=${jiraProjectPrefix}-[0-9]+`,
+        `--format=%H%x00%s%x00%b%x00%x00`,
+        branch,
       ]);
-      return output.trim().split('\n').filter(Boolean).map(line => {
-        const spaceIdx = line.indexOf(' ');
+      const records = output.split('\x00\x00').filter(r => r.trim());
+      return records.map(r => {
+        const parts = r.split(NULL);
+        const sha = parts[0]?.trim() || '';
+        const subject = parts[1] || '';
+        const body = parts[2] || '';
         return {
-          sha: line.substring(0, spaceIdx),
-          message: line.substring(spaceIdx + 1),
+          sha,
+          message: body ? `${subject}\n${body}`.trim() : subject.trim(),
         };
-      });
+      }).filter(c => c.sha);
     } catch {
       return [];
     }

@@ -65,8 +65,13 @@ const STATUS_STAGES = {
 
   // Blocked states
   'blocked': 'blocked',
-  'needs requirements': 'blocked',
   'on hold': 'blocked',
+
+  // Info-gathering states (not a hard block — often in active refinement)
+  'needs requirements': 'needs-info',
+  'ready for discussion': 'needs-info',
+  'needs discussion': 'needs-info',
+  'requirements': 'needs-info',
 };
 
 function getStage(jiraStatus) {
@@ -322,19 +327,43 @@ class ReleaseTruth {
       return result;
     }
 
-    // Blocked is the same regardless of branch state
+    // Blocked — but if the code is already on the branch, the block
+    // is resolved (or was never a code block in the first place).
     if (stage === 'blocked') {
-      result.health = 'blocked';
-      result.healthCategory = 'attention';
-      result.healthMessage = jiraStatus;
+      if (onBranch) {
+        result.health = 'in-qa';
+        result.healthCategory = 'in-qa';
+        result.healthMessage = `${jiraStatus} (code is on branch — JIRA status may be outdated)`;
+      } else {
+        result.health = 'blocked';
+        result.healthCategory = 'attention';
+        result.healthMessage = jiraStatus;
+      }
       return result;
     }
 
-    // Failed QA is always attention
+    // Needs info / requirements — not a blocker, just refinement.
+    // If the code is on the branch, it's effectively done (dev work complete).
+    if (stage === 'needs-info') {
+      if (onBranch) {
+        result.health = 'status-stale';
+        result.healthCategory = 'in-qa';
+        result.healthMessage = `${jiraStatus} (code is on branch — dev work complete)`;
+      } else {
+        result.health = 'needs-review';
+        result.healthCategory = 'in-dev';
+        result.healthMessage = `${jiraStatus} — refinement in progress`;
+      }
+      return result;
+    }
+
+    // Failed QA — needs rework. If not on branch, it's clearly waiting for a fix.
     if (stage === 'failed-qa') {
       result.health = 'failed-qa';
       result.healthCategory = 'attention';
-      result.healthMessage = 'Failed QA — needs rework';
+      result.healthMessage = onBranch
+        ? 'Failed QA — fix needed on branch'
+        : 'Failed QA — needs rework + cherry-pick';
       return result;
     }
 
@@ -465,9 +494,17 @@ class ReleaseTruth {
         break;
 
       default:
-        result.health = 'unknown';
-        result.healthCategory = 'attention';
-        result.healthMessage = `Unrecognized status: ${jiraStatus}`;
+        // Unknown JIRA status — if it's on the branch, the dev work is done
+        // regardless of what JIRA says. Only flag as attention if NOT on branch.
+        if (onBranch) {
+          result.health = 'status-stale';
+          result.healthCategory = 'in-qa';
+          result.healthMessage = `${jiraStatus} (on branch — unrecognized JIRA status)`;
+        } else {
+          result.health = 'unknown';
+          result.healthCategory = 'attention';
+          result.healthMessage = `Unrecognized status: ${jiraStatus}`;
+        }
     }
 
     return result;
