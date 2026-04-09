@@ -45,11 +45,6 @@ const TIER_COLORS: Record<string, string> = {
 export function CustomersPage() {
   const customers = useWsStore(s => s.customers)
   const environments = useWsStore(s => s.environments)
-  const connected = useWsStore(s => s.connected)
-
-  if (!connected || customers.length === 0) {
-    return <NectarLoader size="lg" message={!connected ? 'Connecting...' : 'Loading customers...'} className="mt-32" />
-  }
   const [search, setSearch] = useState('')
   const [showInternalEnvs, setShowInternalEnvs] = useState(false)
   const [expandedFranchises, setExpandedFranchises] = useState<Set<string>>(new Set())
@@ -116,6 +111,10 @@ export function CustomersPage() {
 
   const totalEnvs = environments.length
   const activeEnvs = environments.filter(e => e.currentVersion).length
+
+  if (customers.length === 0) {
+    return <NectarLoader message="Loading customers..." className="mt-32" />
+  }
 
   return (
     <div className="w-full">

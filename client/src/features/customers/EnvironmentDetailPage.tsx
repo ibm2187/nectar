@@ -27,25 +27,8 @@ export function EnvironmentDetailPage() {
   const [polling, setPolling] = useState(false)
   const [selectedUpgrade, setSelectedUpgrade] = useState<EnvUpgradeItem | null>(null)
 
-  const connected = useWsStore(s => s.connected)
-  const hasEnvs = useWsStore(s => s.environments.length > 0)
-
   if (!env) {
-    if (!connected || !hasEnvs) {
-      return <NectarLoader size="lg" message="Loading environment..." className="mt-32" />
-    }
-    return (
-      <div className="w-full">
-        <Button variant="link" onClick={() => navigate('/customers')} className="mb-4 px-0">
-          ← Back to customers
-        </Button>
-        <Card>
-          <CardContent className="p-8 text-center text-muted-foreground italic">
-            Environment not found
-          </CardContent>
-        </Card>
-      </div>
-    )
+    return <NectarLoader message="Loading environment..." className="mt-32" />
   }
 
   async function handlePoll() {

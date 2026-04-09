@@ -49,11 +49,6 @@ function getReleaseDate(r: Release): string {
 
 export function ReleasesPage() {
   const releases = useWsStore(s => s.releases)
-  const connected = useWsStore(s => s.connected)
-
-  if (!connected || releases.length === 0) {
-    return <NectarLoader size="lg" message={!connected ? 'Connecting...' : 'Loading releases...'} className="mt-32" />
-  }
   const [stateFilter, setStateFilter] = useState<string>('active')
   const [repoFilter, setRepoFilter] = useState('')
   const [search, setSearch] = useState('')
@@ -125,6 +120,10 @@ export function ReleasesPage() {
   }
 
   const activeCount = releases.filter(r => r.state !== 'done' && !r.jiraReleased).length
+
+  if (releases.length === 0) {
+    return <NectarLoader message="Loading releases..." className="mt-32" />
+  }
 
   return (
     <div className="w-full">

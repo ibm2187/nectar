@@ -119,24 +119,16 @@
   <div id="root"></div>
   <script type="module" src="/src/main.tsx"></script>
   <script>
-    // Fade out loading screen once the app has real content rendered
-    // (wait for navigation links to appear, not just the empty React shell)
-    function checkReady() {
-      const root = document.getElementById('root');
-      if (root && root.querySelector('nav, table, [data-loaded]')) {
-        const loader = document.getElementById('nectar-loading');
-        if (loader) {
-          loader.classList.add('fade-out');
-          setTimeout(() => loader.remove(), 500);
-        }
-        return true;
+    // The loading screen stays until the app signals it has data.
+    // React calls window.__nectarReady() once WebSocket is connected
+    // and both releases + customers have loaded.
+    window.__nectarDismissLoader = function() {
+      const loader = document.getElementById('nectar-loading');
+      if (loader) {
+        loader.classList.add('fade-out');
+        setTimeout(() => loader.remove(), 500);
       }
-      return false;
-    }
-    const observer = new MutationObserver(() => {
-      if (checkReady()) observer.disconnect();
-    });
-    observer.observe(document.getElementById('root'), { childList: true, subtree: true });
+    };
   </script>
 </body>
 </html>
