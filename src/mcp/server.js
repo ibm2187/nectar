@@ -2,7 +2,7 @@ const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { z } = require('zod');
 const log = require('../core/log');
-const { aggregateFeatureFlags } = require('../core/feature-aggregator');
+const { aggregateFeatureFlags, aggregateIntegrations } = require('../core/feature-aggregator');
 
 /**
  * Nectar MCP Server — exposes customer, environment, release, and truth
@@ -328,7 +328,38 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
     }
   );
 
-  log.info('MCP server initialized with 11 tools');
+  // ── Tool: aggregate_integrations ───────────────────────
+  server.tool(
+    'aggregate_integrations',
+    'Aggregate DB integrations (QuickBooks, Salesforce, DocuSign, etc.) across production environments and bucket them by rollout state. Shows which customers have each integration enabled and configured.',
+    {
+      bucket: z.enum(['all', 'everywhere-on', 'mixed', 'everywhere-off', 'dev-only']).default('all').describe('Filter to a specific bucket'),
+    },
+    async ({ bucket }) => {
+      const environments = customerStore.listEnvironments();
+      const result = aggregateIntegrations(environments);
+      let items = result.integrations;
+      if (bucket !== 'all') items = items.filter(i => i.bucket === bucket);
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            stats: result.stats,
+            customers: result.customers,
+            integrations: items.map(i => ({
+              type: i.type,
+              bucket: i.bucket,
+              customerStates: i.customerStates,
+              customerConfigured: i.customerConfigured,
+              outlierCount: i.outliers.length,
+            })),
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  log.info('MCP server initialized with 12 tools');
   return server;
 }
 

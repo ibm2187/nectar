@@ -166,4 +166,150 @@ function aggregateFeatureFlags(environments) {
   return { flags, customers, stats };
 }
 
-module.exports = { aggregateFeatureFlags };
+/**
+ * Aggregate DB integrations across prod environments.
+ * Same bucket logic as feature flags, but the "enabled" signal comes from
+ * IntegrationsConfig (DB) and each entry has both `enabled` and `configured`.
+ *
+ * A row is one integration type (e.g., quickBooks, salesforce, docusign).
+ *
+ * Additional info per integration compared to features:
+ *   - 'configured' flag from the DB (indicates OAuth completed, etc.)
+ *   - Some integrations can be enabled-but-not-configured (admin toggled but never set up)
+ */
+function aggregateIntegrations(environments) {
+  const envsWithData = (environments || []).filter(e =>
+    e.integrations && e.integrations.dbIntegrations && Object.keys(e.integrations.dbIntegrations).length > 0
+  );
+
+  const prodEnvs = envsWithData.filter(e => e.tier === 'production');
+  const nonProdEnvs = envsWithData.filter(e => e.tier !== 'production');
+
+  const customersInProd = new Set(prodEnvs.map(e => e.customerId));
+  const customers = [...customersInProd].sort();
+
+  const prodEnvsByCustomer = new Map();
+  for (const e of prodEnvs) {
+    if (!prodEnvsByCustomer.has(e.customerId)) {
+      prodEnvsByCustomer.set(e.customerId, []);
+    }
+    prodEnvsByCustomer.get(e.customerId).push(e);
+  }
+
+  // Union of all integration types known across all envs
+  const typeKeys = new Set();
+  for (const e of envsWithData) {
+    for (const type of Object.keys(e.integrations.dbIntegrations || {})) {
+      typeKeys.add(type);
+    }
+  }
+
+  const integrations = [];
+  for (const type of typeKeys) {
+    const customerStates = {};
+    const customerConfigured = {}; // customerId -> true if configured in any env
+
+    for (const customerId of customers) {
+      const envs = prodEnvsByCustomer.get(customerId) || [];
+      if (envs.length === 0) {
+        customerStates[customerId] = 'unknown';
+        customerConfigured[customerId] = false;
+        continue;
+      }
+
+      let enabledCount = 0;
+      let knownCount = 0;
+      let anyConfigured = false;
+      for (const env of envs) {
+        const entry = env.integrations.dbIntegrations[type];
+        if (entry === undefined) continue;
+        knownCount++;
+        if (entry.enabled) enabledCount++;
+        if (entry.configured) anyConfigured = true;
+      }
+
+      if (knownCount === 0) {
+        customerStates[customerId] = 'unknown';
+      } else if (enabledCount === 0) {
+        customerStates[customerId] = 'off';
+      } else if (enabledCount === knownCount) {
+        customerStates[customerId] = 'on';
+      } else {
+        customerStates[customerId] = 'partial';
+      }
+      customerConfigured[customerId] = anyConfigured;
+    }
+
+    // Non-prod check for dev-only bucket
+    let enabledInAnyNonProd = false;
+    for (const env of nonProdEnvs) {
+      const entry = env.integrations.dbIntegrations[type];
+      if (entry && entry.enabled) {
+        enabledInAnyNonProd = true;
+        break;
+      }
+    }
+
+    const stateValues = Object.values(customerStates).filter(s => s !== 'unknown');
+    const allOn = stateValues.length > 0 && stateValues.every(s => s === 'on');
+    const allOff = stateValues.length > 0 && stateValues.every(s => s === 'off');
+    const hasAny = stateValues.some(s => s === 'on' || s === 'partial');
+
+    let bucket;
+    if (allOn) {
+      bucket = 'everywhere-on';
+    } else if (allOff) {
+      bucket = enabledInAnyNonProd ? 'dev-only' : 'everywhere-off';
+    } else if (hasAny) {
+      bucket = 'mixed';
+    } else {
+      bucket = 'everywhere-off';
+    }
+
+    // Outliers: envs inside a customer with partial state
+    const outliers = [];
+    if (bucket === 'everywhere-on' || bucket === 'mixed') {
+      for (const env of prodEnvs) {
+        const entry = env.integrations.dbIntegrations[type];
+        if (!entry) continue;
+        const customerState = customerStates[env.customerId];
+        if (customerState === 'partial') {
+          outliers.push({
+            envId: env.id,
+            customerId: env.customerId,
+            enabled: entry.enabled,
+            configured: entry.configured,
+          });
+        }
+      }
+    }
+
+    integrations.push({
+      type,
+      bucket,
+      customerStates,
+      customerConfigured,
+      outliers,
+      enabledInAnyNonProd,
+    });
+  }
+
+  integrations.sort((a, b) => a.type.localeCompare(b.type));
+
+  const stats = {
+    totalIntegrations: integrations.length,
+    totalProdEnvs: prodEnvs.length,
+    totalCustomers: customers.length,
+    totalEnvsWithData: envsWithData.length,
+    buckets: {
+      'everywhere-on': integrations.filter(i => i.bucket === 'everywhere-on').length,
+      'mixed': integrations.filter(i => i.bucket === 'mixed').length,
+      'everywhere-off': integrations.filter(i => i.bucket === 'everywhere-off').length,
+      'dev-only': integrations.filter(i => i.bucket === 'dev-only').length,
+    },
+  };
+
+  return { integrations, customers, stats };
+}
+
+module.exports = { aggregateFeatureFlags, aggregateIntegrations };

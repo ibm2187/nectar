@@ -7,6 +7,7 @@ const links = [
   { to: '/calendar', label: 'Calendar', icon: '📅' },
   { to: '/customers', label: 'Customers', icon: '🏢' },
   { to: '/features', label: 'Features', icon: '🚩' },
+  { to: '/integrations', label: 'Integrations', icon: '🔌' },
 ]
 
 export function Sidebar() {

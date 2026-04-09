@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const ReleaseManager = require('../core/release');
 const { annotateReleases } = require('../core/release-status');
-const { aggregateFeatureFlags } = require('../core/feature-aggregator');
+const { aggregateFeatureFlags, aggregateIntegrations } = require('../core/feature-aggregator');
 
 /**
  * REST API routes — primary consumer is Hive.
@@ -321,6 +321,17 @@ module.exports = function createRoutes(services, config) {
     try {
       const environments = customerStore.listEnvironments();
       const result = aggregateFeatureFlags(environments);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Integrations aggregation — for the Integrations cleanup page ──
+  router.get('/integrations/aggregated', (req, res) => {
+    try {
+      const environments = customerStore.listEnvironments();
+      const result = aggregateIntegrations(environments);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });

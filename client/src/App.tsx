@@ -5,6 +5,7 @@ import { ReleasesPage } from './features/releases/ReleasesPage'
 import { ReleaseDetail } from './features/releases/ReleaseDetail'
 import { ReleaseCalendarPage } from './features/releases/ReleaseCalendarPage'
 import { FeaturesPage } from './features/features/FeaturesPage'
+import { IntegrationsPage } from './features/integrations/IntegrationsPage'
 import { CustomersPage } from './features/customers/CustomersPage'
 import { EnvironmentDetailPage } from './features/customers/EnvironmentDetailPage'
 import { connectWebSocket, disconnectWebSocket, useWsStore } from './stores/wsStore'
@@ -41,6 +42,7 @@ export default function App() {
           <Route path="/" element={<ReleasesPage />} />
           <Route path="/calendar" element={<ReleaseCalendarPage />} />
           <Route path="/features" element={<FeaturesPage />} />
+          <Route path="/integrations" element={<IntegrationsPage />} />
           <Route path="/releases/:key" element={<ReleaseDetail />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/environments/:id" element={<EnvironmentDetailPage />} />
