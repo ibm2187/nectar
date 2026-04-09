@@ -25,11 +25,13 @@
     "url": "git+https://github.com/mavencare/nectar.git"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@slack/bolt": "^4.6.0",
     "express": "^4.21.0",
     "jsonwebtoken": "^9.0.3",
     "node-cron": "^4.2.1",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "vitest": "^1.6.1"

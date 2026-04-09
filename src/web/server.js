@@ -205,6 +205,14 @@ function createWebServer(services, config) {
     );
   }
 
+  // ── MCP server (for Hive integration) ─────────────────
+  const { mountMcp } = require('../mcp/server');
+  mountMcp(app, '/mcp', {
+    customerStore,
+    releases,
+    releaseTruth: services.releaseTruth,
+  });
+
   // ── HTTP server with WebSocket upgrade ────────────────
   const httpServer = http.createServer(app);
 
