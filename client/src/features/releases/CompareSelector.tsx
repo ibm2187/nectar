@@ -14,21 +14,6 @@ export interface CompareTarget {
   label: string // e.g., "Bayada Production (4.1.1)" or "releases/4.1.0.3"
 }
 
-const STORAGE_KEY = 'nectar:compare-target'
-
-function loadSaved(releaseVersion: string): CompareTarget | null {
-  try {
-    const raw = localStorage.getItem(`${STORAGE_KEY}:${releaseVersion}`)
-    return raw ? JSON.parse(raw) : null
-  } catch { return null }
-}
-
-function save(releaseVersion: string, target: CompareTarget) {
-  try {
-    localStorage.setItem(`${STORAGE_KEY}:${releaseVersion}`, JSON.stringify(target))
-  } catch { /* quota */ }
-}
-
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -95,7 +80,6 @@ export function CompareSelector({ open, onOpenChange, onSelect, releaseVersion }
   }, [environments])
 
   function pick(target: CompareTarget) {
-    save(releaseVersion, target)
     onSelect(target)
     onOpenChange(false)
   }
@@ -227,4 +211,3 @@ export function CompareSelector({ open, onOpenChange, onSelect, releaseVersion }
   )
 }
 
-export { loadSaved as loadCompareTarget }

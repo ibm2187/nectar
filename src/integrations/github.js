@@ -141,6 +141,46 @@ class GitHubClient {
     return pr.labels.map(l => l.name);
   }
 
+  // ── Issues ──────────────────────────────────────────────
+
+  /**
+   * List issues for a repo. Note: GitHub's issues API also returns pull requests,
+   * so we filter those out (PRs have a `pull_request` property).
+   * @param {object} opts
+   * @param {string} opts.state - 'open' | 'closed' | 'all' (default 'open')
+   * @param {string} [opts.labels] - Comma-separated label names
+   * @param {string} [opts.repoPath] - 'org/repo' override (defaults to this.repo)
+   */
+  async listIssues({ state = 'open', labels = null, repoPath = null } = {}) {
+    const repo = repoPath || this.repo;
+    const params = new URLSearchParams({ state, per_page: '100', sort: 'updated', direction: 'desc' });
+    if (labels) params.set('labels', labels);
+    const issues = await this._paginate(`/repos/${repo}/issues?${params}`, 3);
+    return issues.filter(i => !i.pull_request);
+  }
+
+  /**
+   * Create a new issue.
+   * @param {object} opts
+   * @param {string} opts.title - Required
+   * @param {string} [opts.body] - Markdown body
+   * @param {string[]} [opts.labels]
+   * @param {string} [opts.repoPath] - 'org/repo' override
+   */
+  async createIssue({ title, body = '', labels = [], repoPath = null }) {
+    const repo = repoPath || this.repo;
+    if (!title || !title.trim()) throw new Error('Issue title is required');
+    const payload = { title };
+    if (body) payload.body = body;
+    if (labels && labels.length) payload.labels = labels;
+    return this._request('POST', `/repos/${repo}/issues`, payload);
+  }
+
+  async getIssue(number, repoPath = null) {
+    const repo = repoPath || this.repo;
+    return this._request('GET', `/repos/${repo}/issues/${number}`);
+  }
+
   // ── Helpers ─────────────────────────────────────────────
 
   /**

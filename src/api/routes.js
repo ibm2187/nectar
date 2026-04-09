@@ -9,7 +9,10 @@ const { aggregateFeatureFlags, aggregateIntegrations } = require('../core/featur
  * @param {object} config
  */
 module.exports = function createRoutes(services, config) {
-  const { releases, repoManager, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller } = services;
+  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller } = services;
+
+  // Nectar's own repo — used by the Issues page so users can file bugs/feedback.
+  const NECTAR_REPO = 'mavencare/nectar';
   const router = Router();
 
   // ── Token auth middleware (optional) ────────────────────
@@ -481,6 +484,69 @@ module.exports = function createRoutes(services, config) {
     try {
       const results = await jiraSync.run();
       res.json(results);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Issues (self-service bug/feedback on mavencare/nectar) ──
+
+  router.get('/issues', async (req, res) => {
+    if (!github || !github.isConfigured()) {
+      return res.status(503).json({ error: 'GitHub integration not configured' });
+    }
+    try {
+      const { state = 'open', labels } = req.query;
+      const issues = await github.listIssues({
+        state,
+        labels: labels || null,
+        repoPath: NECTAR_REPO,
+      });
+      // Project down to only the fields the UI needs
+      const slim = issues.map(i => ({
+        number: i.number,
+        title: i.title,
+        body: i.body,
+        state: i.state,
+        url: i.html_url,
+        createdAt: i.created_at,
+        updatedAt: i.updated_at,
+        closedAt: i.closed_at,
+        comments: i.comments,
+        author: i.user ? { login: i.user.login, avatarUrl: i.user.avatar_url } : null,
+        labels: (i.labels || []).map(l => ({
+          name: typeof l === 'string' ? l : l.name,
+          color: typeof l === 'string' ? null : l.color,
+        })),
+      }));
+      res.json({ repo: NECTAR_REPO, issues: slim });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/issues', async (req, res) => {
+    if (!github || !github.isConfigured()) {
+      return res.status(503).json({ error: 'GitHub integration not configured' });
+    }
+    try {
+      const { title, body, labels } = req.body || {};
+      if (!title || !title.trim()) {
+        return res.status(400).json({ error: 'title is required' });
+      }
+      const issue = await github.createIssue({
+        title: title.trim(),
+        body: body || '',
+        labels: Array.isArray(labels) ? labels : [],
+        repoPath: NECTAR_REPO,
+      });
+      res.status(201).json({
+        number: issue.number,
+        title: issue.title,
+        url: issue.html_url,
+        state: issue.state,
+        createdAt: issue.created_at,
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

@@ -8,6 +8,7 @@ import { FeaturesPage } from './features/features/FeaturesPage'
 import { IntegrationsPage } from './features/integrations/IntegrationsPage'
 import { CustomersPage } from './features/customers/CustomersPage'
 import { EnvironmentDetailPage } from './features/customers/EnvironmentDetailPage'
+import { IssuesPage } from './features/issues/IssuesPage'
 import { connectWebSocket, disconnectWebSocket, useWsStore } from './stores/wsStore'
 
 declare global {
@@ -46,6 +47,7 @@ export default function App() {
           <Route path="/releases/:key" element={<ReleaseDetail />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/environments/:id" element={<EnvironmentDetailPage />} />
+          <Route path="/issues" element={<IssuesPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
@@ -7,8 +8,9 @@ import { JiraLink } from '../../components/JiraLink'
 import { apiFetch } from '../../api/client'
 import type { ReleaseTruthReport, DeploymentImpactReport, VerifiedTicket, Health, HealthCategory } from '../../api/client'
 import { cn, timeAgo } from '../../lib/utils'
+import { useWsStore } from '../../stores/wsStore'
 import { NectarLoader, NectarSpinner } from '../../components/NectarLoader'
-import { CompareSelector, loadCompareTarget } from './CompareSelector'
+import { CompareSelector } from './CompareSelector'
 import type { CompareTarget } from './CompareSelector'
 
 interface Props {
@@ -48,26 +50,83 @@ const PILL_FILTERS: { key: 'all' | HealthCategory; label: string; color: string 
 type SortKey = 'health' | 'key' | 'jiraStatus' | 'assignee'
 type SortDir = 'asc' | 'desc'
 
+type ViewMode = 'impact' | 'full'
+type FilterKey = 'all' | HealthCategory
+type CompareType = CompareTarget['type']
+
 export function TruthView({ repo, version }: Props) {
-  type ViewMode = 'impact' | 'full'
+  // ── URL-driven state (everything here is shareable) ─────────
+  const [searchParams, setSearchParams] = useSearchParams()
 
-  // Load saved compare target from localStorage
-  const saved = loadCompareTarget(version)
-  const [mode, setMode] = useState<ViewMode>(saved ? 'impact' : 'full')
-  const [compareTarget, setCompareTarget] = useState<CompareTarget | null>(saved)
+  const cmpVersion = searchParams.get('cmp') || ''
+  const cmpType = (searchParams.get('cmpType') as CompareType | null) || null
+  const mode: ViewMode = (searchParams.get('view') as ViewMode | null)
+    || (cmpVersion ? 'impact' : 'full')
+  const filter: FilterKey = (searchParams.get('filter') as FilterKey | null) || 'all'
+  const search = searchParams.get('q') || ''
+  const sortKey: SortKey = (searchParams.get('sort') as SortKey | null) || 'health'
+  const sortDir: SortDir = (searchParams.get('dir') as SortDir | null) || 'asc'
+
+  // Helper — patches the URL, dropping keys that go back to defaults
+  function updateParams(updates: Record<string, string | null>) {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      for (const [k, v] of Object.entries(updates)) {
+        if (v === null || v === '') next.delete(k)
+        else next.set(k, v)
+      }
+      return next
+    }, { replace: true })
+  }
+
+  const setMode = (m: ViewMode) => {
+    // Dropping cmp* when switching to full avoids confusing leftover params
+    if (m === 'full') updateParams({ view: 'full' })
+    else updateParams({ view: 'impact' })
+  }
+  const setFilter = (f: FilterKey) => updateParams({ filter: f === 'all' ? null : f })
+  const setSearch = (q: string) => updateParams({ q: q || null })
+  const setSort = (key: SortKey) => {
+    if (sortKey === key) {
+      updateParams({ sort: key, dir: sortDir === 'asc' ? 'desc' : 'asc' })
+    } else {
+      updateParams({ sort: key, dir: 'asc' })
+    }
+  }
+
+  // ── Derive display label for the compare target from store data ───
+  const releases = useWsStore(s => s.releases)
+  const environments = useWsStore(s => s.environments)
+  const customers = useWsStore(s => s.customers)
+
+  const compareTarget: CompareTarget | null = useMemo(() => {
+    if (!cmpVersion) return null
+    const type = cmpType || 'branch'
+    // Derive a nice label from the store if we can find a match
+    let label = cmpVersion
+    if (type === 'customer') {
+      const env = environments.find(e => e.tier === 'production' && e.currentVersion === cmpVersion)
+      if (env) {
+        const cust = customers.find(c => c.id === env.customerId)
+        label = `${cust?.name || env.customerId} (${cmpVersion})`
+      }
+    } else if (type === 'branch') {
+      const rel = releases.find(r => r.version === cmpVersion)
+      label = rel?.branch ? `${cmpVersion} (${rel.branch})` : cmpVersion
+    } else if (type === 'environment') {
+      const env = environments.find(e => e.currentVersion === cmpVersion)
+      if (env) label = `${env.id} (${cmpVersion})`
+    }
+    return { type, version: cmpVersion, label }
+  }, [cmpVersion, cmpType, releases, environments, customers])
+
+  const prodVersion = cmpVersion
   const [selectorOpen, setSelectorOpen] = useState(false)
-
-  // prodVersion is derived from compareTarget
-  const prodVersion = compareTarget?.version || ''
 
   const [truth, setTruth] = useState<ReleaseTruthReport | null>(null)
   const [impact, setImpact] = useState<DeploymentImpactReport | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState<'all' | HealthCategory>('all')
-  const [search, setSearch] = useState('')
-  const [sortKey, setSortKey] = useState<SortKey>('health')
-  const [sortDir, setSortDir] = useState<SortDir>('asc')
 
   async function loadTruth() {
     setLoading(true)
@@ -156,15 +215,6 @@ export function TruthView({ repo, version }: Props) {
 
     return rows
   }, [activeTickets, filter, search, sortKey, sortDir])
-
-  function setSort(key: SortKey) {
-    if (sortKey === key) {
-      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortKey(key)
-      setSortDir('asc')
-    }
-  }
 
   if (loading && !truth && !impact) {
     return (
@@ -334,8 +384,18 @@ export function TruthView({ repo, version }: Props) {
           {filtered.length} of {activeTickets.length}
         </span>
         {(filter !== 'all' || search) && (
-          <Button variant="ghost" size="sm" onClick={() => { setFilter('all'); setSearch('') }}>
+          <Button variant="ghost" size="sm" onClick={() => updateParams({ filter: null, q: null })}>
             Clear filters
+          </Button>
+        )}
+        {(cmpVersion || mode !== 'full' || sortKey !== 'health' || sortDir !== 'asc') && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigator.clipboard.writeText(window.location.href).catch(() => {})}
+            title="Copy a shareable URL with the current view"
+          >
+            Copy link
           </Button>
         )}
       </div>
@@ -417,8 +477,11 @@ export function TruthView({ repo, version }: Props) {
         onOpenChange={setSelectorOpen}
         releaseVersion={version}
         onSelect={(target) => {
-          setCompareTarget(target)
-          setMode('impact')
+          updateParams({
+            view: 'impact',
+            cmp: target.version,
+            cmpType: target.type,
+          })
         }}
       />
     </div>

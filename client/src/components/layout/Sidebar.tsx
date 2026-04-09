@@ -8,6 +8,7 @@ const links = [
   { to: '/customers', label: 'Customers', icon: '🏢' },
   { to: '/features', label: 'Features', icon: '🚩' },
   { to: '/integrations', label: 'Integrations', icon: '🔌' },
+  { to: '/issues', label: 'Issues', icon: '🐛' },
 ]
 
 export function Sidebar() {
