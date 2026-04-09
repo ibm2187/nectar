@@ -6,10 +6,18 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:4000',
+      '/api': {
+        target: 'http://localhost:4000',
+        configure: (proxy) => {
+          proxy.on('error', () => {}) // suppress ECONNREFUSED when backend is down
+        },
+      },
       '/ws': {
         target: 'ws://localhost:4000',
         ws: true,
+        configure: (proxy) => {
+          proxy.on('error', () => {}) // suppress EPIPE when backend restarts
+        },
       },
     },
   },
