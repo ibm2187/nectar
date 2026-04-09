@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useWsStore } from '../../stores/wsStore'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
@@ -54,21 +54,30 @@ export function EnvironmentDetailPage() {
     {
       key: 'features',
       label: 'Features',
-      badge: env.features ? Object.keys(env.features.portalFeatureFlag || {}).length + Object.keys(env.features.mobileFeatureFlag || {}).length : undefined,
+      badge: env.features ? (env.features.dbFeatureFlags || []).length : undefined,
     },
     {
       key: 'integrations',
       label: 'Integrations',
       badge: env.integrations
-        ? [env.integrations.ascend?.enabled, env.integrations.bayadaHub?.enabled, env.integrations.hah?.enabled, env.integrations.sqsOutbound?.enabled, env.integrations.sqsInbound?.enabled].filter(Boolean).length
+        ? Object.values(env.integrations.dbIntegrations || {}).filter(v => v.enabled).length
+          + Object.values(env.integrations.configIntegrations || {}).filter(v => v.enabled).length
         : undefined,
     },
     {
       key: 'upgrades',
       label: 'Upgrades',
-      badge: env.upgrades ? `${env.upgrades.summary.pending}/${env.upgrades.summary.totalInPool}` : undefined,
-      badgeVariant: env.upgrades && env.upgrades.summary.failedVerification > 0 ? 'destructive'
-        : env.upgrades && env.upgrades.summary.pending > 0 ? 'warning' : 'default',
+      // Badge: pending / total. "Pending" = no history record yet.
+      // (Deciding applicability requires webplatform's brand-prefix matching rules,
+      // so we just show raw state here.)
+      badge: env.upgrades ? (() => {
+        const items = env.upgrades.items
+        const pending = items.filter(u => !u.history || (!u.history.completedAt && !u.history.inProgress && !u.history.skipped))
+        return `${pending.length}/${items.length}`
+      })() : undefined,
+      badgeVariant: env.upgrades && env.upgrades.items.some(u => u.history?.verificationStatus === 'FAILED') ? 'destructive'
+        : env.upgrades && env.upgrades.items.some(u => !u.history || (!u.history.completedAt && !u.history.inProgress && !u.history.skipped)) ? 'warning'
+        : 'default',
     },
   ]
 
@@ -230,11 +239,69 @@ function FeaturesTab({ env }: { env: Environment }) {
     )
   }
 
+  const f = env.features
+  const dbFlags = f.dbFeatureFlags || []
+  const mobileFlags = dbFlags.filter(fl => fl.isMobileFeature)
+  const portalFlags = dbFlags.filter(fl => !fl.isMobileFeature)
+  const config = f.configFeatures || {}
+
   return (
     <div className="space-y-4">
-      <FlagCard title="Portal Feature Flags" flags={env.features.portalFeatureFlag} />
-      <FlagCard title="Mobile Feature Flags" flags={env.features.mobileFeatureFlag} />
-      <FlagCard title="Workflow" flags={env.features.workflow} />
+      {/* DB feature flags (runtime) */}
+      {dbFlags.length > 0 && (
+        <>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Runtime Feature Flags — Portal <span className="text-xs font-normal text-muted-foreground ml-1">({portalFlags.length})</span></CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                {portalFlags.map(fl => (
+                  <div key={fl.key} className={cn(
+                    "border rounded-md p-2 flex items-center justify-between text-sm",
+                    fl.enabled ? "bg-green-500/5 border-green-500/30" : "bg-muted border-border"
+                  )}>
+                    <span className="font-mono text-xs truncate" title={fl.key}>{fl.key}</span>
+                    <Badge variant={fl.enabled ? 'success' : 'secondary'} className="text-xs shrink-0 ml-2">
+                      {fl.enabled ? 'enabled' : 'disabled'}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Runtime Feature Flags — Mobile <span className="text-xs font-normal text-muted-foreground ml-1">({mobileFlags.length})</span></CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                {mobileFlags.map(fl => (
+                  <div key={fl.key} className={cn(
+                    "border rounded-md p-2 flex items-center justify-between text-sm",
+                    fl.enabled ? "bg-green-500/5 border-green-500/30" : "bg-muted border-border"
+                  )}>
+                    <span className="font-mono text-xs truncate" title={fl.key}>{fl.key}</span>
+                    <Badge variant={fl.enabled ? 'success' : 'secondary'} className="text-xs shrink-0 ml-2">
+                      {fl.enabled ? 'enabled' : 'disabled'}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      {/* Static config feature flags */}
+      <FlagCard title="Config: Portal Feature Flags" flags={config.portalFeatureFlag} />
+      <FlagCard title="Config: Mobile Feature Flags" flags={config.mobileFeatureFlag} />
+      <FlagCard title="Config: Workflow" flags={config.workflow} />
+
+      {/* Boolean toggles */}
+      {Object.keys(f.toggles || {}).length > 0 && (
+        <FlagCard title="Toggles" flags={f.toggles} />
+      )}
     </div>
   )
 }
@@ -312,72 +379,100 @@ function IntegrationsTab({ env }: { env: Environment }) {
     )
   }
 
-  const i = env.integrations
-  const items = [
-    { key: 'ascend', label: 'Ascend (Blue Summit)', enabled: i.ascend?.enabled, details: i.ascend },
-    { key: 'bayadaHub', label: 'Bayada Hub', enabled: i.bayadaHub?.enabled },
-    { key: 'hah', label: 'Help at Home', enabled: i.hah?.enabled },
-    { key: 'sqsOutbound', label: 'SQS Outbound', enabled: i.sqsOutbound?.enabled },
-    { key: 'sqsInbound', label: 'SQS Inbound', enabled: i.sqsInbound?.enabled },
-  ]
+  const ig = env.integrations
+  const dbEntries = Object.entries(ig.dbIntegrations || {})
+  const configEntries = Object.entries(ig.configIntegrations || {})
 
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader className="pb-3"><CardTitle className="text-base">Partner Integrations</CardTitle></CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-            {items.map(item => (
-              <div
-                key={item.key}
-                className={cn(
-                  "border rounded-md p-3 flex items-center justify-between",
-                  item.enabled ? "bg-green-500/5 border-green-500/30" : "bg-muted border-border"
-                )}
-              >
-                <div>
-                  <div className="text-sm font-medium">{item.label}</div>
-                  {item.details && 'syncAllData' in item.details && item.details.syncAllData && (
-                    <div className="text-xs text-muted-foreground">syncAllData: true</div>
+      {/* DB Integrations — from Integrations page / V2 page */}
+      {dbEntries.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">
+              Integrations
+              <span className="text-xs font-normal text-muted-foreground ml-2">
+                {dbEntries.filter(([, v]) => v.enabled).length} enabled / {dbEntries.length} total
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+              {dbEntries.map(([type, entry]) => (
+                <div
+                  key={type}
+                  className={cn(
+                    "border rounded-md p-3 flex items-center justify-between",
+                    entry.enabled ? "bg-green-500/5 border-green-500/30" : "bg-muted border-border"
                   )}
+                >
+                  <div>
+                    <div className="text-sm font-medium">{type}</div>
+                    {entry.configured && <div className="text-xs text-muted-foreground">configured</div>}
+                  </div>
+                  <Badge variant={entry.enabled ? 'success' : 'secondary'} className="text-xs">
+                    {entry.enabled ? 'enabled' : 'disabled'}
+                  </Badge>
                 </div>
-                <Badge variant={item.enabled ? 'success' : 'secondary'} className="text-xs">
-                  {item.enabled ? 'enabled' : 'disabled'}
-                </Badge>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
+      {/* Config-level integrations (static partner integrations) */}
+      {configEntries.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3"><CardTitle className="text-base">Config Integrations</CardTitle></CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+              {configEntries.map(([key, entry]) => (
+                <div
+                  key={key}
+                  className={cn(
+                    "border rounded-md p-3 flex items-center justify-between",
+                    entry.enabled ? "bg-green-500/5 border-green-500/30" : "bg-muted border-border"
+                  )}
+                >
+                  <div className="text-sm font-medium">{key}</div>
+                  <Badge variant={entry.enabled ? 'success' : 'secondary'} className="text-xs">
+                    {entry.enabled ? 'enabled' : 'disabled'}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Data Publishing + outgoing communication */}
       <Card>
         <CardHeader className="pb-3"><CardTitle className="text-base">Data Publishing</CardTitle></CardHeader>
         <CardContent>
-          <div className="flex gap-4 text-sm">
-            {Object.entries(i.dataPublishing || {}).map(([k, v]) => (
+          <div className="flex gap-4 text-sm flex-wrap">
+            {Object.entries(ig.dataPublishing || {}).map(([k, v]) => (
               <div key={k} className="flex items-center gap-2">
                 <span className={cn("w-2 h-2 rounded-full", v ? "bg-green-400" : "bg-muted")} />
                 <span>{k}</span>
               </div>
             ))}
             <div className="flex items-center gap-2 ml-auto">
-              <span className={cn("w-2 h-2 rounded-full", i.disableOutgoingCommunication ? "bg-red-400" : "bg-green-400")} />
+              <span className={cn("w-2 h-2 rounded-full", ig.disableOutgoingCommunication ? "bg-red-400" : "bg-green-400")} />
               <span className="text-muted-foreground">
-                Outgoing communication: {i.disableOutgoingCommunication ? 'disabled' : 'enabled'}
+                Outgoing communication: {ig.disableOutgoingCommunication ? 'disabled' : 'enabled'}
               </span>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="pb-3"><CardTitle className="text-base">SQS Queues</CardTitle></CardHeader>
-        <CardContent>
-          {Object.keys(i.sqsQueues || {}).length === 0 ? (
-            <p className="text-sm text-muted-foreground italic">None configured</p>
-          ) : (
+      {/* SQS Queues */}
+      {Object.keys(ig.sqsQueues || {}).length > 0 && (
+        <Card>
+          <CardHeader className="pb-3"><CardTitle className="text-base">SQS Queues</CardTitle></CardHeader>
+          <CardContent>
             <div className="space-y-3">
-              {Object.entries(i.sqsQueues).map(([provider, directions]) => (
+              {Object.entries(ig.sqsQueues).map(([provider, directions]) => (
                 <div key={provider}>
                   <div className="text-sm font-semibold mb-1">{provider}</div>
                   {Object.entries(directions || {}).map(([direction, queues]) => (
@@ -389,19 +484,86 @@ function IntegrationsTab({ env }: { env: Environment }) {
                 </div>
               ))}
             </div>
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }
 
 // ── Upgrades tab ────────────────────────────────────────────
 
+interface UpgradeBuckets {
+  applied: EnvUpgradeItem[]
+  pending: EnvUpgradeItem[]
+  inProgress: EnvUpgradeItem[]
+  failedVerification: EnvUpgradeItem[]
+  skippedManually: EnvUpgradeItem[]
+  latestApplied: EnvUpgradeItem | null
+}
+
+/**
+ * Bucket the flat list from /api/status/upgrades based on each item's history.
+ * The server returns raw data; all classification happens here.
+ */
+function bucketUpgrades(items: EnvUpgradeItem[]): UpgradeBuckets {
+  const buckets: UpgradeBuckets = {
+    applied: [],
+    pending: [],
+    inProgress: [],
+    failedVerification: [],
+    skippedManually: [],
+    latestApplied: null,
+  }
+
+  for (const item of items) {
+    const h = item.history
+    if (!h) {
+      buckets.pending.push(item)
+      continue
+    }
+    if (h.inProgress) {
+      buckets.inProgress.push(item)
+      continue
+    }
+    // History flagged as skipped + skippedBy populated = human action
+    if (h.skipped && h.skippedBy) {
+      buckets.skippedManually.push(item)
+      continue
+    }
+    if (h.completedAt) {
+      buckets.applied.push(item)
+      if (h.verificationStatus === 'FAILED') {
+        buckets.failedVerification.push(item)
+      }
+      continue
+    }
+    // Record exists but didn't complete and isn't in progress → still pending
+    buckets.pending.push(item)
+  }
+
+  // Latest applied = highest completedAt among applied items
+  let latest: EnvUpgradeItem | null = null
+  for (const item of buckets.applied) {
+    const ts = item.history?.completedAt
+    if (!ts) continue
+    const latestTs = latest?.history?.completedAt
+    if (!latestTs || ts > latestTs) latest = item
+  }
+  buckets.latestApplied = latest
+
+  return buckets
+}
+
 function UpgradesTab({ env, onSelectUpgrade }: { env: Environment; onSelectUpgrade: (u: EnvUpgradeItem) => void }) {
   const [search, setSearch] = useState('')
 
-  if (!env.upgrades) {
+  const buckets = useMemo(
+    () => (env.upgrades ? bucketUpgrades(env.upgrades.items) : null),
+    [env.upgrades]
+  )
+
+  if (!env.upgrades || !buckets) {
     return (
       <Card>
         <CardContent className="p-8 text-center text-sm text-muted-foreground italic">
@@ -412,7 +574,6 @@ function UpgradesTab({ env, onSelectUpgrade }: { env: Environment; onSelectUpgra
   }
 
   const u = env.upgrades
-  const s = u.summary
 
   const filterFn = (list: EnvUpgradeItem[]) => {
     if (!search) return list
@@ -424,23 +585,23 @@ function UpgradesTab({ env, onSelectUpgrade }: { env: Environment; onSelectUpgra
     <div className="space-y-4">
       {/* Summary tiles */}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-        <SummaryTile label="Total" value={s.totalInPool} />
-        <SummaryTile label="Applied" value={s.applied} color="green" />
-        <SummaryTile label="Pending" value={s.pending} color={s.pending > 0 ? 'yellow' : undefined} />
-        <SummaryTile label="In Progress" value={s.inProgress} color={s.inProgress > 0 ? 'blue' : undefined} />
-        <SummaryTile label="Failed Verify" value={s.failedVerification} color={s.failedVerification > 0 ? 'red' : undefined} />
-        <SummaryTile label="Skipped" value={s.skipped} />
+        <SummaryTile label="Total" value={u.totalInPool} />
+        <SummaryTile label="Applied" value={buckets.applied.length} color="green" />
+        <SummaryTile label="Pending" value={buckets.pending.length} color={buckets.pending.length > 0 ? 'yellow' : undefined} />
+        <SummaryTile label="In Progress" value={buckets.inProgress.length} color={buckets.inProgress.length > 0 ? 'blue' : undefined} />
+        <SummaryTile label="Failed Verify" value={buckets.failedVerification.length} color={buckets.failedVerification.length > 0 ? 'red' : undefined} />
+        <SummaryTile label="Skipped (Manual)" value={buckets.skippedManually.length} />
       </div>
 
       {/* Latest */}
-      {u.latest && (
+      {buckets.latestApplied && (
         <Card>
           <CardHeader className="pb-3"><CardTitle className="text-base">Latest Applied</CardTitle></CardHeader>
           <CardContent>
-            <div className="text-sm font-mono">{u.latest.upgradeName}</div>
+            <div className="text-sm font-mono">{buckets.latestApplied.upgradeName}</div>
             <div className="text-xs text-muted-foreground mt-1">
-              {u.latest.completedAt && `Completed ${timeAgo(u.latest.completedAt)}`}
-              {u.latest.verificationStatus && ` · Verification: ${u.latest.verificationStatus}`}
+              {buckets.latestApplied.history?.completedAt && `Completed ${timeAgo(buckets.latestApplied.history.completedAt)}`}
+              {buckets.latestApplied.history?.verificationStatus && ` · Verification: ${buckets.latestApplied.history.verificationStatus}`}
             </div>
           </CardContent>
         </Card>
@@ -455,40 +616,40 @@ function UpgradesTab({ env, onSelectUpgrade }: { env: Environment; onSelectUpgra
       />
 
       {/* Failed verification (most actionable) */}
-      {u.failedVerification.length > 0 && (
+      {buckets.failedVerification.length > 0 && (
         <UpgradeList
           title="Failed Verification"
-          items={filterFn(u.failedVerification)}
+          items={filterFn(buckets.failedVerification)}
           severity="error"
           onSelect={onSelectUpgrade}
         />
       )}
 
       {/* In progress */}
-      {u.inProgress.length > 0 && (
+      {buckets.inProgress.length > 0 && (
         <UpgradeList
           title="In Progress"
-          items={filterFn(u.inProgress)}
+          items={filterFn(buckets.inProgress)}
           severity="warning"
           onSelect={onSelectUpgrade}
         />
       )}
 
       {/* Pending */}
-      {u.pending.length > 0 && (
+      {buckets.pending.length > 0 && (
         <UpgradeList
-          title={`Pending (${u.pending.length}${s.pending > u.pending.length ? ' of ' + s.pending + ' — capped' : ''})`}
-          items={filterFn(u.pending)}
+          title={`Pending (${buckets.pending.length})`}
+          items={filterFn(buckets.pending)}
           severity="warning"
           onSelect={onSelectUpgrade}
         />
       )}
 
-      {/* Skipped */}
-      {u.skipped.length > 0 && (
+      {/* Manually skipped by a human */}
+      {buckets.skippedManually.length > 0 && (
         <UpgradeList
-          title="Skipped"
-          items={filterFn(u.skipped)}
+          title="Skipped (Manual)"
+          items={filterFn(buckets.skippedManually)}
           severity="muted"
           onSelect={onSelectUpgrade}
         />
@@ -530,29 +691,32 @@ function UpgradeList({
           {items.length === 0 ? (
             <p className="text-sm text-muted-foreground italic">No matching upgrades</p>
           ) : (
-            items.map(item => (
-              <button
-                key={item.upgradeName}
-                type="button"
-                onClick={() => onSelect(item)}
-                className="w-full text-left px-2 py-1.5 rounded hover:bg-accent/30 border-b border-border/30 last:border-0"
-              >
-                <div className="font-mono text-xs truncate" title={item.upgradeName}>
-                  {item.upgradeName}
-                </div>
-                <div className="text-xs text-muted-foreground flex items-center gap-2 flex-wrap mt-0.5">
-                  {item.desiredEnvs && item.desiredEnvs.length > 0 && (
-                    <span>envs: {item.desiredEnvs.join(', ')}</span>
-                  )}
-                  {item.nonBlocking && <span>· non-blocking</span>}
-                  {item.hasVerify && <span>· has verify</span>}
-                  {item.completedAt && <span>· completed {timeAgo(item.completedAt)}</span>}
-                  {item.verificationStatus && <span className={item.verificationStatus === 'FAILED' ? 'text-red-400' : 'text-green-400'}>· {item.verificationStatus}</span>}
-                  {item.verificationError && <span className="text-red-400">· {item.verificationError}</span>}
-                  {item.skippedReason && <span>· {item.skippedReason}</span>}
-                </div>
-              </button>
-            ))
+            items.map(item => {
+              const h = item.history
+              return (
+                <button
+                  key={item.upgradeName}
+                  type="button"
+                  onClick={() => onSelect(item)}
+                  className="w-full text-left px-2 py-1.5 rounded hover:bg-accent/30 border-b border-border/30 last:border-0"
+                >
+                  <div className="font-mono text-xs truncate" title={item.upgradeName}>
+                    {item.upgradeName}
+                  </div>
+                  <div className="text-xs text-muted-foreground flex items-center gap-2 flex-wrap mt-0.5">
+                    {item.desiredEnvs && item.desiredEnvs.length > 0 && (
+                      <span>envs: {item.desiredEnvs.join(', ')}</span>
+                    )}
+                    {item.nonBlocking && <span>· non-blocking</span>}
+                    {item.hasVerify && <span>· has verify</span>}
+                    {h?.completedAt && <span>· completed {timeAgo(h.completedAt)}</span>}
+                    {h?.verificationStatus && <span className={h.verificationStatus === 'FAILED' ? 'text-red-400' : 'text-green-400'}>· {h.verificationStatus}</span>}
+                    {h?.verificationError && <span className="text-red-400">· {h.verificationError}</span>}
+                    {h?.skippedReason && <span>· {h.skippedReason}</span>}
+                  </div>
+                </button>
+              )
+            })
           )}
         </div>
       </CardContent>

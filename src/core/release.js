@@ -186,7 +186,7 @@ class ReleaseManager extends EventEmitter {
       Object.assign(existing, ticket);
     } else {
       release.tickets.push({
-        key: ticket.key,
+        ...ticket,
         summary: ticket.summary || '',
         state: ticket.state || 'pending',
         pr: ticket.pr || null,

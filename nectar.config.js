@@ -53,7 +53,7 @@ module.exports = {
     project: 'DEV',
     cherryPickedStatus: 'Cherry Picked',
     readyForTestingStatus: 'Ready For Testing',
-    maxVersionsPerSync: 30,  // Limit to avoid rate limits
+    maxVersionsPerSync: 50,  // Must cover all unreleased versions (null-date ones sort last)
   },
 
   // ── Risk scoring weights (defaults, repos can override) ─

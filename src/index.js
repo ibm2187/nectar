@@ -90,7 +90,7 @@ const JiraSync = require('./core/jira-sync');
 const jiraSync = new JiraSync(releases, jira, config);
 
 const ReleaseTruth = require('./core/release-truth');
-const releaseTruth = new ReleaseTruth(releases, repoManager, github, config);
+const releaseTruth = new ReleaseTruth(releases, repoManager, github, jira, config);
 
 const CustomerStore = require('./core/customer-store');
 const customerStore = new CustomerStore();

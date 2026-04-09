@@ -122,6 +122,39 @@ class EnvironmentPoller extends EventEmitter {
   }
 
   /**
+   * Walk all pages of /api/status/upgrades and merge the items into a single
+   * response shape for the customer store. The endpoint is paginated (default
+   * pageSize=100, max=500) — we use pageSize=500 to minimize round-trips and
+   * stay under the 5-requests-per-minute rate limit.
+   *
+   * Returns: { environment, totalInPool, items }
+   */
+  async _fetchAllUpgrades(baseUrl) {
+    const pageSize = 500;
+    let page = 1;
+    let environment = null;
+    let total = 0;
+    const items = [];
+
+    // Safety cap — webplatform has ~500 upgrades, so 10 pages at pageSize=500
+    // is plenty of headroom. Prevents runaway loops if the server misbehaves.
+    const MAX_PAGES = 20;
+
+    while (page <= MAX_PAGES) {
+      const res = await this._fetchEndpoint(baseUrl, `/api/status/upgrades?page=${page}&pageSize=${pageSize}`);
+      if (page === 1) {
+        environment = res.environment || null;
+        total = res.pagination ? res.pagination.total : 0;
+      }
+      if (Array.isArray(res.items)) items.push(...res.items);
+      if (!res.pagination || !res.pagination.hasMore) break;
+      page += 1;
+    }
+
+    return { environment, totalInPool: total, items };
+  }
+
+  /**
    * Poll one environment — hits /version, /features, /integrations, /upgrades
    * in parallel. Each endpoint failure is independent: a /features 404 doesn't
    * prevent /version from being recorded.
@@ -130,12 +163,13 @@ class EnvironmentPoller extends EventEmitter {
     if (!env.url) return { versionChanged: false };
     const previousVersion = env.currentVersion;
 
-    // Kick off all four in parallel
+    // Kick off all four in parallel. /upgrades is paginated — _fetchAllUpgrades
+    // walks every page and returns a merged { environment, totalInPool, items }.
     const [versionResult, featuresResult, integrationsResult, upgradesResult] = await Promise.allSettled([
       this._fetchEndpoint(env.url, '/api/status/version'),
       this._fetchEndpoint(env.url, '/api/status/features'),
       this._fetchEndpoint(env.url, '/api/status/integrations'),
-      this._fetchEndpoint(env.url, '/api/status/upgrades'),
+      this._fetchAllUpgrades(env.url),
     ]);
 
     // /version → updates currentVersion + reachable + lastChecked
@@ -156,41 +190,35 @@ class EnvironmentPoller extends EventEmitter {
       this.emit('env:unreachable', env, versionResult.reason);
     }
 
-    // /features → updates feature flags
+    // /features → store as-is from the new API shape
     if (featuresResult.status === 'fulfilled') {
+      const d = featuresResult.value;
       this.customerStore.updateFeatures(env.id, {
-        portalFeatureFlag: featuresResult.value.portalFeatureFlag || {},
-        mobileFeatureFlag: featuresResult.value.mobileFeatureFlag || {},
-        workflow: featuresResult.value.workflow || {},
+        dbFeatureFlags: d.dbFeatureFlags || [],
+        configFeatures: d.configFeatures || {
+          portalFeatureFlag: d.portalFeatureFlag || {},
+          mobileFeatureFlag: d.mobileFeatureFlag || {},
+          workflow: d.workflow || {},
+        },
+        toggles: d.toggles || {},
       });
     }
 
-    // /integrations → updates integration toggles
+    // /integrations → store as-is from the new API shape
     if (integrationsResult.status === 'fulfilled') {
       const d = integrationsResult.value;
       this.customerStore.updateIntegrations(env.id, {
-        ascend: d.ascend || { enabled: false },
-        bayadaHub: d.bayadaHub || { enabled: false },
-        hah: d.hah || { enabled: false },
-        sqsOutbound: d.sqsOutbound || { enabled: false },
-        sqsInbound: d.sqsInbound || { enabled: false },
-        dataPublishing: d.dataPublishing || {},
         disableOutgoingCommunication: !!d.disableOutgoingCommunication,
+        dbIntegrations: d.dbIntegrations || {},
+        configIntegrations: d.configIntegrations || {},
+        dataPublishing: d.dataPublishing || {},
         sqsQueues: d.sqsQueues || {},
       });
     }
 
-    // /upgrades → updates upgrade status summary
+    // /upgrades → store merged pages as-is; all classification is done in the UI
     if (upgradesResult.status === 'fulfilled') {
-      const d = upgradesResult.value;
-      this.customerStore.updateUpgrades(env.id, {
-        summary: d.summary || {},
-        latest: d.latest || null,
-        pending: d.pending || [],
-        inProgress: d.inProgress || [],
-        failedVerification: d.failedVerification || [],
-        skipped: d.skipped || [],
-      });
+      this.customerStore.updateUpgrades(env.id, upgradesResult.value);
     }
 
     // Track per-env reachability for rollup (consider reachable if at least version succeeded)

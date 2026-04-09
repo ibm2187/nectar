@@ -75,10 +75,11 @@ function getStage(jiraStatus) {
 }
 
 class ReleaseTruth {
-  constructor(releases, repoManager, github, config) {
+  constructor(releases, repoManager, github, jira, config) {
     this.releases = releases;
     this.repoManager = repoManager;
     this.github = github;
+    this.jira = jira;
     this.config = config;
   }
 
@@ -90,11 +91,42 @@ class ReleaseTruth {
     const repoConfig = this.config.repos.find(r => r.name === repo);
     if (!repoConfig) throw new Error(`Repo ${repo} not configured`);
 
-    // ── 1. Get JIRA-sourced tickets ──────────────────────
-    // Only tickets that came from JIRA sync are part of the planned set.
+    // ── 1. Refresh JIRA statuses live ─────────────────────
+    // The periodic JIRA sync may have stale data. When the user explicitly
+    // asks for truth (Refresh button), re-fetch current status for every
+    // ticket in this release so the health verdicts are based on reality.
     const allTickets = release.tickets || [];
     const jiraTickets = allTickets.filter(t => t.source === 'jira');
-    const jiraKeys = new Set(jiraTickets.map(t => t.key));
+
+    if (jiraTickets.length > 0 && this.jira && this.jira.isConfigured()) {
+      try {
+        const keys = jiraTickets.map(t => t.key);
+        const jql = JiraClient.buildJQL(keys);
+        if (jql) {
+          const freshIssues = await this.jira.searchAllIssues(jql, { maxResults: keys.length });
+          const freshByKey = new Map();
+          for (const issue of freshIssues) {
+            const n = JiraClient.normalizeIssue(issue);
+            freshByKey.set(n.key, n);
+          }
+          // Update each ticket in-place with fresh JIRA data
+          for (const ticket of jiraTickets) {
+            const fresh = freshByKey.get(ticket.key);
+            if (fresh) {
+              ticket.jiraStatus = fresh.status;
+              ticket.state = JiraClient.mapStatus(fresh.status);
+              ticket.summary = fresh.summary;
+              ticket.type = fresh.type;
+              ticket.assignee = fresh.assignee;
+              ticket.jiraRefreshedAt = new Date().toISOString();
+            }
+          }
+          log.info(`Truth ${repo}:${version}: refreshed ${freshByKey.size}/${keys.length} ticket statuses from JIRA`);
+        }
+      } catch (err) {
+        log.warn(`Truth ${repo}:${version}: JIRA refresh failed, using cached statuses: ${err.message}`);
+      }
+    }
 
     // ── 2. Get commits on the release branch ─────────────
     // We need TWO sets:
@@ -151,6 +183,8 @@ class ReleaseTruth {
         log.warn(`Truth: failed to compute cherry-picks for ${repo}:${version}: ${err.message}`);
       }
     }
+
+    const jiraKeys = new Set(jiraTickets.map(t => t.key));
 
     // ── 3. Get OPEN PRs targeting the release branch ─────
     const prByKey = new Map(); // jiraKey → PR info

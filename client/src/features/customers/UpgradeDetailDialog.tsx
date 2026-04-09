@@ -64,40 +64,40 @@ export function UpgradeDetailDialog({ open, onOpenChange, upgrade }: Props) {
             <StatusField label="Non-blocking" value={upgrade.nonBlocking ? 'yes' : 'no'} />
             <StatusField label="Enforce envs" value={upgrade.enforceDesiredEnvs ? 'yes' : 'no'} />
             <StatusField label="Has verify()" value={upgrade.hasVerify ? 'yes' : 'no'} />
-            <StatusField label="Completed" value={upgrade.completedAt ? timeAgo(upgrade.completedAt) : '—'} />
+            <StatusField label="Completed" value={upgrade.history?.completedAt ? timeAgo(upgrade.history.completedAt) : '—'} />
             <StatusField
               label="Verification"
-              value={upgrade.verificationStatus ? (
-                <Badge variant={upgrade.verificationStatus === 'SUCCESS' ? 'success' : 'destructive'}>
-                  {upgrade.verificationStatus}
+              value={upgrade.history?.verificationStatus ? (
+                <Badge variant={upgrade.history.verificationStatus === 'SUCCESS' ? 'success' : 'destructive'}>
+                  {upgrade.history.verificationStatus}
                 </Badge>
               ) : '—'}
             />
           </div>
 
           {/* Verification error + metadata */}
-          {upgrade.verificationError && (
+          {upgrade.history?.verificationError && (
             <div className="rounded-md border border-red-500/30 bg-red-500/5 p-3">
               <div className="text-xs font-semibold text-red-400 mb-1">Verification Error</div>
-              <div className="text-xs text-muted-foreground">{upgrade.verificationError}</div>
+              <div className="text-xs text-muted-foreground">{upgrade.history.verificationError}</div>
             </div>
           )}
 
-          {upgrade.verificationMetadata && Object.keys(upgrade.verificationMetadata).length > 0 && (
+          {upgrade.history?.verificationMetadata && Object.keys(upgrade.history.verificationMetadata).length > 0 && (
             <div className="rounded-md border p-3">
               <div className="text-xs font-semibold mb-1">Verification Metadata</div>
               <pre className="text-xs font-mono text-muted-foreground overflow-auto max-h-40">
-                {JSON.stringify(upgrade.verificationMetadata, null, 2)}
+                {JSON.stringify(upgrade.history.verificationMetadata, null, 2)}
               </pre>
             </div>
           )}
 
-          {upgrade.skippedReason && (
+          {upgrade.history?.skippedReason && (
             <div className="rounded-md border border-yellow-500/30 bg-yellow-500/5 p-3">
               <div className="text-xs font-semibold text-yellow-400 mb-1">Skipped</div>
               <div className="text-xs text-muted-foreground">
-                {upgrade.skippedReason}
-                {upgrade.skippedBy && ` — ${upgrade.skippedBy}`}
+                {upgrade.history.skippedReason}
+                {upgrade.history.skippedBy && ` — ${upgrade.history.skippedBy}`}
               </div>
             </div>
           )}

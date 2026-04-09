@@ -147,58 +147,65 @@ export interface Environment {
   lastUpgradesCheckedAt?: string | null
 }
 
+export interface EnvFeatureFlag {
+  key: string
+  enabled: boolean
+  isMobileFeature: boolean
+}
+
 export interface EnvFeatures {
-  portalFeatureFlag: Record<string, unknown>
-  mobileFeatureFlag: Record<string, unknown>
-  workflow: Record<string, unknown>
+  dbFeatureFlags: EnvFeatureFlag[]
+  configFeatures: {
+    portalFeatureFlag: Record<string, unknown>
+    mobileFeatureFlag: Record<string, unknown>
+    workflow: Record<string, unknown>
+  }
+  toggles: Record<string, boolean>
 }
 
 export interface EnvIntegrations {
-  ascend: { enabled: boolean; syncAllData?: boolean; partnerApiConfigured?: boolean }
-  bayadaHub: { enabled: boolean }
-  hah: { enabled: boolean }
-  sqsOutbound: { enabled: boolean }
-  sqsInbound: { enabled: boolean }
-  dataPublishing: Record<string, boolean>
   disableOutgoingCommunication: boolean
+  dbIntegrations: Record<string, { enabled: boolean; configured: boolean }>
+  configIntegrations: Record<string, { enabled: boolean; syncAllData?: boolean }>
+  dataPublishing: Record<string, boolean>
   sqsQueues: Record<string, Record<string, string[]>>
 }
 
+/** History entry joined with an upgrade, or null if never run */
+export interface EnvUpgradeHistory {
+  startedAt: string | null
+  completedAt: string | null
+  inProgress: boolean
+  skipped: boolean
+  skippedReason: string | null
+  skippedBy: string | null
+  verificationStatus: 'SUCCESS' | 'FAILED' | null
+  verificationError: string | null
+  verificationMetadata: Record<string, unknown> | null
+  forceRun: boolean
+  version: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+/** A single upgrade from the pool, with history joined in */
 export interface EnvUpgradeItem {
   upgradeName: string
   desiredEnvs: string[]
   nonBlocking: boolean
   enforceDesiredEnvs: boolean
   hasVerify: boolean
-  startedAt?: string | null
-  completedAt?: string | null
-  verificationStatus?: 'SUCCESS' | 'FAILED' | null
-  verificationError?: string | null
-  verificationMetadata?: Record<string, unknown> | null
-  forceRun?: boolean
-  version?: string | null
-  skippedReason?: string | null
-  skippedBy?: string | null
+  history: EnvUpgradeHistory | null
 }
 
+/**
+ * Merged result of walking every page of webplatform's /api/status/upgrades.
+ * Stored in the customer store after Nectar's poller aggregates all pages.
+ */
 export interface EnvUpgrades {
-  summary: {
-    totalInPool: number
-    applied: number
-    pending: number
-    inProgress: number
-    skipped: number
-    failedVerification: number
-  }
-  latest: {
-    upgradeName: string
-    completedAt: string
-    verificationStatus: string | null
-  } | null
-  pending: EnvUpgradeItem[]
-  inProgress: EnvUpgradeItem[]
-  failedVerification: EnvUpgradeItem[]
-  skipped: EnvUpgradeItem[]
+  environment: string | null
+  totalInPool: number
+  items: EnvUpgradeItem[]
 }
 
 export interface EnvDeployment {

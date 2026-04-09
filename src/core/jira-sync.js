@@ -105,8 +105,14 @@ class JiraSync extends EventEmitter {
         return false;
       });
 
-      // Sort by releaseDate desc so most recent sync first
-      candidates.sort((a, b) => (b.releaseDate || '').localeCompare(a.releaseDate || ''));
+      // Sort by releaseDate desc, but versions WITHOUT a release date come FIRST
+      // (they're actively being worked on and most likely to need ticket sync).
+      candidates.sort((a, b) => {
+        if (!a.releaseDate && !b.releaseDate) return 0;
+        if (!a.releaseDate) return -1;  // a has no date → sort first
+        if (!b.releaseDate) return 1;   // b has no date → sort first
+        return b.releaseDate.localeCompare(a.releaseDate);
+      });
 
       // Limit to top N to avoid rate limits
       const maxSync = (this.config.jira && this.config.jira.maxVersionsPerSync) || 50;
@@ -217,7 +223,10 @@ class JiraSync extends EventEmitter {
     // Find the release — strict repo match
     const { repo, cleanVersion } = this._parseVersionName(versionName);
     const release = this.releases.get(cleanVersion, repo);
-    if (!release) return { tickets: 0, updated: 0 };
+    if (!release) {
+      log.warn(`JIRA sync: no release found for ${repo}:${cleanVersion} — skipping ${issues.length} issues`);
+      return { tickets: 0, updated: 0 };
+    }
 
     const key = this.releases._key(release.repo, release.version);
     let updated = 0;
@@ -236,6 +245,11 @@ class JiraSync extends EventEmitter {
       };
       this.releases.addTicket(key, ticketData, 'jira-sync');
       updated++;
+    }
+
+    // Log when tickets were added to help trace sync issues
+    if (issues.length > 0) {
+      log.info(`JIRA sync: ${versionName} — ${updated} tickets synced (${isIncremental ? 'incremental' : 'full'}, release has ${release.tickets.length} total)`);
     }
 
     this.lastSyncTimes.set(versionName, new Date().toISOString());
