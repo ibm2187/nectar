@@ -9,6 +9,7 @@ import { apiFetch } from '../../api/client'
 import type { Customer, Environment, EnvTier } from '../../api/client'
 import { cn, timeAgo } from '../../lib/utils'
 import { SetVersionDialog } from './SetVersionDialog'
+import { NectarLoader } from '../../components/NectarLoader'
 
 // Tier ordering for display (production first, then staging, etc.)
 const TIER_ORDER: EnvTier[] = [
@@ -44,6 +45,11 @@ const TIER_COLORS: Record<string, string> = {
 export function CustomersPage() {
   const customers = useWsStore(s => s.customers)
   const environments = useWsStore(s => s.environments)
+  const connected = useWsStore(s => s.connected)
+
+  if (!connected || customers.length === 0) {
+    return <NectarLoader size="lg" message={!connected ? 'Connecting...' : 'Loading customers...'} className="mt-32" />
+  }
   const [search, setSearch] = useState('')
   const [showInternalEnvs, setShowInternalEnvs] = useState(false)
   const [expandedFranchises, setExpandedFranchises] = useState<Set<string>>(new Set())

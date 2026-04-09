@@ -7,6 +7,7 @@ import { apiFetch } from '../../api/client'
 import type { Release } from '../../api/client'
 import { ReleaseCard } from './ReleaseCard'
 import { CreateReleaseDialog } from './CreateReleaseDialog'
+import { NectarLoader } from '../../components/NectarLoader'
 
 const STATE_OPTIONS = [
   { value: 'active', label: 'Active (planned)' },
@@ -48,6 +49,11 @@ function getReleaseDate(r: Release): string {
 
 export function ReleasesPage() {
   const releases = useWsStore(s => s.releases)
+  const connected = useWsStore(s => s.connected)
+
+  if (!connected || releases.length === 0) {
+    return <NectarLoader size="lg" message={!connected ? 'Connecting...' : 'Loading releases...'} className="mt-32" />
+  }
   const [stateFilter, setStateFilter] = useState<string>('active')
   const [repoFilter, setRepoFilter] = useState('')
   const [search, setSearch] = useState('')

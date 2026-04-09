@@ -8,6 +8,7 @@ import { Badge } from '../../components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
 import { timeAgo, cn } from '../../lib/utils'
 import { TruthView } from './TruthView'
+import { NectarLoader } from '../../components/NectarLoader'
 
 const TRANSITIONS: Record<string, string[]> = {
   planning: ['cutting'],
@@ -53,7 +54,14 @@ export function ReleaseDetail() {
     }
   }, [version, release?.updatedAt])
 
+  const connected = useWsStore(s => s.connected)
+  const hasReleases = useWsStore(s => s.releases.length > 0)
+
   if (!release) {
+    // Still loading data — show loader instead of "not found"
+    if (!connected || !hasReleases) {
+      return <NectarLoader size="lg" message="Loading release..." className="mt-32" />
+    }
     return (
       <div className="text-center py-12">
         <p className="text-muted-foreground">Release {version} not found</p>
