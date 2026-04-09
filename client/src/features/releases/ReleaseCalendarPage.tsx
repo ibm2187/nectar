@@ -135,7 +135,7 @@ export function ReleaseCalendarPage() {
 
   function openRelease(r: Release) {
     const key = r.repo ? `${r.repo}:${r.version}` : r.version
-    navigate(`/releases/${encodeURIComponent(key)}`)
+    navigate(`/releases/${encodeURIComponent(key)}`, { state: { from: 'calendar' } })
   }
 
   if (loading) {

@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { useWsStore } from '../../stores/wsStore'
 import { apiFetch } from '../../api/client'
@@ -31,6 +31,12 @@ const stateColors: Record<string, string> = {
 export function ReleaseDetail() {
   const { key } = useParams<{ key: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
+
+  // Determine where to go back based on navigation state
+  const fromCalendar = (location.state as { from?: string } | null)?.from === 'calendar'
+  const backPath = fromCalendar ? '/calendar' : '/'
+  const backLabel = fromCalendar ? 'Back to calendar' : 'Back to releases'
 
   // key can be "repo:version" or just "version"
   const release = useWsStore(s => {
@@ -78,8 +84,8 @@ export function ReleaseDetail() {
 
   return (
     <div className="w-full">
-      <Button variant="link" className="mb-4 px-0" onClick={() => navigate('/')}>
-        &larr; Back to releases
+      <Button variant="link" className="mb-4 px-0" onClick={() => navigate(backPath)}>
+        &larr; {backLabel}
       </Button>
 
       {/* Header */}

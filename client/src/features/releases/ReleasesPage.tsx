@@ -198,7 +198,7 @@ export function ReleasesPage() {
             <ReleaseCard
               key={r.id}
               release={r}
-              onClick={() => navigate(`/releases/${encodeURIComponent(r.repo ? `${r.repo}:${r.version}` : r.version)}`)}
+              onClick={() => navigate(`/releases/${encodeURIComponent(r.repo ? `${r.repo}:${r.version}` : r.version)}`, { state: { from: 'releases' } })}
             />
           ))
         )}
