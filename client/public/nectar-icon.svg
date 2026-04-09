@@ -1,93 +1,35 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- Amber/gold gradient for the nectar theme -->
-    <linearGradient id="amber" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#F59E0B"/>
+    <linearGradient id="f1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE68A"/>
       <stop offset="100%" stop-color="#D97706"/>
     </linearGradient>
-    <!-- Lighter amber for inner elements -->
-    <linearGradient id="amberLight" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#FCD34D"/>
-      <stop offset="100%" stop-color="#F59E0B"/>
-    </linearGradient>
-    <!-- Subtle glow -->
-    <radialGradient id="glow" cx="50%" cy="45%" r="40%">
-      <stop offset="0%" stop-color="#FCD34D" stop-opacity="0.15"/>
-      <stop offset="100%" stop-color="#FCD34D" stop-opacity="0"/>
-    </radialGradient>
-    <!-- Dark background gradient matching Hive -->
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#1E1E2E"/>
-      <stop offset="100%" stop-color="#181825"/>
+    <linearGradient id="f2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FBBF24"/>
+      <stop offset="100%" stop-color="#92400E"/>
     </linearGradient>
   </defs>
-
-  <!-- Rounded square background (matches Hive's shape) -->
-  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
-
-  <!-- Subtle center glow -->
-  <circle cx="256" cy="240" r="160" fill="url(#glow)"/>
-
-  <!-- Three outer source hexagons converging inward -->
-  <!-- Top -->
-  <g transform="translate(256, 120)" opacity="0.6">
-    <polygon points="0,-28 24,-14 24,14 0,28 -24,14 -24,-14" fill="none" stroke="url(#amber)" stroke-width="2.5"/>
-    <circle cx="0" cy="0" r="4" fill="#F59E0B"/>
-  </g>
-  <!-- Bottom-left -->
-  <g transform="translate(138, 208)" opacity="0.6">
-    <polygon points="0,-28 24,-14 24,14 0,28 -24,14 -24,-14" fill="none" stroke="url(#amber)" stroke-width="2.5"/>
-    <circle cx="0" cy="0" r="4" fill="#F59E0B"/>
-  </g>
-  <!-- Bottom-right -->
-  <g transform="translate(374, 208)" opacity="0.6">
-    <polygon points="0,-28 24,-14 24,14 0,28 -24,14 -24,-14" fill="none" stroke="url(#amber)" stroke-width="2.5"/>
-    <circle cx="0" cy="0" r="4" fill="#F59E0B"/>
-  </g>
-
-  <!-- Flow lines from outer hexagons to center -->
-  <!-- Top to center -->
-  <line x1="256" y1="148" x2="256" y2="225" stroke="url(#amber)" stroke-width="2" opacity="0.4" stroke-dasharray="4,4"/>
-  <!-- Bottom-left to center -->
-  <line x1="158" y1="222" x2="232" y2="262" stroke="url(#amber)" stroke-width="2" opacity="0.4" stroke-dasharray="4,4"/>
-  <!-- Bottom-right to center -->
-  <line x1="354" y1="222" x2="280" y2="262" stroke="url(#amber)" stroke-width="2" opacity="0.4" stroke-dasharray="4,4"/>
-
-  <!-- Central honeycomb cluster (the collected truth) — 7 hexagons -->
-  <!-- Center hex -->
-  <g transform="translate(256, 272)">
-    <polygon points="0,-32 28,-16 28,16 0,32 -28,16 -28,-16" fill="url(#amber)" opacity="0.9"/>
-  </g>
-  <!-- Top-left -->
-  <g transform="translate(214, 248)">
-    <polygon points="0,-24 21,-12 21,12 0,24 -21,12 -21,-12" fill="url(#amberLight)" opacity="0.5"/>
-  </g>
-  <!-- Top-right -->
-  <g transform="translate(298, 248)">
-    <polygon points="0,-24 21,-12 21,12 0,24 -21,12 -21,-12" fill="url(#amberLight)" opacity="0.5"/>
-  </g>
-  <!-- Left -->
-  <g transform="translate(214, 296)">
-    <polygon points="0,-24 21,-12 21,12 0,24 -21,12 -21,-12" fill="url(#amberLight)" opacity="0.4"/>
-  </g>
-  <!-- Right -->
-  <g transform="translate(298, 296)">
-    <polygon points="0,-24 21,-12 21,12 0,24 -21,12 -21,-12" fill="url(#amberLight)" opacity="0.4"/>
-  </g>
-  <!-- Bottom-left -->
-  <g transform="translate(232, 320)">
-    <polygon points="0,-20 17,-10 17,10 0,20 -17,10 -17,-10" fill="url(#amberLight)" opacity="0.3"/>
-  </g>
-  <!-- Bottom-right -->
-  <g transform="translate(280, 320)">
-    <polygon points="0,-20 17,-10 17,10 0,20 -17,10 -17,-10" fill="url(#amberLight)" opacity="0.3"/>
-  </g>
-
-  <!-- Nectar drop flowing into center from above -->
-  <g transform="translate(256, 192)">
-    <path d="M0,-18 C8,-8 10,2 10,10 C10,16 6,22 0,22 C-6,22 -10,16 -10,10 C-10,2 -8,-8 0,-18Z" fill="url(#amberLight)" opacity="0.8"/>
-  </g>
-
-  <!-- "NECTAR" text -->
-  <text x="256" y="400" text-anchor="middle" fill="#A8A29E" font-family="system-ui, -apple-system, sans-serif" font-size="36" font-weight="600" letter-spacing="8" opacity="0.7">NECTAR</text>
+  <rect width="512" height="512" rx="96" fill="#1a1a2e"/>
+  <!-- Center hex (solid, the "truth") -->
+  <polygon points="256,200 296,222 296,268 256,290 216,268 216,222" fill="url(#f2)"/>
+  <!-- Outer hex nodes (the sources) -->
+  <polygon points="256,100 280,114 280,140 256,154 232,140 232,114" fill="none" stroke="url(#f1)" stroke-width="3"/>
+  <polygon points="140,170 164,184 164,210 140,224 116,210 116,184" fill="none" stroke="url(#f1)" stroke-width="3"/>
+  <polygon points="372,170 396,184 396,210 372,224 348,210 348,184" fill="none" stroke="url(#f1)" stroke-width="3"/>
+  <polygon points="140,300 164,314 164,340 140,354 116,340 116,314" fill="none" stroke="url(#f1)" stroke-width="3"/>
+  <polygon points="372,300 396,314 396,340 372,354 348,340 348,314" fill="none" stroke="url(#f1)" stroke-width="3"/>
+  <!-- Connecting lines inward -->
+  <line x1="256" y1="154" x2="256" y2="200" stroke="#FBBF24" stroke-width="2.5" opacity="0.5"/>
+  <line x1="164" y1="210" x2="216" y2="232" stroke="#FBBF24" stroke-width="2.5" opacity="0.5"/>
+  <line x1="348" y1="210" x2="296" y2="232" stroke="#FBBF24" stroke-width="2.5" opacity="0.5"/>
+  <line x1="164" y1="314" x2="216" y2="268" stroke="#FBBF24" stroke-width="2.5" opacity="0.5"/>
+  <line x1="348" y1="314" x2="296" y2="268" stroke="#FBBF24" stroke-width="2.5" opacity="0.5"/>
+  <!-- Small dots at source hex centers -->
+  <circle cx="256" cy="127" r="5" fill="#FBBF24" opacity="0.7"/>
+  <circle cx="140" cy="197" r="5" fill="#FBBF24" opacity="0.7"/>
+  <circle cx="372" cy="197" r="5" fill="#FBBF24" opacity="0.7"/>
+  <circle cx="140" cy="327" r="5" fill="#FBBF24" opacity="0.7"/>
+  <circle cx="372" cy="327" r="5" fill="#FBBF24" opacity="0.7"/>
+  <!-- NECTAR text -->
+  <text x="256" y="420" text-anchor="middle" fill="#A8A29E" font-family="system-ui, -apple-system, sans-serif" font-size="38" font-weight="600" letter-spacing="8" opacity="0.6">NECTAR</text>
 </svg>
