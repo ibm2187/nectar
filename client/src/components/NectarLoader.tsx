@@ -10,12 +10,12 @@ interface Props {
 }
 
 const SIZES = {
-  sm: { icon: 'w-6 h-6', text: 'text-xs', gap: 'gap-2' },
-  md: { icon: 'w-10 h-10', text: 'text-sm', gap: 'gap-3' },
-  lg: { icon: 'w-16 h-16', text: 'text-base', gap: 'gap-4' },
+  sm: { icon: 'w-10 h-10', text: 'text-xs', gap: 'gap-2' },
+  md: { icon: 'w-16 h-16', text: 'text-sm', gap: 'gap-3' },
+  lg: { icon: 'w-24 h-24', text: 'text-base', gap: 'gap-4' },
 }
 
-function NectarIcon({ className }: { className?: string }) {
+export function NectarIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" className={className}>
       <defs>

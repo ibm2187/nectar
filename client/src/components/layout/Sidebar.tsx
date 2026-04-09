@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { cn } from '../../lib/utils'
+import { NectarIcon } from '../NectarLoader'
 
 const links = [
   { to: '/', label: 'Releases', icon: '📦' },
@@ -9,9 +10,12 @@ const links = [
 export function Sidebar() {
   return (
     <aside className="w-56 border-r bg-card flex flex-col">
-      <div className="p-4 border-b">
-        <h1 className="text-lg font-bold text-primary">Nectar</h1>
-        <p className="text-xs text-muted-foreground">Release Management</p>
+      <div className="p-4 border-b flex items-center gap-2.5">
+        <NectarIcon className="w-7 h-7 shrink-0" />
+        <div>
+          <h1 className="text-lg font-bold text-primary leading-tight">Nectar</h1>
+          <p className="text-xs text-muted-foreground">Release Intelligence</p>
+        </div>
       </div>
       <nav className="flex-1 p-2 space-y-1">
         {links.map(({ to, label, icon }) => (
