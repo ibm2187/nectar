@@ -49,26 +49,36 @@ export function ReleaseDetail() {
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [validation, setValidation] = useState<ValidationReport | null>(null)
   const environments = useWsStore(s => s.environments)
+  const customers = useWsStore(s => s.customers)
 
-  // Compute unique production versions from environment store for impact comparison
+  // Compute production versions grouped by customer for impact comparison.
+  // e.g., "Bayada: 4.1.1 (2 envs)", "CK: 4.1.0.3 (39 envs)"
   const prodVersions = useMemo((): ProdVersionOption[] => {
     if (!environments || environments.length === 0) return []
     const prodEnvs = environments.filter(e => e.tier === 'production' && e.currentVersion)
-    // Group by version and count
-    const versionCounts = new Map<string, number>()
+
+    // Group by customerId + version
+    const groups = new Map<string, { customerId: string; version: string; count: number }>()
     for (const e of prodEnvs) {
-      const v = e.currentVersion!
-      versionCounts.set(v, (versionCounts.get(v) || 0) + 1)
+      const key = `${e.customerId}:${e.currentVersion}`
+      const existing = groups.get(key)
+      if (existing) {
+        existing.count++
+      } else {
+        groups.set(key, { customerId: e.customerId, version: e.currentVersion!, count: 1 })
+      }
     }
-    // Convert to options, sorted by env count desc
-    return [...versionCounts.entries()]
-      .map(([v, count]) => ({
-        version: v,
-        label: `${v} (${count} env${count > 1 ? 's' : ''})`,
-        envCount: count,
+
+    // Build options with customer names
+    const customerNames = new Map(customers.map(c => [c.id, c.name]))
+    return [...groups.values()]
+      .map(g => ({
+        version: g.version,
+        label: `${customerNames.get(g.customerId) || g.customerId}: ${g.version} (${g.count} env${g.count > 1 ? 's' : ''})`,
+        envCount: g.count,
       }))
       .sort((a, b) => b.envCount - a.envCount)
-  }, [environments])
+  }, [environments, customers])
 
   useEffect(() => {
     if (version) {

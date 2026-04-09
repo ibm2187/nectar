@@ -54,9 +54,9 @@ type SortDir = 'asc' | 'desc'
 export function TruthView({ repo, version, prodVersions }: Props) {
   type ViewMode = 'impact' | 'full'
   const hasProdVersions = prodVersions && prodVersions.length > 0
-  const [mode, setMode] = useState<ViewMode>(hasProdVersions ? 'impact' : 'full')
+  const [mode, setMode] = useState<ViewMode>('impact')
   const [prodVersion, setProdVersion] = useState<string>(
-    hasProdVersions ? prodVersions.reduce((a, b) => a.envCount > b.envCount ? a : b).version : ''
+    hasProdVersions ? prodVersions[0].version : ''
   )
 
   const [truth, setTruth] = useState<ReleaseTruthReport | null>(null)
@@ -210,8 +210,7 @@ export function TruthView({ repo, version, prodVersions }: Props) {
             <div className="flex items-center gap-3">
               <CardTitle className="text-base">Release Truth</CardTitle>
               {/* Mode toggle */}
-              {hasProdVersions && (
-                <div className="flex rounded-md border text-xs">
+              <div className="flex rounded-md border text-xs">
                   <button
                     type="button"
                     onClick={() => setMode('impact')}
@@ -227,20 +226,26 @@ export function TruthView({ repo, version, prodVersions }: Props) {
                     Full View
                   </button>
                 </div>
-              )}
             </div>
             <div className="flex items-center gap-2">
               {/* Prod version selector (impact mode) */}
-              {mode === 'impact' && hasProdVersions && (
-                <select
-                  value={prodVersion}
-                  onChange={e => setProdVersion(e.target.value)}
-                  className="text-xs border rounded px-2 py-1 bg-background"
-                >
-                  {prodVersions.map(pv => (
-                    <option key={pv.version} value={pv.version}>{pv.label}</option>
-                  ))}
-                </select>
+              {mode === 'impact' && (
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-muted-foreground">vs</span>
+                  <input
+                    list="prod-version-options"
+                    value={prodVersion}
+                    onChange={e => setProdVersion(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') load() }}
+                    placeholder="Type version or select..."
+                    className="text-xs border rounded px-2 py-1 bg-background w-56"
+                  />
+                  <datalist id="prod-version-options">
+                    {(prodVersions || []).map(pv => (
+                      <option key={pv.version} value={pv.version}>{pv.label}</option>
+                    ))}
+                  </datalist>
+                </div>
               )}
               <Button variant="outline" size="sm" onClick={load} disabled={loading}>
                 {loading ? 'Refreshing...' : 'Refresh'}
