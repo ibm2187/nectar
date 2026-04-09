@@ -10,6 +10,23 @@ export async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise
   return data as T
 }
 
+export type EffectiveReleaseStatus = 'shipped' | 'in-flight' | 'upcoming' | 'overdue' | 'unknown'
+
+export interface ReleaseStatusSignal {
+  type: 'jira-released' | 'running-in-prod' | 'superseded' | 'state-done'
+  detail: string
+  env?: string
+  envVersion?: string
+}
+
+export interface EffectiveStatus {
+  status: EffectiveReleaseStatus
+  shippedSignals: ReleaseStatusSignal[]
+  matchingEnvs: Array<{ id: string; customerId: string; currentVersion: string | null }>
+  daysUntil?: number
+  daysOverdue?: number
+}
+
 export interface Release {
   id: string
   repo: string | null
@@ -34,6 +51,8 @@ export interface Release {
   jiraReleased?: boolean
   jiraReleaseDate?: string | null
   jiraArchived?: boolean
+  // Set by backend when releases are returned via /api/releases or /api/releases/calendar
+  effectiveStatus?: EffectiveStatus
 }
 
 export interface Ticket {

@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import { AppShell } from './components/layout/AppShell'
 import { ReleasesPage } from './features/releases/ReleasesPage'
 import { ReleaseDetail } from './features/releases/ReleaseDetail'
+import { ReleaseCalendarPage } from './features/releases/ReleaseCalendarPage'
 import { CustomersPage } from './features/customers/CustomersPage'
 import { EnvironmentDetailPage } from './features/customers/EnvironmentDetailPage'
 import { connectWebSocket, disconnectWebSocket, useWsStore } from './stores/wsStore'
@@ -37,6 +38,7 @@ export default function App() {
       <Routes>
         <Route element={<AppShell />}>
           <Route path="/" element={<ReleasesPage />} />
+          <Route path="/calendar" element={<ReleaseCalendarPage />} />
           <Route path="/releases/:key" element={<ReleaseDetail />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/environments/:id" element={<EnvironmentDetailPage />} />
