@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom'
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState } from 'react'
 import { useWsStore } from '../../stores/wsStore'
 import { apiFetch } from '../../api/client'
 import type { AuditEntry, ValidationReport } from '../../api/client'
@@ -8,7 +8,6 @@ import { Badge } from '../../components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
 import { timeAgo, cn } from '../../lib/utils'
 import { TruthView } from './TruthView'
-import type { ProdVersionOption } from './TruthView'
 
 const TRANSITIONS: Record<string, string[]> = {
   planning: ['cutting'],
@@ -48,38 +47,6 @@ export function ReleaseDetail() {
   const version = release?.version ?? key
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [validation, setValidation] = useState<ValidationReport | null>(null)
-  const environments = useWsStore(s => s.environments)
-  const customers = useWsStore(s => s.customers)
-
-  // Compute production versions grouped by customer for impact comparison.
-  // e.g., "Bayada: 4.1.1 (2 envs)", "CK: 4.1.0.3 (39 envs)"
-  const prodVersions = useMemo((): ProdVersionOption[] => {
-    if (!environments || environments.length === 0) return []
-    const prodEnvs = environments.filter(e => e.tier === 'production' && e.currentVersion)
-
-    // Group by customerId + version
-    const groups = new Map<string, { customerId: string; version: string; count: number }>()
-    for (const e of prodEnvs) {
-      const key = `${e.customerId}:${e.currentVersion}`
-      const existing = groups.get(key)
-      if (existing) {
-        existing.count++
-      } else {
-        groups.set(key, { customerId: e.customerId, version: e.currentVersion!, count: 1 })
-      }
-    }
-
-    // Build options with customer names
-    const customerNames = new Map(customers.map(c => [c.id, c.name]))
-    return [...groups.values()]
-      .map(g => ({
-        version: g.version,
-        label: `${customerNames.get(g.customerId) || g.customerId}: ${g.version} (${g.count} env${g.count > 1 ? 's' : ''})`,
-        envCount: g.count,
-      }))
-      .sort((a, b) => b.envCount - a.envCount)
-  }, [environments, customers])
-
   useEffect(() => {
     if (version) {
       apiFetch<AuditEntry[]>(`/audit/${version}`).then(setAudit).catch(() => {})
@@ -210,7 +177,7 @@ export function ReleaseDetail() {
       {/* Truth view — JIRA + Git + PR reconciliation */}
       {release.repo && (
         <div className="mb-4">
-          <TruthView repo={release.repo} version={release.version} prodVersions={prodVersions} />
+          <TruthView repo={release.repo} version={release.version} />
         </div>
       )}
 

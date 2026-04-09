@@ -7,18 +7,12 @@ import { JiraLink } from '../../components/JiraLink'
 import { apiFetch } from '../../api/client'
 import type { ReleaseTruthReport, DeploymentImpactReport, VerifiedTicket, Health, HealthCategory } from '../../api/client'
 import { cn, timeAgo } from '../../lib/utils'
-
-export interface ProdVersionOption {
-  version: string
-  label: string     // e.g., "4.1.0.3 (36 CK envs)"
-  envCount: number
-}
+import { CompareSelector, loadCompareTarget } from './CompareSelector'
+import type { CompareTarget } from './CompareSelector'
 
 interface Props {
   repo: string
   version: string
-  /** Available production versions for impact comparison. If provided, impact mode is available and default. */
-  prodVersions?: ProdVersionOption[]
 }
 
 // Health styling — color, emoji, label, sort priority (worst first)
@@ -51,13 +45,17 @@ const PILL_FILTERS: { key: 'all' | HealthCategory; label: string; color: string 
 type SortKey = 'health' | 'key' | 'jiraStatus' | 'assignee'
 type SortDir = 'asc' | 'desc'
 
-export function TruthView({ repo, version, prodVersions }: Props) {
+export function TruthView({ repo, version }: Props) {
   type ViewMode = 'impact' | 'full'
-  const hasProdVersions = prodVersions && prodVersions.length > 0
-  const [mode, setMode] = useState<ViewMode>('impact')
-  const [prodVersion, setProdVersion] = useState<string>(
-    hasProdVersions ? prodVersions[0].version : ''
-  )
+
+  // Load saved compare target from localStorage
+  const saved = loadCompareTarget(version)
+  const [mode, setMode] = useState<ViewMode>(saved ? 'impact' : 'full')
+  const [compareTarget, setCompareTarget] = useState<CompareTarget | null>(saved)
+  const [selectorOpen, setSelectorOpen] = useState(false)
+
+  // prodVersion is derived from compareTarget
+  const prodVersion = compareTarget?.version || ''
 
   const [truth, setTruth] = useState<ReleaseTruthReport | null>(null)
   const [impact, setImpact] = useState<DeploymentImpactReport | null>(null)
@@ -228,24 +226,18 @@ export function TruthView({ repo, version, prodVersions }: Props) {
                 </div>
             </div>
             <div className="flex items-center gap-2">
-              {/* Prod version selector (impact mode) */}
               {mode === 'impact' && (
-                <div className="flex items-center gap-1">
-                  <span className="text-xs text-muted-foreground">vs</span>
-                  <input
-                    list="prod-version-options"
-                    value={prodVersion}
-                    onChange={e => setProdVersion(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') load() }}
-                    placeholder="Type version or select..."
-                    className="text-xs border rounded px-2 py-1 bg-background w-56"
-                  />
-                  <datalist id="prod-version-options">
-                    {(prodVersions || []).map(pv => (
-                      <option key={pv.version} value={pv.version}>{pv.label}</option>
-                    ))}
-                  </datalist>
-                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectorOpen(true)}
+                  className="text-xs"
+                >
+                  {compareTarget
+                    ? <>vs <span className="font-mono font-medium ml-1">{compareTarget.label}</span></>
+                    : 'Select comparison...'
+                  }
+                </Button>
               )}
               <Button variant="outline" size="sm" onClick={load} disabled={loading}>
                 {loading ? 'Refreshing...' : 'Refresh'}
@@ -416,6 +408,16 @@ export function TruthView({ repo, version, prodVersions }: Props) {
           : truth ? `Computed in ${truth.durationMs}ms · ${timeAgo(truth.computedAt)}` : ''
         }
       </div>
+
+      <CompareSelector
+        open={selectorOpen}
+        onOpenChange={setSelectorOpen}
+        releaseVersion={version}
+        onSelect={(target) => {
+          setCompareTarget(target)
+          setMode('impact')
+        }}
+      />
     </div>
   )
 }
