@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const ReleaseManager = require('../core/release');
+const { annotateReleases } = require('../core/release-status');
 
 /**
  * REST API routes — primary consumer is Hive.
@@ -27,7 +28,24 @@ module.exports = function createRoutes(services, config) {
     const filter = {};
     if (state) filter.state = state;
     if (repo) filter.repo = repo;
-    res.json(releases.list(filter));
+    const list = releases.list(filter);
+    // Annotate with effective release status based on prod env deployments
+    const environments = customerStore.listEnvironments();
+    res.json(annotateReleases(list, environments));
+  });
+
+  // Release calendar — all releases with jiraReleaseDate, annotated with
+  // effective status (shipped/in-flight/upcoming/overdue) using prod env data
+  router.get('/releases/calendar', (req, res) => {
+    const { repo, from, to } = req.query;
+    let list = releases.list();
+    if (repo) list = list.filter(r => r.repo === repo);
+    list = list.filter(r => r.jiraReleaseDate && !r.jiraArchived);
+    if (from) list = list.filter(r => r.jiraReleaseDate >= from);
+    if (to) list = list.filter(r => r.jiraReleaseDate <= to);
+    list.sort((a, b) => (a.jiraReleaseDate || '').localeCompare(b.jiraReleaseDate || ''));
+    const environments = customerStore.listEnvironments();
+    res.json(annotateReleases(list, environments));
   });
 
   router.get('/releases/active', (req, res) => {
