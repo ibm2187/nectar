@@ -2,6 +2,7 @@ const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { z } = require('zod');
 const log = require('../core/log');
+const { aggregateFeatureFlags } = require('../core/feature-aggregator');
 
 /**
  * Nectar MCP Server — exposes customer, environment, release, and truth
@@ -293,7 +294,41 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
     }
   );
 
-  log.info('MCP server initialized with 10 tools');
+  // ── Tool: aggregate_feature_flags ──────────────────────
+  server.tool(
+    'aggregate_feature_flags',
+    'Aggregate all DB feature flags across production environments and bucket them by rollout state. Use this to find flags that are enabled everywhere (candidates for removal) or nowhere (unused).',
+    {
+      bucket: z.enum(['all', 'everywhere-on', 'mixed', 'everywhere-off', 'dev-only']).default('all').describe('Filter to a specific bucket'),
+      scope: z.enum(['all', 'portal', 'mobile']).default('all').describe('Filter by scope'),
+    },
+    async ({ bucket, scope }) => {
+      const environments = customerStore.listEnvironments();
+      const result = aggregateFeatureFlags(environments);
+      let flags = result.flags;
+      if (bucket !== 'all') flags = flags.filter(f => f.bucket === bucket);
+      if (scope === 'portal') flags = flags.filter(f => !f.isMobileFeature);
+      if (scope === 'mobile') flags = flags.filter(f => f.isMobileFeature);
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            stats: result.stats,
+            customers: result.customers,
+            flags: flags.map(f => ({
+              key: f.key,
+              bucket: f.bucket,
+              isMobileFeature: f.isMobileFeature,
+              customerStates: f.customerStates,
+              outlierCount: f.outliers.length,
+            })),
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  log.info('MCP server initialized with 11 tools');
   return server;
 }
 

@@ -1,0 +1,169 @@
+/**
+ * Feature flag aggregator — collects all DB feature flags across all
+ * production environments and buckets them by rollout state.
+ *
+ * Use case: "Is flag X enabled in every production environment? If yes,
+ * it's a candidate for removal."
+ *
+ * Four buckets:
+ *   - everywhere-on  : enabled in every customer's production envs
+ *                      → safe to remove (feature is universal)
+ *   - mixed          : enabled in some customers but not others
+ *                      → intentional differentiation, don't touch
+ *   - everywhere-off : disabled in every production env
+ *                      → unused, candidate for removal
+ *   - dev-only       : enabled only in non-production envs
+ *                      → still being rolled out, don't remove
+ */
+
+/**
+ * Aggregate feature flags across environments.
+ *
+ * @param {Array<object>} environments — full environment list from customer store
+ * @returns {object} { flags, customers, stats }
+ */
+function aggregateFeatureFlags(environments) {
+  // Only consider environments where we have feature data
+  const envsWithData = (environments || []).filter(e =>
+    e.features && Array.isArray(e.features.dbFeatureFlags) && e.features.dbFeatureFlags.length > 0
+  );
+
+  // Split into prod vs non-prod
+  const prodEnvs = envsWithData.filter(e => e.tier === 'production');
+  const nonProdEnvs = envsWithData.filter(e => e.tier !== 'production');
+
+  // Collect the set of customers that have at least one prod env with data
+  const customersInProd = new Set(prodEnvs.map(e => e.customerId));
+  const customers = [...customersInProd].sort();
+
+  // Group prod envs by customer
+  const prodEnvsByCustomer = new Map();
+  for (const e of prodEnvs) {
+    if (!prodEnvsByCustomer.has(e.customerId)) {
+      prodEnvsByCustomer.set(e.customerId, []);
+    }
+    prodEnvsByCustomer.get(e.customerId).push(e);
+  }
+
+  // Build a map of all known flag keys (union across all envs)
+  const flagKeys = new Set();
+  const flagMeta = new Map(); // key -> { isMobileFeature }
+  for (const e of envsWithData) {
+    for (const flag of e.features.dbFeatureFlags) {
+      if (!flag || !flag.key) continue;
+      flagKeys.add(flag.key);
+      if (!flagMeta.has(flag.key)) {
+        flagMeta.set(flag.key, { isMobileFeature: !!flag.isMobileFeature });
+      }
+    }
+  }
+
+  // For each flag, compute per-customer state
+  const flags = [];
+  for (const key of flagKeys) {
+    const meta = flagMeta.get(key) || {};
+    const customerStates = {};  // customerId -> 'on' | 'off' | 'partial' | 'unknown'
+
+    for (const customerId of customers) {
+      const envs = prodEnvsByCustomer.get(customerId) || [];
+      if (envs.length === 0) {
+        customerStates[customerId] = 'unknown';
+        continue;
+      }
+
+      let enabledCount = 0;
+      let knownCount = 0;
+      for (const env of envs) {
+        const flag = env.features.dbFeatureFlags.find(f => f.key === key);
+        if (flag === undefined) continue;  // flag not present in this env (not polled yet, or env older)
+        knownCount++;
+        if (flag.enabled) enabledCount++;
+      }
+
+      if (knownCount === 0) {
+        customerStates[customerId] = 'unknown';
+      } else if (enabledCount === 0) {
+        customerStates[customerId] = 'off';
+      } else if (enabledCount === knownCount) {
+        customerStates[customerId] = 'on';
+      } else {
+        customerStates[customerId] = 'partial';
+      }
+    }
+
+    // Check non-prod for dev-only classification
+    let enabledInAnyNonProd = false;
+    for (const env of nonProdEnvs) {
+      const flag = env.features.dbFeatureFlags.find(f => f.key === key);
+      if (flag && flag.enabled) {
+        enabledInAnyNonProd = true;
+        break;
+      }
+    }
+
+    // Classify into one of the four buckets
+    const stateValues = Object.values(customerStates).filter(s => s !== 'unknown');
+    const allOn = stateValues.length > 0 && stateValues.every(s => s === 'on');
+    const allOff = stateValues.length > 0 && stateValues.every(s => s === 'off');
+    const hasAny = stateValues.some(s => s === 'on' || s === 'partial');
+
+    let bucket;
+    if (allOn) {
+      bucket = 'everywhere-on';
+    } else if (allOff) {
+      bucket = enabledInAnyNonProd ? 'dev-only' : 'everywhere-off';
+    } else if (hasAny) {
+      bucket = 'mixed';
+    } else {
+      bucket = 'everywhere-off';
+    }
+
+    // Count outliers for "everywhere-on" — envs where the flag is disabled
+    // even though the customer is mostly on
+    const outliers = [];
+    if (bucket === 'everywhere-on' || bucket === 'mixed') {
+      for (const env of prodEnvs) {
+        const flag = env.features.dbFeatureFlags.find(f => f.key === key);
+        if (!flag) continue;
+        const customerState = customerStates[env.customerId];
+        if (customerState === 'partial') {
+          outliers.push({
+            envId: env.id,
+            customerId: env.customerId,
+            enabled: flag.enabled,
+          });
+        }
+      }
+    }
+
+    flags.push({
+      key,
+      bucket,
+      isMobileFeature: meta.isMobileFeature,
+      customerStates,
+      outliers,
+      enabledInAnyNonProd,
+    });
+  }
+
+  // Sort flags alphabetically within each bucket
+  flags.sort((a, b) => a.key.localeCompare(b.key));
+
+  // Stats
+  const stats = {
+    totalFlags: flags.length,
+    totalProdEnvs: prodEnvs.length,
+    totalCustomers: customers.length,
+    totalEnvsWithData: envsWithData.length,
+    buckets: {
+      'everywhere-on': flags.filter(f => f.bucket === 'everywhere-on').length,
+      'mixed': flags.filter(f => f.bucket === 'mixed').length,
+      'everywhere-off': flags.filter(f => f.bucket === 'everywhere-off').length,
+      'dev-only': flags.filter(f => f.bucket === 'dev-only').length,
+    },
+  };
+
+  return { flags, customers, stats };
+}
+
+module.exports = { aggregateFeatureFlags };
