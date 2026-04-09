@@ -5,12 +5,20 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { JiraLink } from '../../components/JiraLink'
 import { apiFetch } from '../../api/client'
-import type { ReleaseTruthReport, VerifiedTicket, Health, HealthCategory } from '../../api/client'
+import type { ReleaseTruthReport, DeploymentImpactReport, VerifiedTicket, Health, HealthCategory } from '../../api/client'
 import { cn, timeAgo } from '../../lib/utils'
+
+export interface ProdVersionOption {
+  version: string
+  label: string     // e.g., "4.1.0.3 (36 CK envs)"
+  envCount: number
+}
 
 interface Props {
   repo: string
   version: string
+  /** Available production versions for impact comparison. If provided, impact mode is available and default. */
+  prodVersions?: ProdVersionOption[]
 }
 
 // Health styling — color, emoji, label, sort priority (worst first)
@@ -43,8 +51,16 @@ const PILL_FILTERS: { key: 'all' | HealthCategory; label: string; color: string 
 type SortKey = 'health' | 'key' | 'jiraStatus' | 'assignee'
 type SortDir = 'asc' | 'desc'
 
-export function TruthView({ repo, version }: Props) {
+export function TruthView({ repo, version, prodVersions }: Props) {
+  type ViewMode = 'impact' | 'full'
+  const hasProdVersions = prodVersions && prodVersions.length > 0
+  const [mode, setMode] = useState<ViewMode>(hasProdVersions ? 'impact' : 'full')
+  const [prodVersion, setProdVersion] = useState<string>(
+    hasProdVersions ? prodVersions.reduce((a, b) => a.envCount > b.envCount ? a : b).version : ''
+  )
+
   const [truth, setTruth] = useState<ReleaseTruthReport | null>(null)
+  const [impact, setImpact] = useState<DeploymentImpactReport | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<'all' | HealthCategory>('all')
@@ -66,11 +82,44 @@ export function TruthView({ repo, version }: Props) {
     setLoading(false)
   }
 
-  useEffect(() => { loadTruth() }, [repo, version])
+  async function loadImpact() {
+    if (!prodVersion) return
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await apiFetch<DeploymentImpactReport>(
+        `/releases/${encodeURIComponent(repo)}/${encodeURIComponent(version)}/impact?prodVersion=${encodeURIComponent(prodVersion)}`
+      )
+      setImpact(data)
+      // Also store the full truth from the impact response so Full View doesn't need a separate fetch
+      setTruth(data.targetTruth)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load impact')
+    }
+    setLoading(false)
+  }
+
+  function load() {
+    if (mode === 'impact' && prodVersion) loadImpact()
+    else loadTruth()
+  }
+
+  useEffect(() => { load() }, [repo, version, mode, prodVersion])
+
+  // Active data depends on mode
+  const activeTickets: VerifiedTicket[] = mode === 'impact' && impact
+    ? impact.delta.tickets.new
+    : truth?.verified || []
+  const activeRollup = mode === 'impact' && impact
+    ? impact.delta.rollup
+    : truth?.rollup || { planned: 0, done: 0, inQa: 0, awaitingCp: 0, inDev: 0, attention: 0 }
+  const activeRogues = mode === 'impact' && impact
+    ? impact.delta.rogues
+    : truth?.rogues || []
 
   const filtered = useMemo(() => {
-    if (!truth) return []
-    let rows = truth.verified
+    if (activeTickets.length === 0 && !truth && !impact) return []
+    let rows = activeTickets
 
     if (filter !== 'all') {
       rows = rows.filter(t => t.healthCategory === filter)
@@ -105,7 +154,7 @@ export function TruthView({ repo, version }: Props) {
     })
 
     return rows
-  }, [truth, filter, search, sortKey, sortDir])
+  }, [activeTickets, filter, search, sortKey, sortDir])
 
   function setSort(key: SortKey) {
     if (sortKey === key) {
@@ -116,7 +165,7 @@ export function TruthView({ repo, version }: Props) {
     }
   }
 
-  if (loading && !truth) {
+  if (loading && !truth && !impact) {
     return (
       <Card>
         <CardContent className="p-6 text-center text-muted-foreground text-sm">
@@ -137,12 +186,11 @@ export function TruthView({ repo, version }: Props) {
     )
   }
 
-  if (!truth) return null
+  if (!truth && !impact) return null
 
   function pillCount(key: typeof PILL_FILTERS[number]['key']): number {
-    if (!truth) return 0
-    if (key === 'all') return truth.rollup.planned
-    const r = truth.rollup
+    if (key === 'all') return activeRollup.planned
+    const r = activeRollup
     switch (key) {
       case 'done': return r.done
       case 'in-qa': return r.inQa
@@ -158,12 +206,55 @@ export function TruthView({ repo, version }: Props) {
       {/* Header / rollup */}
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base">Release Truth</CardTitle>
-            <Button variant="outline" size="sm" onClick={loadTruth} disabled={loading}>
-              {loading ? 'Refreshing...' : 'Refresh'}
-            </Button>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-3">
+              <CardTitle className="text-base">Release Truth</CardTitle>
+              {/* Mode toggle */}
+              {hasProdVersions && (
+                <div className="flex rounded-md border text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setMode('impact')}
+                    className={cn("px-3 py-1 rounded-l-md transition-colors", mode === 'impact' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+                  >
+                    Impact
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMode('full')}
+                    className={cn("px-3 py-1 rounded-r-md border-l transition-colors", mode === 'full' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+                  >
+                    Full View
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {/* Prod version selector (impact mode) */}
+              {mode === 'impact' && hasProdVersions && (
+                <select
+                  value={prodVersion}
+                  onChange={e => setProdVersion(e.target.value)}
+                  className="text-xs border rounded px-2 py-1 bg-background"
+                >
+                  {prodVersions.map(pv => (
+                    <option key={pv.version} value={pv.version}>{pv.label}</option>
+                  ))}
+                </select>
+              )}
+              <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+                {loading ? 'Refreshing...' : 'Refresh'}
+              </Button>
+            </div>
           </div>
+          {/* Impact mode banner */}
+          {mode === 'impact' && impact && (
+            <div className="text-xs text-muted-foreground mt-2">
+              Showing <span className="text-foreground font-medium">{impact.delta.tickets.total} new tickets</span> and{' '}
+              <span className="text-foreground font-medium">{impact.delta.commits.total} commits</span> between{' '}
+              <span className="font-mono">{impact.prod.version}</span> and <span className="font-mono">{impact.target.version}</span>
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           {/* Pill filters */}
@@ -193,39 +284,41 @@ export function TruthView({ repo, version }: Props) {
           </div>
 
           {/* Meta info */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs pt-2 border-t">
-            <div>
-              <div className="text-muted-foreground">JIRA</div>
-              <div className="font-medium">
-                {truth.jira.released ? 'Released' : 'Unreleased'}
-                {truth.jira.releaseDate && <span className="text-muted-foreground ml-1">({truth.jira.releaseDate})</span>}
-              </div>
-            </div>
-            <div>
-              <div className="text-muted-foreground">Branch</div>
-              <div className="font-mono text-xs truncate" title={truth.branch || ''}>
-                {truth.git.branchExists ? truth.branch : '—'}
-              </div>
-              {truth.git.branchExists && (
-                <div className="text-xs text-muted-foreground mt-0.5">
-                  {truth.git.cherryPickCount} cherry-picks
+          {truth && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs pt-2 border-t">
+              <div>
+                <div className="text-muted-foreground">JIRA</div>
+                <div className="font-medium">
+                  {truth.jira.released ? 'Released' : 'Unreleased'}
+                  {truth.jira.releaseDate && <span className="text-muted-foreground ml-1">({truth.jira.releaseDate})</span>}
                 </div>
-              )}
-            </div>
-            <div>
-              <div className="text-muted-foreground">Open PRs</div>
-              <div>{truth.pullRequests.open} targeting branch</div>
-            </div>
-            <div>
-              <div className="text-muted-foreground">Derived State</div>
-              <div className="flex items-center gap-1.5">
-                <Badge variant="outline" className={`state-${truth.derivedState}`}>{truth.derivedState}</Badge>
-                {!truth.stateMatchesReality && (
-                  <span className="text-yellow-400" title={`Currently: ${truth.currentState}`}>⚠</span>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Branch</div>
+                <div className="font-mono text-xs truncate" title={truth.branch || ''}>
+                  {truth.git.branchExists ? truth.branch : '—'}
+                </div>
+                {truth.git.branchExists && (
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    {truth.git.cherryPickCount} cherry-picks
+                  </div>
                 )}
               </div>
+              <div>
+                <div className="text-muted-foreground">Open PRs</div>
+                <div>{truth.pullRequests.open} targeting branch</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Derived State</div>
+                <div className="flex items-center gap-1.5">
+                  <Badge variant="outline" className={`state-${truth.derivedState}`}>{truth.derivedState}</Badge>
+                  {!truth.stateMatchesReality && (
+                    <span className="text-yellow-400" title={`Currently: ${truth.currentState}`}>⚠</span>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </CardContent>
       </Card>
 
@@ -238,7 +331,7 @@ export function TruthView({ repo, version }: Props) {
           className="max-w-sm"
         />
         <span className="text-sm text-muted-foreground">
-          {filtered.length} of {truth.verified.length}
+          {filtered.length} of {activeTickets.length}
         </span>
         {(filter !== 'all' || search) && (
           <Button variant="ghost" size="sm" onClick={() => { setFilter('all'); setSearch('') }}>
@@ -287,20 +380,20 @@ export function TruthView({ repo, version }: Props) {
       </Card>
 
       {/* Rogue commits */}
-      {truth.rogues.length > 0 && (
+      {activeRogues.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
               <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border bg-purple-500/15 text-purple-400 border-purple-500/30">
                 ⚡ Rogue Commits
               </span>
-              <span className="text-muted-foreground font-normal text-sm">{truth.rogues.length}</span>
+              <span className="text-muted-foreground font-normal text-sm">{activeRogues.length}</span>
               <span className="text-xs text-muted-foreground font-normal ml-2">(JIRA keys in commits but not in fixVersion)</span>
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-1 max-h-64 overflow-auto">
-              {truth.rogues.map(r => (
+              {activeRogues.map(r => (
                 <div key={r.key} className="flex items-center gap-2 text-sm py-1">
                   <JiraLink jiraKey={r.key} className="text-purple-400 hover:text-purple-300" />
                   {r.commitSha && <span className="font-mono text-xs text-muted-foreground">{r.commitSha.substring(0, 7)}</span>}
@@ -313,7 +406,10 @@ export function TruthView({ repo, version }: Props) {
       )}
 
       <div className="text-xs text-muted-foreground text-right">
-        Computed in {truth.durationMs}ms · {timeAgo(truth.computedAt)}
+        {impact && mode === 'impact'
+          ? `Computed in ${impact.durationMs}ms · ${timeAgo(impact.computedAt)}`
+          : truth ? `Computed in ${truth.durationMs}ms · ${timeAgo(truth.computedAt)}` : ''
+        }
       </div>
     </div>
   )

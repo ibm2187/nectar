@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useWsStore } from '../../stores/wsStore'
 import { apiFetch } from '../../api/client'
 import type { AuditEntry, ValidationReport } from '../../api/client'
@@ -8,6 +8,7 @@ import { Badge } from '../../components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
 import { timeAgo, cn } from '../../lib/utils'
 import { TruthView } from './TruthView'
+import type { ProdVersionOption } from './TruthView'
 
 const TRANSITIONS: Record<string, string[]> = {
   planning: ['cutting'],
@@ -47,6 +48,27 @@ export function ReleaseDetail() {
   const version = release?.version ?? key
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [validation, setValidation] = useState<ValidationReport | null>(null)
+  const environments = useWsStore(s => s.environments)
+
+  // Compute unique production versions from environment store for impact comparison
+  const prodVersions = useMemo((): ProdVersionOption[] => {
+    if (!environments || environments.length === 0) return []
+    const prodEnvs = environments.filter(e => e.tier === 'production' && e.currentVersion)
+    // Group by version and count
+    const versionCounts = new Map<string, number>()
+    for (const e of prodEnvs) {
+      const v = e.currentVersion!
+      versionCounts.set(v, (versionCounts.get(v) || 0) + 1)
+    }
+    // Convert to options, sorted by env count desc
+    return [...versionCounts.entries()]
+      .map(([v, count]) => ({
+        version: v,
+        label: `${v} (${count} env${count > 1 ? 's' : ''})`,
+        envCount: count,
+      }))
+      .sort((a, b) => b.envCount - a.envCount)
+  }, [environments])
 
   useEffect(() => {
     if (version) {
@@ -178,7 +200,7 @@ export function ReleaseDetail() {
       {/* Truth view — JIRA + Git + PR reconciliation */}
       {release.repo && (
         <div className="mb-4">
-          <TruthView repo={release.repo} version={release.version} />
+          <TruthView repo={release.repo} version={release.version} prodVersions={prodVersions} />
         </div>
       )}
 

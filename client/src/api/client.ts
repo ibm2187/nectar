@@ -323,3 +323,29 @@ export interface ReleaseTruthReport {
   computedAt: string
   durationMs: number
 }
+
+export interface DeploymentImpactReport {
+  target: { version: string; branch: string | null }
+  prod: { version: string; branch: string | null }
+  targetTruth: ReleaseTruthReport
+  delta: {
+    commits: { total: number; jiraKeys: string[] }
+    tickets: {
+      new: VerifiedTicket[]
+      shared: VerifiedTicket[]
+      deltaOnly: string[]
+      total: number
+    }
+    rollup: {
+      planned: number
+      done: number
+      inQa: number
+      awaitingCp: number
+      inDev: number
+      attention: number
+    }
+    rogues: RogueCommit[]
+  }
+  computedAt: string
+  durationMs: number
+}

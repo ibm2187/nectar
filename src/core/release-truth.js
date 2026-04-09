@@ -474,6 +474,135 @@ class ReleaseTruth {
   }
 
   /**
+   * Compute the deployment impact of moving from one version to another.
+   * Answers: "What changes when we deploy targetVersion to environments
+   * currently running prodVersion?"
+   *
+   * @param {string} repo — e.g., 'webplatform'
+   * @param {string} targetVersion — the release being deployed (e.g., '4.2.2')
+   * @param {string} prodVersion — what's currently in production (e.g., '4.1.0.3')
+   * @returns {Promise<object>} impact report
+   */
+  async computeImpact(repo, targetVersion, prodVersion) {
+    const startTime = Date.now();
+    const repoConfig = this.config.repos.find(r => r.name === repo);
+    if (!repoConfig) throw new Error(`Repo ${repo} not configured`);
+
+    // ── 1. Compute full truth for the target release ────────
+    const targetTruth = await this.compute(repo, targetVersion);
+
+    // ── 2. Get prod release info ────────────────────────────
+    const prodRelease = this.releases.get(prodVersion, repo);
+    const prodBranch = prodRelease ? prodRelease.branch : `${repoConfig.releaseBranchPrefix || 'releases/'}${prodVersion}`;
+
+    // ── 3. Git delta between prod and target ────────────────
+    let deltaCommits = [];
+    let deltaJiraKeys = new Set();
+
+    if (targetTruth.branch && prodBranch) {
+      try {
+        await this.repoManager.fetch(repo);
+      } catch { /* already fetched by compute() above */ }
+
+      try {
+        const range = `${prodBranch}..${targetTruth.branch}`;
+        deltaCommits = await this.repoManager.log(repo, range);
+
+        const jiraProject = repoConfig.jiraProject || 'DEV';
+        for (const commit of deltaCommits) {
+          for (const key of JiraClient.extractKeys(commit.message)) {
+            deltaJiraKeys.add(key);
+          }
+        }
+      } catch (err) {
+        log.warn(`Impact: git delta failed for ${prodBranch}..${targetTruth.branch}: ${err.message}`);
+      }
+    }
+
+    // ── 4. Diff tickets ─────────────────────────────────────
+    // "New" tickets = in target truth's verified list but NOT in prod's
+    // fixVersion. We use the git delta as the authoritative signal for
+    // "what's new" — a ticket is new if its key appears in commits
+    // between prod and target.
+    const prodTicketKeys = new Set();
+    if (prodRelease && prodRelease.tickets) {
+      for (const t of prodRelease.tickets) {
+        prodTicketKeys.add(t.key);
+      }
+    }
+
+    const targetTicketMap = new Map();
+    for (const t of targetTruth.verified) {
+      targetTicketMap.set(t.key, t);
+    }
+
+    const newTickets = [];
+    const sharedTickets = [];
+
+    for (const ticket of targetTruth.verified) {
+      if (prodTicketKeys.has(ticket.key)) {
+        sharedTickets.push(ticket);
+      } else {
+        newTickets.push(ticket);
+      }
+    }
+
+    // Also check: JIRA keys in the git delta that aren't in the target's
+    // fixVersion — these are commits landing but not tracked as planned tickets.
+    // They'll appear in the target's rogues already, so just count them.
+    const deltaOnlyKeys = [...deltaJiraKeys].filter(k => !targetTicketMap.has(k) && !prodTicketKeys.has(k));
+
+    // ── 5. Rollup of new tickets only ───────────────────────
+    const rollup = {
+      planned: newTickets.length,
+      done: 0, inQa: 0, awaitingCp: 0, inDev: 0, attention: 0,
+    };
+    for (const t of newTickets) {
+      switch (t.healthCategory) {
+        case 'done': rollup.done++; break;
+        case 'in-qa': rollup.inQa++; break;
+        case 'awaiting-cp': rollup.awaitingCp++; break;
+        case 'in-dev': rollup.inDev++; break;
+        case 'attention': rollup.attention++; break;
+      }
+    }
+
+    return {
+      target: {
+        version: targetVersion,
+        branch: targetTruth.branch,
+      },
+      prod: {
+        version: prodVersion,
+        branch: prodBranch,
+      },
+
+      // The full truth for the target — available for the "Full View" toggle
+      targetTruth,
+
+      delta: {
+        commits: {
+          total: deltaCommits.length,
+          jiraKeys: [...deltaJiraKeys],
+        },
+
+        tickets: {
+          new: newTickets,
+          shared: sharedTickets,
+          deltaOnly: deltaOnlyKeys, // in git delta but not in either fixVersion
+          total: newTickets.length,
+        },
+
+        rollup,
+        rogues: targetTruth.rogues,
+      },
+
+      computedAt: new Date().toISOString(),
+      durationMs: Date.now() - startTime,
+    };
+  }
+
+  /**
    * Derive the actual release state from real data.
    */
   _deriveState(release, rollup, commitCount) {

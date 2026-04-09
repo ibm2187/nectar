@@ -414,6 +414,22 @@ module.exports = function createRoutes(services, config) {
     }
   });
 
+  // Deployment impact — diff between target release and current prod version
+  router.get('/releases/:repo/:version/impact', async (req, res) => {
+    try {
+      const { prodVersion } = req.query;
+      if (!prodVersion) {
+        return res.status(400).json({ error: 'prodVersion query parameter is required' });
+      }
+      const impact = await releaseTruth.computeImpact(
+        req.params.repo, req.params.version, prodVersion
+      );
+      res.json(impact);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // ── JIRA Sync ──────────────────────────────────────────
 
   router.get('/jira/status', (req, res) => {
