@@ -8,6 +8,7 @@ import { Input } from '../../components/ui/input'
 import type { Environment, EnvUpgradeItem } from '../../api/client'
 import { apiFetch } from '../../api/client'
 import { cn, timeAgo } from '../../lib/utils'
+import { NectarLoader } from '../../components/NectarLoader'
 import { SetVersionDialog } from './SetVersionDialog'
 import { UpgradeDetailDialog } from './UpgradeDetailDialog'
 
@@ -233,7 +234,7 @@ function FeaturesTab({ env }: { env: Environment }) {
     return (
       <Card>
         <CardContent className="p-8 text-center text-sm text-muted-foreground italic">
-          No feature data. The /api/status/features endpoint is not yet responding for this environment.
+          <NectarLoader size="sm" message="Waiting for /api/status/features..." />
         </CardContent>
       </Card>
     )
@@ -373,7 +374,7 @@ function IntegrationsTab({ env }: { env: Environment }) {
     return (
       <Card>
         <CardContent className="p-8 text-center text-sm text-muted-foreground italic">
-          No integrations data. The /api/status/integrations endpoint is not yet responding.
+          <NectarLoader size="sm" message="Waiting for /api/status/integrations..." />
         </CardContent>
       </Card>
     )
@@ -567,7 +568,7 @@ function UpgradesTab({ env, onSelectUpgrade }: { env: Environment; onSelectUpgra
     return (
       <Card>
         <CardContent className="p-8 text-center text-sm text-muted-foreground italic">
-          No upgrades data. The /api/status/upgrades endpoint is not yet responding.
+          <NectarLoader size="sm" message="Waiting for /api/status/upgrades..." />
         </CardContent>
       </Card>
     )

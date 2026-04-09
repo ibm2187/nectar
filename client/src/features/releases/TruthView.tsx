@@ -7,6 +7,7 @@ import { JiraLink } from '../../components/JiraLink'
 import { apiFetch } from '../../api/client'
 import type { ReleaseTruthReport, DeploymentImpactReport, VerifiedTicket, Health, HealthCategory } from '../../api/client'
 import { cn, timeAgo } from '../../lib/utils'
+import { NectarLoader, NectarSpinner } from '../../components/NectarLoader'
 import { CompareSelector, loadCompareTarget } from './CompareSelector'
 import type { CompareTarget } from './CompareSelector'
 
@@ -166,8 +167,8 @@ export function TruthView({ repo, version }: Props) {
   if (loading && !truth && !impact) {
     return (
       <Card>
-        <CardContent className="p-6 text-center text-muted-foreground text-sm">
-          Computing truth from JIRA + Git + GitHub...
+        <CardContent className="p-6">
+          <NectarLoader message="Computing truth from JIRA + Git + GitHub..." />
         </CardContent>
       </Card>
     )
@@ -240,7 +241,7 @@ export function TruthView({ repo, version }: Props) {
                 </Button>
               )}
               <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-                {loading ? 'Refreshing...' : 'Refresh'}
+                {loading ? <><NectarSpinner className="mr-1" /> Computing...</> : 'Refresh'}
               </Button>
             </div>
           </div>

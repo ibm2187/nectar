@@ -6,6 +6,7 @@ import { JiraLink } from '../../components/JiraLink'
 import { apiFetch } from '../../api/client'
 import type { EnvUpgradeItem } from '../../api/client'
 import { timeAgo } from '../../lib/utils'
+import { NectarLoader } from '../../components/NectarLoader'
 
 interface UpgradeSource {
   upgradeName: string
@@ -106,9 +107,7 @@ export function UpgradeDetailDialog({ open, onOpenChange, upgrade }: Props) {
           <div>
             <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Source Code</div>
             {loading && (
-              <div className="rounded-md border p-4 text-sm text-muted-foreground italic">
-                Loading source from webplatform clone...
-              </div>
+              <NectarLoader size="sm" message="Loading source from webplatform clone..." />
             )}
             {error && (
               <div className="rounded-md border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-400">
