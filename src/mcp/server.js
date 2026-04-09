@@ -21,12 +21,12 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
     'Get customer metadata and environment summary',
     { customerId: z.string().describe('Customer ID (e.g., "ck", "bayada", "tribute")') },
     async ({ customerId }) => {
-      const customers = customerStore.getCustomers();
+      const customers = customerStore.listCustomers();
       const customer = customers.find(c => c.id === customerId);
       if (!customer) {
         return { content: [{ type: 'text', text: `Customer "${customerId}" not found. Available: ${customers.map(c => c.id).join(', ')}` }] };
       }
-      const envs = customerStore.getEnvironments().filter(e => e.customerId === customerId);
+      const envs = customerStore.listEnvironments().filter(e => e.customerId === customerId);
       const prodEnvs = envs.filter(e => e.tier === 'production');
       return {
         content: [{
@@ -48,7 +48,7 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
     'Get environment overview — version, tier, reachability, and config metadata. Does NOT include features/integrations/upgrades (use dedicated tools for those).',
     { envId: z.string().describe('Environment ID (e.g., "ck-615", "bayada-production", "ck-staging")') },
     async ({ envId }) => {
-      const envs = customerStore.getEnvironments();
+      const envs = customerStore.listEnvironments();
       const env = envs.find(e => e.id === envId);
       if (!env) {
         return { content: [{ type: 'text', text: `Environment "${envId}" not found` }] };
@@ -68,7 +68,7 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
     'Get feature flags for an environment — both DB runtime flags and static config flags',
     { envId: z.string().describe('Environment ID') },
     async ({ envId }) => {
-      const env = customerStore.getEnvironments().find(e => e.id === envId);
+      const env = customerStore.listEnvironments().find(e => e.id === envId);
       if (!env) return { content: [{ type: 'text', text: `Environment "${envId}" not found` }] };
       if (!env.features) return { content: [{ type: 'text', text: `No feature data available for "${envId}" — endpoint may not be deployed yet` }] };
       return { content: [{ type: 'text', text: JSON.stringify(env.features, null, 2) }] };
@@ -81,7 +81,7 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
     'Get integration states for an environment — DB integrations (QuickBooks, Salesforce, etc.) and config integrations (Ascend, SQS, etc.)',
     { envId: z.string().describe('Environment ID') },
     async ({ envId }) => {
-      const env = customerStore.getEnvironments().find(e => e.id === envId);
+      const env = customerStore.listEnvironments().find(e => e.id === envId);
       if (!env) return { content: [{ type: 'text', text: `Environment "${envId}" not found` }] };
       if (!env.integrations) return { content: [{ type: 'text', text: `No integration data available for "${envId}"` }] };
       return { content: [{ type: 'text', text: JSON.stringify(env.integrations, null, 2) }] };
@@ -98,7 +98,7 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
       summary: z.boolean().default(true).describe('Return only counts (true) or full item list (false)'),
     },
     async ({ envId, status, summary }) => {
-      const env = customerStore.getEnvironments().find(e => e.id === envId);
+      const env = customerStore.listEnvironments().find(e => e.id === envId);
       if (!env) return { content: [{ type: 'text', text: `Environment "${envId}" not found` }] };
       if (!env.upgrades) return { content: [{ type: 'text', text: `No upgrade data available for "${envId}"` }] };
 
@@ -153,7 +153,7 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
       query: z.string().optional().describe('Free text search across env ID and name'),
     },
     async ({ customer, version, tier, query }) => {
-      let envs = customerStore.getEnvironments();
+      let envs = customerStore.listEnvironments();
       if (customer) envs = envs.filter(e => e.customerId === customer);
       if (version) envs = envs.filter(e => e.currentVersion === version);
       if (tier) envs = envs.filter(e => e.tier === tier);
