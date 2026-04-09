@@ -101,14 +101,31 @@ export function FeaturesPage() {
 
   const filtered = useMemo(() => {
     if (!data) return []
-    const q = search.toLowerCase()
+    const q = search.toLowerCase().trim()
     return data.flags.filter(f => {
       if (scopeFilter === 'portal' && f.isMobileFeature) return false
       if (scopeFilter === 'mobile' && !f.isMobileFeature) return false
-      if (q && !f.key.toLowerCase().includes(q)) return false
-      return true
+      if (!q) return true
+
+      // Match flag name
+      if (f.key.toLowerCase().includes(q)) return true
+
+      // Match customer name/id where the flag is enabled
+      for (const [customerId, state] of Object.entries(f.customerStates)) {
+        if (state !== 'on' && state !== 'partial') continue
+        if (customerId.toLowerCase().includes(q)) return true
+        const name = (customerNames[customerId] || '').toLowerCase()
+        if (name.includes(q)) return true
+      }
+
+      // Match environment id in outliers
+      for (const outlier of f.outliers) {
+        if (outlier.envId.toLowerCase().includes(q)) return true
+      }
+
+      return false
     })
-  }, [data, search, scopeFilter])
+  }, [data, search, scopeFilter, customerNames])
 
   const bucketed = useMemo(() => {
     const result: Record<Bucket, AggregatedFlag[]> = {
@@ -199,7 +216,7 @@ export function FeaturesPage() {
       {/* Filters */}
       <div className="flex items-center gap-2 flex-wrap">
         <Input
-          placeholder="Search flags..."
+          placeholder="Search flags, customers, or environments..."
           value={search}
           onChange={e => setSearch(e.target.value)}
           className="max-w-sm"
@@ -297,15 +314,17 @@ function FlagRow({ flag, customers, customerNames, onCopy }: {
           )}
         </div>
 
-        {/* Customer state grid */}
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Customer state pills */}
+        <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end max-w-[60%]">
           {customers.map(customerId => {
             const state = flag.customerStates[customerId] || 'unknown'
+            const name = customerNames[customerId] || customerId
             return (
-              <div key={customerId} className="flex flex-col items-center gap-1" title={`${customerNames[customerId] || customerId}: ${state}`}>
-                <span className="text-xs text-muted-foreground uppercase">{(customerNames[customerId] || customerId).slice(0, 3)}</span>
-                <CustomerDot state={state} />
-              </div>
+              <CustomerPill
+                key={customerId}
+                name={name}
+                state={state}
+              />
             )
           })}
         </div>
@@ -341,12 +360,26 @@ function FlagRow({ flag, customers, customerNames, onCopy }: {
   )
 }
 
-function CustomerDot({ state }: { state: CustomerState }) {
+function CustomerPill({ name, state }: { name: string; state: CustomerState }) {
   const classes = {
-    on:      'bg-green-500 border-green-500',
-    off:     'bg-transparent border-muted-foreground/40',
-    partial: 'bg-yellow-500 border-yellow-500',
-    unknown: 'bg-transparent border-dashed border-muted-foreground/30',
+    on:      'bg-green-500/15 border-green-500/40 text-green-300',
+    off:     'bg-muted/30 border-border text-muted-foreground/60 line-through',
+    partial: 'bg-yellow-500/15 border-yellow-500/40 text-yellow-300',
+    unknown: 'bg-transparent border-dashed border-muted-foreground/20 text-muted-foreground/40',
   }[state]
-  return <span className={cn("w-3 h-3 rounded-full border-2", classes)} />
+  const dot = {
+    on:      'bg-green-500',
+    off:     'bg-muted-foreground/30',
+    partial: 'bg-yellow-500',
+    unknown: 'bg-transparent border border-dashed border-muted-foreground/30',
+  }[state]
+  return (
+    <span
+      className={cn("inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium", classes)}
+      title={`${name}: ${state}`}
+    >
+      <span className={cn("w-1.5 h-1.5 rounded-full", dot)} />
+      {name}
+    </span>
+  )
 }
