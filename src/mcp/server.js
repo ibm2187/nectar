@@ -45,7 +45,7 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
   // ── Tool: get_environment ───────────────────────────────
   server.tool(
     'get_environment',
-    'Get full environment state including version, features, integrations, and upgrades',
+    'Get environment overview — version, tier, reachability, and config metadata. Does NOT include features/integrations/upgrades (use dedicated tools for those).',
     { envId: z.string().describe('Environment ID (e.g., "ck-615", "bayada-production", "ck-staging")') },
     async ({ envId }) => {
       const envs = customerStore.getEnvironments();
@@ -53,7 +53,92 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
       if (!env) {
         return { content: [{ type: 'text', text: `Environment "${envId}" not found` }] };
       }
-      return { content: [{ type: 'text', text: JSON.stringify(env, null, 2) }] };
+      // Return overview without the large nested objects
+      const { features, integrations, upgrades, ...overview } = env;
+      overview.hasFeatures = !!features;
+      overview.hasIntegrations = !!integrations;
+      overview.upgradeCount = upgrades?.items?.length || 0;
+      return { content: [{ type: 'text', text: JSON.stringify(overview, null, 2) }] };
+    }
+  );
+
+  // ── Tool: get_environment_features ──────────────────────
+  server.tool(
+    'get_environment_features',
+    'Get feature flags for an environment — both DB runtime flags and static config flags',
+    { envId: z.string().describe('Environment ID') },
+    async ({ envId }) => {
+      const env = customerStore.getEnvironments().find(e => e.id === envId);
+      if (!env) return { content: [{ type: 'text', text: `Environment "${envId}" not found` }] };
+      if (!env.features) return { content: [{ type: 'text', text: `No feature data available for "${envId}" — endpoint may not be deployed yet` }] };
+      return { content: [{ type: 'text', text: JSON.stringify(env.features, null, 2) }] };
+    }
+  );
+
+  // ── Tool: get_environment_integrations ──────────────────
+  server.tool(
+    'get_environment_integrations',
+    'Get integration states for an environment — DB integrations (QuickBooks, Salesforce, etc.) and config integrations (Ascend, SQS, etc.)',
+    { envId: z.string().describe('Environment ID') },
+    async ({ envId }) => {
+      const env = customerStore.getEnvironments().find(e => e.id === envId);
+      if (!env) return { content: [{ type: 'text', text: `Environment "${envId}" not found` }] };
+      if (!env.integrations) return { content: [{ type: 'text', text: `No integration data available for "${envId}"` }] };
+      return { content: [{ type: 'text', text: JSON.stringify(env.integrations, null, 2) }] };
+    }
+  );
+
+  // ── Tool: get_environment_upgrades ──────────────────────
+  server.tool(
+    'get_environment_upgrades',
+    'Get upgrade status for an environment. Returns summary counts and optionally the full list. Use summary=true for an overview, or filter by status.',
+    {
+      envId: z.string().describe('Environment ID'),
+      status: z.enum(['pending', 'applied', 'inProgress', 'failed', 'skipped', 'all']).default('all').describe('Filter upgrades by status'),
+      summary: z.boolean().default(true).describe('Return only counts (true) or full item list (false)'),
+    },
+    async ({ envId, status, summary }) => {
+      const env = customerStore.getEnvironments().find(e => e.id === envId);
+      if (!env) return { content: [{ type: 'text', text: `Environment "${envId}" not found` }] };
+      if (!env.upgrades) return { content: [{ type: 'text', text: `No upgrade data available for "${envId}"` }] };
+
+      const items = env.upgrades.items || [];
+      // Bucket the items
+      const buckets = { pending: 0, applied: 0, inProgress: 0, failed: 0, skipped: 0 };
+      const bucketedItems = { pending: [], applied: [], inProgress: [], failed: [], skipped: [] };
+      for (const item of items) {
+        const h = item.history;
+        let bucket = 'pending';
+        if (!h) bucket = 'pending';
+        else if (h.inProgress) bucket = 'inProgress';
+        else if (h.completedAt && h.verificationStatus === 'FAILED') bucket = 'failed';
+        else if (h.completedAt) bucket = 'applied';
+        else if (h.skipped) bucket = 'skipped';
+        buckets[bucket]++;
+        bucketedItems[bucket].push(item);
+      }
+
+      if (summary) {
+        return { content: [{ type: 'text', text: JSON.stringify({ totalInPool: items.length, ...buckets }, null, 2) }] };
+      }
+
+      const filtered = status === 'all' ? items : (bucketedItems[status] || []);
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            totalInPool: items.length,
+            counts: buckets,
+            items: filtered.map(i => ({
+              upgradeName: i.upgradeName,
+              desiredEnvs: i.desiredEnvs,
+              status: i.history?.completedAt ? 'applied' : i.history?.inProgress ? 'inProgress' : i.history?.skipped ? 'skipped' : 'pending',
+              completedAt: i.history?.completedAt || null,
+              verificationStatus: i.history?.verificationStatus || null,
+            })),
+          }, null, 2),
+        }],
+      };
     }
   );
 
@@ -208,7 +293,7 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
     }
   );
 
-  log.info('MCP server initialized with 6 tools');
+  log.info('MCP server initialized with 10 tools');
   return server;
 }
 
