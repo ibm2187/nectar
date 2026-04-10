@@ -606,10 +606,11 @@ module.exports = function createRoutes(services, config) {
             state: ticket.state || 'pending',
             type: ticket.type || null,
             assignee: ticket.assignee || null,
+            component: ticket.component || null,
+            customerTags: Array.isArray(ticket.customerTags) ? ticket.customerTags : [],
             zohoRef: ticket.zohoRef || null,
             fixVersions,
             targetFixVersions: targetVersions,
-            // Each entry describes this ticket's membership in ONE release
             releases: [],
           };
           byKey.set(ticket.key, record);
