@@ -268,6 +268,27 @@ class JiraSync extends EventEmitter {
       updated++;
     }
 
+    // On full (non-incremental) syncs, prune tickets that no longer reference
+    // this version — handles the case where fixVersion was removed in JIRA.
+    if (!isIncremental && issues.length > 0) {
+      const freshKeys = new Set(issues.map(i => i.key));
+      const before = release.tickets.length;
+      release.tickets = release.tickets.filter(t => {
+        if (t.source !== 'jira') return true;
+        // Keep if JIRA returned it in this sync
+        if (freshKeys.has(t.key)) return true;
+        // Keep if it was synced recently by another version (shared ticket)
+        // Remove if it only existed because of a stale fixVersion reference
+        const fv = Array.isArray(t.fixVersions) ? t.fixVersions : [];
+        const tv = Array.isArray(t.targetFixVersions) ? t.targetFixVersions : [];
+        return fv.includes(cleanVersion) || tv.includes(cleanVersion);
+      });
+      const pruned = before - release.tickets.length;
+      if (pruned > 0) {
+        log.info(`JIRA sync: ${versionName} — pruned ${pruned} stale tickets`);
+      }
+    }
+
     // Also sync to repos that share this version number (e.g., bluesummit ← webplatform)
     for (const sharingRepo of this._getVersionSharingRepos(repo)) {
       const sharingRelease = this.releases.get(cleanVersion, sharingRepo);

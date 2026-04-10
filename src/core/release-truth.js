@@ -134,6 +134,24 @@ class ReleaseTruth {
               ticket.jiraRefreshedAt = new Date().toISOString();
             }
           }
+          // Remove tickets that no longer reference this release version
+          // in either fixVersions or targetFixVersions (e.g., version was
+          // removed from the ticket in JIRA after our last sync).
+          const before = release.tickets.length;
+          release.tickets = release.tickets.filter(t => {
+            if (t.source !== 'jira') return true;
+            const fresh = freshByKey.get(t.key);
+            if (!fresh) return true; // Couldn't refresh — keep it
+            const fv = Array.isArray(fresh.fixVersions) ? fresh.fixVersions : [];
+            const tv = Array.isArray(fresh.targetFixVersions) ? fresh.targetFixVersions : [];
+            return fv.includes(version) || tv.includes(version);
+          });
+          const pruned = before - release.tickets.length;
+          if (pruned > 0) {
+            log.info(`Truth ${repo}:${version}: pruned ${pruned} tickets no longer referencing this version`);
+            this.releases._debounceSave();
+          }
+
           log.info(`Truth ${repo}:${version}: refreshed ${freshByKey.size}/${keys.length} ticket statuses from JIRA`);
         }
       } catch (err) {
