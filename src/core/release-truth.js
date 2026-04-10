@@ -110,12 +110,7 @@ class ReleaseTruth {
         if (jql) {
           const freshIssues = await this.jira.searchAllIssues(jql, {
             maxResults: keys.length,
-            // Zoho custom fields (for the inline badge) + Target FixVersion
-            // (for the "missing plans" signal on the truth view).
-            fields: [
-              'summary', 'status', 'issuetype', 'assignee', 'fixVersions', 'labels',
-              'customfield_10594', 'customfield_10691', 'customfield_10992', 'customfield_10993',
-            ],
+            fields: JiraClient.NECTAR_FIELDS,
           });
           const freshByKey = new Map();
           for (const issue of freshIssues) {
@@ -133,6 +128,8 @@ class ReleaseTruth {
               ticket.assignee = fresh.assignee;
               ticket.fixVersions = fresh.fixVersions;
               ticket.targetFixVersions = fresh.targetFixVersions;
+              ticket.component = fresh.component;
+              ticket.customerTags = fresh.customerTags;
               ticket.zohoRef = fresh.zohoRef;
               ticket.jiraRefreshedAt = new Date().toISOString();
             }
@@ -338,6 +335,8 @@ class ReleaseTruth {
       targetFixVersions: targetVersions,
       inTarget,
       inFixVersion,
+      component: ticket.component || null,
+      customerTags: Array.isArray(ticket.customerTags) ? ticket.customerTags : [],
       zohoRef: ticket.zohoRef || null,
     };
 

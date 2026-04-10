@@ -1,0 +1,382 @@
+{
+  "themes": [
+    {
+      "name": "Admin Tasks",
+      "components": [
+        "Admin Tasks",
+        "Office App - Admin Tasks"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Aggregators",
+      "components": [
+        "RCM - Aggregators"
+      ],
+      "icon": null
+    },
+    {
+      "name": "AI Agents",
+      "components": [
+        "AI Agents"
+      ],
+      "icon": null
+    },
+    {
+      "name": "AI CoPilot",
+      "components": [
+        "AI CoPilot"
+      ],
+      "icon": null
+    },
+    {
+      "name": "AI Forms",
+      "components": [
+        "AI Forms"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Authorizations",
+      "components": [
+        "Authorizations"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Care Plan Tasks",
+      "components": [
+        "Care Plan Tasks",
+        "Caregiver App - Care Plan Tasks"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Care Plans",
+      "components": [
+        "Care Plans"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Caregiver Profile",
+      "components": [
+        "Caregiver Profile"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Chat",
+      "components": [
+        "Messages - Chat"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Client Documents",
+      "components": [
+        "Client Documents"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Client Profile",
+      "components": [
+        "Client Profile"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Compliance",
+      "components": [
+        "Compliance"
+      ],
+      "icon": null
+    },
+    {
+      "name": "CRM",
+      "components": [
+        "Office App - CRM"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Data Import",
+      "components": [
+        "Data Import"
+      ],
+      "icon": null
+    },
+    {
+      "name": "DevOps",
+      "components": [
+        "DevOps"
+      ],
+      "icon": null
+    },
+    {
+      "name": "EVV",
+      "components": [
+        "Office App - EVV"
+      ],
+      "icon": null
+    },
+    {
+      "name": "EVV Aggregators",
+      "components": [
+        "Ascend - EVV Aggregators"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Forms",
+      "components": [
+        "Forms"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Help at Home",
+      "components": [
+        "Integrations - Help at Home"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Invoices",
+      "components": [
+        "Ascend - Invoices"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Invoicing",
+      "components": [
+        "RCM - Invoicing"
+      ],
+      "icon": null
+    },
+    {
+      "name": "iSolved",
+      "components": [
+        "Integrations - iSolved"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Legacy EVV Modal",
+      "components": [
+        "Legacy EVV Modal"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Legacy Workflows",
+      "components": [
+        "Legacy Workflows"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Login and Security",
+      "components": [
+        "Mobile App - Login and Security"
+      ],
+      "icon": null
+    },
+    {
+      "name": "MAR",
+      "components": [
+        "MAR"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Messages",
+      "components": [
+        "Messages"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Navigation",
+      "components": [
+        "Family App - Navigation"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Nevvon",
+      "components": [
+        "Integrations - Nevvon"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Notifications",
+      "components": [
+        "Mobile App - Notifications"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Offline Mode Syncing",
+      "components": [
+        "Caregiver App - Offline Mode Syncing"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Payments",
+      "components": [
+        "RCM - Payments",
+        "Ascend - Payments"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Payroll",
+      "components": [
+        "Ascend - Payroll",
+        "RCM - Payroll"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Public APIs",
+      "components": [
+        "Integrations - Public APIs"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Quickbooks",
+      "components": [
+        "Integrations - Quickbooks"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Report Builder",
+      "components": [
+        "Report Builder"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Rules (Inc. Clinical)",
+      "components": [
+        "Rules (Inc. Clinical)"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Salesforce",
+      "components": [
+        "Integrations - Salesforce"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Schedule",
+      "components": [
+        "Schedule"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Schedule Planner",
+      "components": [
+        "Schedule Planner"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Service Exceptions",
+      "components": [
+        "Service Exceptions"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Settings",
+      "components": [
+        "Office App - Settings",
+        "Mobile App - Settings"
+      ],
+      "icon": null
+    },
+    {
+      "name": "SMS",
+      "components": [
+        "Messages - SMS"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Temporary Unavailability and PTO",
+      "components": [
+        "Caregiver App - Temporary Unavailability and PTO"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Users, Login, and Security",
+      "components": [
+        "Users, Login, and Security"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Visit Audit",
+      "components": [
+        "Visit Audit"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Visit Editing",
+      "components": [
+        "Visit Editing"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Visit Verification (EVV) Panel",
+      "components": [
+        "Visit Verification (EVV) Panel"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Visits",
+      "components": [
+        "Office App - Visits"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Viv Integration",
+      "components": [
+        "Ascend - Viv Integration"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Webviews",
+      "components": [
+        "Caregiver App - Webviews"
+      ],
+      "icon": null
+    },
+    {
+      "name": "Workday",
+      "components": [
+        "Integrations - Workday"
+      ],
+      "icon": null
+    }
+  ],
+  "unmappedLabel": "Other",
+  "updatedAt": "2026-04-10T03:20:54.412Z"
+}

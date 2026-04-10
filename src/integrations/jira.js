@@ -15,6 +15,23 @@ const ZOHO_SUBMITTER_EMAIL_FIELD = 'customfield_10993';
 // where the code actually landed. The gap between the two is the "missing
 // plans" signal that surfaces on the release truth view.
 const TARGET_FIX_VERSION_FIELD = 'customfield_10594';
+
+// Component / area (used for roadmap theme grouping) and customer tag
+// (multi-select — "Bayada", "CK", "Lumen", "Internal", etc.)
+const COMPONENT_FIELD = 'customfield_10463';
+const CUSTOMER_TAG_FIELD = 'customfield_11056';
+
+// Shared fields list — every Nectar JIRA query should request at minimum these
+// so normalizeIssue can populate all fields consistently.
+const NECTAR_FIELDS = [
+  'summary', 'status', 'issuetype', 'assignee', 'fixVersions', 'labels',
+  'customfield_10594',  // Target FixVersion
+  'customfield_10463',  // Component / area
+  'customfield_11056',  // Customer tag
+  'customfield_10691',  // Zoho Desk Ticket ID
+  'customfield_10992',  // Submitter Name
+  'customfield_10993',  // Submitter Email
+];
 // Matches /details/<digits> in Zoho agent URLs
 const ZOHO_URL_ID_REGEX = /\/details\/(\d+)/;
 // Matches the VHC-xxxx ticket number form, optionally prefixed with #
@@ -164,11 +181,7 @@ class JiraClient {
 
     return this.searchAllIssues(jql, {
       onPage: opts.onPage,
-      // Include Target FixVersion in the fields list so jira-sync can populate it
-      fields: [
-        'summary', 'status', 'issuetype', 'assignee', 'fixVersions', 'labels',
-        'customfield_10594', 'customfield_10691', 'customfield_10992', 'customfield_10993',
-      ],
+      fields: JiraClient.NECTAR_FIELDS,
     });
   }
 
@@ -253,10 +266,47 @@ class JiraClient {
       fixVersions: (fields.fixVersions || []).map(v => v.name),
       targetFixVersions: JiraClient.extractVersionNames(fields[TARGET_FIX_VERSION_FIELD]),
       labels: fields.labels || [],
+      component: JiraClient.extractFieldString(fields[COMPONENT_FIELD]),
+      customerTags: JiraClient.extractStringArray(fields[CUSTOMER_TAG_FIELD]),
       zohoRef: rawZoho ? JiraClient.parseZohoRef(rawZoho) : null,
       submitterName: fields[ZOHO_SUBMITTER_NAME_FIELD] || null,
       submitterEmail: fields[ZOHO_SUBMITTER_EMAIL_FIELD] || null,
     };
+  }
+
+  /**
+   * Extract a plain string from a custom field that may be string, { value: "..." },
+   * or null. Returns string or null.
+   */
+  static extractFieldString(raw) {
+    if (raw == null) return null;
+    if (typeof raw === 'string') return raw || null;
+    if (typeof raw === 'object' && 'value' in raw) {
+      return typeof raw.value === 'string' ? raw.value || null : null;
+    }
+    return null;
+  }
+
+  /**
+   * Extract a string array from a labels/multi-select custom field.
+   * Handles: ["a","b"], { value: ["a","b"] }, [{ value: "a" }], null.
+   */
+  static extractStringArray(raw) {
+    if (raw == null) return [];
+    let candidate = raw;
+    if (!Array.isArray(candidate) && typeof candidate === 'object' && 'value' in candidate) {
+      candidate = candidate.value;
+    }
+    if (candidate == null) return [];
+    if (!Array.isArray(candidate)) return [String(candidate)].filter(Boolean);
+    return candidate
+      .map(item => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object' && typeof item.value === 'string') return item.value;
+        if (item && typeof item === 'object' && typeof item.name === 'string') return item.name;
+        return null;
+      })
+      .filter(Boolean);
   }
 
   /**
@@ -377,4 +427,5 @@ class JiraClient {
   }
 }
 
+JiraClient.NECTAR_FIELDS = NECTAR_FIELDS;
 module.exports = JiraClient;

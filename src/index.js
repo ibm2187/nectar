@@ -101,6 +101,9 @@ const webplatformScanner = new WebplatformScanner(repoManager, config);
 const EnvironmentPoller = require('./core/environment-poller');
 const envPoller = new EnvironmentPoller(customerStore, config);
 
+const ThemeConfig = require('./core/theme-config');
+const themeConfig = new ThemeConfig();
+
 // ── Wire Slack lifecycle notifications ──────────────────
 // Skip notifications for automated actions (discovery, jira-sync)
 const AUTOMATED_USERS = new Set(['discovery', 'jira-sync', 'cherry-pick-watcher', 'cherry-pick-sync', 'github-webhook', 'jira-webhook', 'risk-assessor']);
@@ -141,7 +144,7 @@ const { createWebServer } = require('./web/server');
 const services = {
   releases, repoManager, jira, github, jenkins, slack,
   risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth,
-  customerStore, webplatformScanner, envPoller,
+  customerStore, webplatformScanner, envPoller, themeConfig,
 };
 const webServer = createWebServer(services, config);
 

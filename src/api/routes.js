@@ -9,7 +9,7 @@ const { aggregateFeatureFlags, aggregateIntegrations } = require('../core/featur
  * @param {object} config
  */
 module.exports = function createRoutes(services, config) {
-  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller } = services;
+  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig } = services;
 
   // Nectar's own repo — used by the Issues page so users can file bugs/feedback.
   const NECTAR_REPO = 'mavencare/nectar';
@@ -661,6 +661,216 @@ module.exports = function createRoutes(services, config) {
       jiraBaseUrl: (process.env.JIRA_BASE_URL || process.env.JIRA_URL || '').replace(/\/$/, ''),
       githubRepo: (config.repos || []).map(r => ({ name: r.name, github: r.github })),
     });
+  });
+
+  // ── Roadmap (theme × time grid) ────────────────────────
+
+  router.get('/roadmap', (req, res) => {
+    const customerFilter = req.query.customer || null;
+    const activeReleases = releases.active().filter(r => !r.jiraArchived);
+
+    // Ensure theme config is initialized
+    if (themeConfig.themes.length === 0) {
+      const components = new Set();
+      for (const release of activeReleases) {
+        for (const ticket of release.tickets || []) {
+          if (ticket.component) components.add(ticket.component);
+        }
+      }
+      if (components.size > 0) themeConfig.autoGenerate(Array.from(components));
+    }
+
+    // ── Build time buckets: monthly columns for 12 months forward ───
+    const now = new Date();
+    const months = [];
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      months.push({
+        key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+        start: d.toISOString().slice(0, 10),
+        end: new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10),
+      });
+    }
+
+    // ── Helper: parse customer from release branch name ─────
+    function deriveCustomers(release) {
+      const v = (release.version || '').toLowerCase();
+      const customers = [];
+      if (v.includes('bayada') || v.includes('byd')) customers.push('Bayada');
+      if (v.includes('ck') || v.includes('comfortkeepers') || v.includes('comfort')) customers.push('CK');
+      if (v.includes('tribute') || v.includes('trib')) customers.push('Tribute');
+      if (v.includes('lumen')) customers.push('Lumen');
+      if (v.includes('qualitycare') || v.includes('qc')) customers.push('Quality Care');
+      if (v.includes('hah') || v.includes('help')) customers.push('Help-at-Home');
+      return customers.length > 0 ? customers : ['All'];
+    }
+
+    // ── Helper: get month key for a date string ─────────────
+    function getMonthKey(dateStr) {
+      if (!dateStr) return null;
+      return dateStr.slice(0, 7); // "2026-04" from "2026-04-22"
+    }
+
+    // ── Aggregate: theme → month → release cards ────────────
+    // Structure: { [themeName]: { [monthKey]: [releaseCard, ...] } }
+    const themeGrid = new Map();
+    const allCustomers = new Set();
+    const unmappedComponents = new Set();
+
+    for (const release of activeReleases) {
+      const monthKey = getMonthKey(release.jiraReleaseDate);
+      // Skip releases with no date — they go in "Unscheduled"
+      const effectiveMonth = monthKey || 'unscheduled';
+
+      const releaseCustomers = deriveCustomers(release);
+      releaseCustomers.forEach(c => allCustomers.add(c));
+
+      // If customer filter is active, skip releases that don't match
+      if (customerFilter && !releaseCustomers.some(c =>
+        c.toLowerCase() === customerFilter.toLowerCase()
+      )) continue;
+
+      // Group tickets by theme
+      const ticketsByTheme = new Map();
+      for (const ticket of release.tickets || []) {
+        if (ticket.source !== 'jira') continue;
+
+        // Check customer filter at ticket level too
+        const ticketCustomers = Array.isArray(ticket.customerTags) ? ticket.customerTags : [];
+        if (customerFilter && ticketCustomers.length > 0) {
+          const matchesFilter = ticketCustomers.some(c =>
+            c.toLowerCase() === customerFilter.toLowerCase() || c.toLowerCase() === 'internal'
+          );
+          if (!matchesFilter) continue;
+        }
+
+        const themeName = themeConfig.resolveComponent(ticket.component);
+        if (themeName === themeConfig.unmappedLabel && ticket.component) {
+          unmappedComponents.add(ticket.component);
+        }
+
+        if (!ticketsByTheme.has(themeName)) ticketsByTheme.set(themeName, []);
+        ticketsByTheme.get(themeName).push(ticket);
+      }
+
+      // Create a release card for each theme that has tickets
+      for (const [themeName, tickets] of ticketsByTheme) {
+        if (!themeGrid.has(themeName)) themeGrid.set(themeName, new Map());
+        const themeMonths = themeGrid.get(themeName);
+        if (!themeMonths.has(effectiveMonth)) themeMonths.set(effectiveMonth, []);
+
+        const targetVersions = tickets.map(t => Array.isArray(t.targetFixVersions) ? t.targetFixVersions : []);
+        const fixVersions = tickets.map(t => Array.isArray(t.fixVersions) ? t.fixVersions : []);
+
+        const done = tickets.filter(t => {
+          const s = (t.state || '').toLowerCase();
+          return s === 'done' || s === 'cherry-picked' || s === 'ready-for-testing';
+        }).length;
+        const inProgress = tickets.filter(t => {
+          const s = (t.state || '').toLowerCase();
+          return s === 'in-progress';
+        }).length;
+        const missingPlan = tickets.filter(t => {
+          const tv = Array.isArray(t.targetFixVersions) ? t.targetFixVersions : [];
+          const fv = Array.isArray(t.fixVersions) ? t.fixVersions : [];
+          return tv.includes(release.version) && !fv.includes(release.version);
+        }).length;
+
+        themeMonths.get(effectiveMonth).push({
+          repo: release.repo,
+          version: release.version,
+          state: release.state,
+          jiraReleaseDate: release.jiraReleaseDate || null,
+          customers: releaseCustomers,
+          tickets: tickets.length,
+          done,
+          inProgress,
+          pending: tickets.length - done - inProgress,
+          missingPlan,
+          progress: tickets.length > 0 ? Math.round((done / tickets.length) * 100) : 0,
+        });
+      }
+    }
+
+    // ── Flatten into response shape ─────────────────────────
+    // Sort themes: configured themes first (by config order), then unmapped
+    const configuredOrder = themeConfig.themes.map(t => t.name);
+    const themeNames = Array.from(themeGrid.keys()).sort((a, b) => {
+      const ai = configuredOrder.indexOf(a);
+      const bi = configuredOrder.indexOf(b);
+      if (ai >= 0 && bi >= 0) return ai - bi;
+      if (ai >= 0) return -1;
+      if (bi >= 0) return 1;
+      if (a === themeConfig.unmappedLabel) return 1;
+      if (b === themeConfig.unmappedLabel) return -1;
+      return a.localeCompare(b);
+    });
+
+    const themes = themeNames.map(name => {
+      const monthMap = themeGrid.get(name);
+      const monthEntries = {};
+      let totalTickets = 0;
+      let totalDone = 0;
+
+      for (const [monthKey, cards] of monthMap) {
+        monthEntries[monthKey] = cards.sort((a, b) =>
+          (a.jiraReleaseDate || '').localeCompare(b.jiraReleaseDate || '')
+        );
+        for (const card of cards) {
+          totalTickets += card.tickets;
+          totalDone += card.done;
+        }
+      }
+
+      return {
+        name,
+        icon: themeConfig.themes.find(t => t.name === name)?.icon || null,
+        months: monthEntries,
+        totalTickets,
+        totalDone,
+        progress: totalTickets > 0 ? Math.round((totalDone / totalTickets) * 100) : 0,
+      };
+    });
+
+    res.json({
+      months,
+      themes,
+      customers: Array.from(allCustomers).sort(),
+      unmappedComponents: Array.from(unmappedComponents).sort(),
+      stats: {
+        totalThemes: themes.length,
+        totalReleases: activeReleases.length,
+        totalTickets: themes.reduce((s, t) => s + t.totalTickets, 0),
+      },
+    });
+  });
+
+  // ── Theme configuration (roadmap) ─────────────────────
+
+  router.get('/config/themes', (req, res) => {
+    // If themes haven't been configured yet, auto-generate from observed data
+    if (themeConfig.themes.length === 0) {
+      const components = new Set();
+      for (const release of releases.active()) {
+        for (const ticket of release.tickets || []) {
+          if (ticket.component) components.add(ticket.component);
+        }
+      }
+      if (components.size > 0) {
+        themeConfig.autoGenerate(Array.from(components));
+      }
+    }
+    res.json(themeConfig.getConfig());
+  });
+
+  router.put('/config/themes', (req, res) => {
+    try {
+      themeConfig.setConfig(req.body);
+      res.json(themeConfig.getConfig());
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
   });
 
   // ── Meta ──────────────────────────────────────────────
