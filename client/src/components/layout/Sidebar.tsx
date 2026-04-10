@@ -7,7 +7,7 @@ const links = [
   { to: '/roadmap', label: 'Roadmap', icon: '🗺' },
   { to: '/calendar', label: 'Release Calendar', icon: '📅' },
   { to: '/tickets', label: 'Tickets', icon: '🎯' },
-  { to: '/customers', label: 'Customers', icon: '🏢' },
+  { to: '/customers', label: 'Environments', icon: '🏢' },
   { to: '/features', label: 'Features', icon: '🚩' },
   { to: '/integrations', label: 'Integrations', icon: '🔌' },
   { to: '/issues', label: 'Issues', icon: '🐛' },
