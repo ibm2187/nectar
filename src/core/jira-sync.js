@@ -240,6 +240,11 @@ class JiraSync extends EventEmitter {
         jiraStatus: normalized.status,
         type: normalized.type,
         assignee: normalized.assignee,
+        // Persist both canonical fixVersions and planning target so
+        // release-truth can distinguish "on the plan" from "on the branch".
+        fixVersions: normalized.fixVersions,
+        targetFixVersions: normalized.targetFixVersions,
+        zohoRef: normalized.zohoRef,
         source: 'jira',
         jiraSyncedAt: new Date().toISOString(),
       };

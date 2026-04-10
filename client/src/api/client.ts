@@ -280,6 +280,15 @@ export type Health =
   | 'lying'
   | 'stale-cert'
 
+export interface ZohoRef {
+  raw: string
+  id: string | null
+  ticketNumber: string | null
+  zohoUrl: string | null
+  kind: 'url' | 'ticketNumber' | 'unknown'
+  parseable: boolean
+}
+
 export interface VerifiedTicket {
   key: string
   summary: string
@@ -299,6 +308,13 @@ export interface VerifiedTicket {
   health: Health
   healthCategory: HealthCategory
   healthMessage: string
+  fixVersions?: string[]
+  targetFixVersions?: string[]
+  /** True if this release is in the ticket's Target FixVersion (customfield_10594) */
+  inTarget?: boolean
+  /** True if this release is in the ticket's canonical fixVersions */
+  inFixVersion?: boolean
+  zohoRef?: ZohoRef | null
 }
 
 export interface RogueCommit {

@@ -3,6 +3,23 @@ const log = require('../core/log');
 const JIRA_KEY_REGEX = /\b(DEV|MAV)-\d+\b/g;
 const PAGE_SIZE = 100;
 
+// Zoho Desk linkage — stored in JIRA customfield_10691 ("Zoho Desk Ticket ID").
+// Free text field, so values come in three shapes: full agent URL, #VHC-xxxx shorthand,
+// or garbage (someone pasted the subject). See reference_zoho_jira_linkage memory for context.
+const ZOHO_CUSTOM_FIELD = 'customfield_10691';
+const ZOHO_SUBMITTER_NAME_FIELD = 'customfield_10992';
+const ZOHO_SUBMITTER_EMAIL_FIELD = 'customfield_10993';
+
+// Target FixVersion — mavencare's planning-intent field (where a ticket was
+// *meant* to ship). Distinct from the canonical fixVersion which captures
+// where the code actually landed. The gap between the two is the "missing
+// plans" signal that surfaces on the release truth view.
+const TARGET_FIX_VERSION_FIELD = 'customfield_10594';
+// Matches /details/<digits> in Zoho agent URLs
+const ZOHO_URL_ID_REGEX = /\/details\/(\d+)/;
+// Matches the VHC-xxxx ticket number form, optionally prefixed with #
+const ZOHO_TICKET_NUMBER_REGEX = /#?\s*(VHC-\d+)/i;
+
 /**
  * JIRA REST API client.
  * Basic auth with email:apiToken.
@@ -128,11 +145,17 @@ class JiraClient {
 
   /**
    * Get all issues for a specific fixVersion, with pagination.
+   *
+   * Pulls the **union** of `fixVersion = X OR "Target FixVersion" = X` so
+   * target-only tickets (planned for X but not yet cherry-picked) are visible
+   * in Nectar's release truth view. See customfield_10594 semantics above.
+   *
    * @param {string} versionName - e.g., "4.2.1"
    * @param {object} opts - { updatedSince, onPage }
    */
   async getIssuesForVersion(versionName, opts = {}) {
-    let jql = `fixVersion = "${versionName}"`;
+    const escaped = versionName.replace(/"/g, '\\"');
+    let jql = `(fixVersion = "${escaped}" OR cf[10594] = "${escaped}")`;
     if (opts.updatedSince) {
       // JIRA date format: "2026-04-07 00:00"
       jql += ` AND updated >= "${opts.updatedSince}"`;
@@ -141,6 +164,11 @@ class JiraClient {
 
     return this.searchAllIssues(jql, {
       onPage: opts.onPage,
+      // Include Target FixVersion in the fields list so jira-sync can populate it
+      fields: [
+        'summary', 'status', 'issuetype', 'assignee', 'fixVersions', 'labels',
+        'customfield_10594', 'customfield_10691', 'customfield_10992', 'customfield_10993',
+      ],
     });
   }
 
@@ -210,9 +238,12 @@ class JiraClient {
 
   /**
    * Normalize a JIRA issue into Nectar's ticket format.
+   * Defensively reads the Zoho Desk custom fields — if the caller didn't request
+   * them in the JIRA `fields` list they'll simply be null.
    */
   static normalizeIssue(issue) {
     const fields = issue.fields || {};
+    const rawZoho = fields[ZOHO_CUSTOM_FIELD];
     return {
       key: issue.key,
       summary: fields.summary || '',
@@ -220,7 +251,104 @@ class JiraClient {
       type: fields.issuetype ? fields.issuetype.name : 'Unknown',
       assignee: fields.assignee ? fields.assignee.displayName : null,
       fixVersions: (fields.fixVersions || []).map(v => v.name),
+      targetFixVersions: JiraClient.extractVersionNames(fields[TARGET_FIX_VERSION_FIELD]),
       labels: fields.labels || [],
+      zohoRef: rawZoho ? JiraClient.parseZohoRef(rawZoho) : null,
+      submitterName: fields[ZOHO_SUBMITTER_NAME_FIELD] || null,
+      submitterEmail: fields[ZOHO_SUBMITTER_EMAIL_FIELD] || null,
+    };
+  }
+
+  /**
+   * Normalize a multi-version custom field into a flat array of version name strings.
+   * Custom fields come back in several shapes depending on JIRA API surface:
+   *   - array of version objects: [{ name: "4.1.2", id: "..." }, ...]
+   *   - array of strings: ["4.1.2", "4.2.0"]
+   *   - wrapped object: { value: ["4.1.2", "4.2.0"] }
+   *   - null / undefined / empty
+   * This helper survives all of them and always returns string[].
+   */
+  static extractVersionNames(raw) {
+    if (raw == null) return [];
+    let candidate = raw;
+    // Unwrap { value: ... } envelope
+    if (!Array.isArray(candidate) && typeof candidate === 'object' && 'value' in candidate) {
+      candidate = candidate.value;
+    }
+    if (candidate == null) return [];
+    if (!Array.isArray(candidate)) candidate = [candidate];
+    return candidate
+      .map(item => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object' && typeof item.name === 'string') return item.name;
+        return null;
+      })
+      .filter(Boolean);
+  }
+
+  /**
+   * Parse whatever humans have pasted into the JIRA `Zoho Desk Ticket ID` field.
+   *
+   * Returns:
+   *   { kind: 'url',          id, ticketNumber: null, zohoUrl, raw, parseable: true  }
+   *   { kind: 'ticketNumber', id: null, ticketNumber, zohoUrl: null, raw, parseable: true  }
+   *   { kind: 'unknown',      id: null, ticketNumber: null, zohoUrl: null, raw, parseable: false }
+   *
+   * The canonical link we build for the URL case uses the /support/.../Cases/dv/<id>
+   * shape that Zoho's own webUrl returns — reliable and portable.
+   */
+  static parseZohoRef(raw) {
+    if (raw == null) return null;
+    // Defensive unwrap: depending on how the custom field was configured in JIRA
+    // the value may come back as a plain string, { value: "..." }, or an array.
+    // All three have been observed in the wild.
+    let candidate = raw;
+    if (Array.isArray(candidate)) candidate = candidate[0];
+    if (candidate && typeof candidate === 'object' && 'value' in candidate) {
+      candidate = candidate.value;
+    }
+    if (candidate == null) return null;
+    const value = String(candidate).trim();
+    if (!value) return null;
+
+    const base = {
+      raw: value,
+      id: null,
+      ticketNumber: null,
+      zohoUrl: null,
+    };
+
+    // Format 1 — full agent URL containing /details/<numericId>
+    const urlMatch = value.match(ZOHO_URL_ID_REGEX);
+    if (urlMatch) {
+      const id = urlMatch[1];
+      return {
+        ...base,
+        kind: 'url',
+        id,
+        zohoUrl: `https://support.vivtechnologies.com/support/vivtechnologies/ShowHomePage.do#Cases/dv/${id}`,
+        parseable: true,
+      };
+    }
+
+    // Format 2 — #VHC-xxxx shorthand
+    const tnMatch = value.match(ZOHO_TICKET_NUMBER_REGEX);
+    // Only count this as a short-form ref if the whole value is basically just the ticket
+    // number (not a free-form sentence that happens to mention VHC-xxxx).
+    if (tnMatch && value.length <= tnMatch[0].length + 4) {
+      return {
+        ...base,
+        kind: 'ticketNumber',
+        ticketNumber: tnMatch[1].toUpperCase(),
+        parseable: true,
+      };
+    }
+
+    // Format 3 — unparseable garbage (e.g., someone pasted the subject)
+    return {
+      ...base,
+      kind: 'unknown',
+      parseable: false,
     };
   }
 

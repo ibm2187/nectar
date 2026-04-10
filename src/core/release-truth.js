@@ -108,7 +108,15 @@ class ReleaseTruth {
         const keys = jiraTickets.map(t => t.key);
         const jql = JiraClient.buildJQL(keys);
         if (jql) {
-          const freshIssues = await this.jira.searchAllIssues(jql, { maxResults: keys.length });
+          const freshIssues = await this.jira.searchAllIssues(jql, {
+            maxResults: keys.length,
+            // Zoho custom fields (for the inline badge) + Target FixVersion
+            // (for the "missing plans" signal on the truth view).
+            fields: [
+              'summary', 'status', 'issuetype', 'assignee', 'fixVersions', 'labels',
+              'customfield_10594', 'customfield_10691', 'customfield_10992', 'customfield_10993',
+            ],
+          });
           const freshByKey = new Map();
           for (const issue of freshIssues) {
             const n = JiraClient.normalizeIssue(issue);
@@ -123,6 +131,9 @@ class ReleaseTruth {
               ticket.summary = fresh.summary;
               ticket.type = fresh.type;
               ticket.assignee = fresh.assignee;
+              ticket.fixVersions = fresh.fixVersions;
+              ticket.targetFixVersions = fresh.targetFixVersions;
+              ticket.zohoRef = fresh.zohoRef;
               ticket.jiraRefreshedAt = new Date().toISOString();
             }
           }
@@ -225,7 +236,7 @@ class ReleaseTruth {
     // Tickets are checked against ALL commits (including inherited from master),
     // not just post-cut cherry-picks.
     const branchHasCommits = branchExists && gitCommits.length > 0;
-    const verified = jiraTickets.map(t => this._verifyTicket(t, gitKeys, prByKey, branchHasCommits));
+    const verified = jiraTickets.map(t => this._verifyTicket(t, gitKeys, prByKey, branchHasCommits, version));
 
     // ── 5. Find rogue keys ────────────────────────────────
     // Rogues = JIRA keys cherry-picked POST-CUT but not in JIRA fixVersion.
@@ -301,11 +312,17 @@ class ReleaseTruth {
    * Verify a single ticket — check JIRA status against git+PR reality.
    * Returns ticket with `health`, `healthCategory`, `healthMessage`, and PR info.
    */
-  _verifyTicket(ticket, gitKeys, prByKey, branchHasCommits) {
+  _verifyTicket(ticket, gitKeys, prByKey, branchHasCommits, releaseVersion) {
     const jiraStatus = ticket.jiraStatus || 'Unknown';
     const stage = getStage(jiraStatus);
     const onBranch = gitKeys.has(ticket.key);
     const pr = prByKey.get(ticket.key) || null;
+
+    // Membership of this ticket in the current release, split by source.
+    const targetVersions = Array.isArray(ticket.targetFixVersions) ? ticket.targetFixVersions : [];
+    const actualVersions = Array.isArray(ticket.fixVersions) ? ticket.fixVersions : [];
+    const inTarget = targetVersions.includes(releaseVersion);
+    const inFixVersion = actualVersions.includes(releaseVersion);
 
     const result = {
       key: ticket.key,
@@ -317,6 +334,11 @@ class ReleaseTruth {
       onBranch,
       branchHasCommits,
       pr,
+      fixVersions: actualVersions,
+      targetFixVersions: targetVersions,
+      inTarget,
+      inFixVersion,
+      zohoRef: ticket.zohoRef || null,
     };
 
     // Resolved-without-code is the same regardless of branch state

@@ -552,6 +552,108 @@ module.exports = function createRoutes(services, config) {
     }
   });
 
+  // ── Tickets aggregation (across all unreleased releases) ─
+
+  /**
+   * Returns one record per unique JIRA ticket that is referenced by any
+   * active (non-done, non-archived) release — either via canonical fixVersion
+   * or via Target FixVersion. Each record lists the releases it's in and the
+   * source (target / fixVersion / both), so the frontend can render a
+   * roadmap-style table with per-release badges.
+   */
+  router.get('/tickets', (req, res) => {
+    // Only look at releases that are actively being worked. Done releases
+    // have already shipped and don't need to be part of the roadmap view.
+    const activeReleases = releases.active().filter(r => !r.jiraArchived);
+
+    // Column list for the UI — sorted by JIRA release date ascending so the
+    // roadmap reads left-to-right in time.
+    const releaseColumns = activeReleases.map(r => ({
+      repo: r.repo,
+      version: r.version,
+      state: r.state,
+      jiraReleaseDate: r.jiraReleaseDate || null,
+      branch: r.branch || null,
+    })).sort((a, b) => {
+      // Nulls last
+      if (!a.jiraReleaseDate && !b.jiraReleaseDate) return a.version.localeCompare(b.version);
+      if (!a.jiraReleaseDate) return 1;
+      if (!b.jiraReleaseDate) return -1;
+      return a.jiraReleaseDate.localeCompare(b.jiraReleaseDate);
+    });
+
+    // Walk every active release's tickets[], dedupe by key, accumulate
+    // per-release membership.
+    const byKey = new Map();
+    for (const release of activeReleases) {
+      const releaseVersion = release.version;
+      for (const ticket of release.tickets || []) {
+        if (ticket.source !== 'jira') continue;
+
+        const targetVersions = Array.isArray(ticket.targetFixVersions) ? ticket.targetFixVersions : [];
+        const fixVersions = Array.isArray(ticket.fixVersions) ? ticket.fixVersions : [];
+        const inTarget = targetVersions.includes(releaseVersion);
+        const inFixVersion = fixVersions.includes(releaseVersion);
+        // Should never happen given the sync JQL, but guard anyway
+        if (!inTarget && !inFixVersion) continue;
+
+        let record = byKey.get(ticket.key);
+        if (!record) {
+          record = {
+            key: ticket.key,
+            summary: ticket.summary || '',
+            jiraStatus: ticket.jiraStatus || 'Unknown',
+            state: ticket.state || 'pending',
+            type: ticket.type || null,
+            assignee: ticket.assignee || null,
+            zohoRef: ticket.zohoRef || null,
+            fixVersions,
+            targetFixVersions: targetVersions,
+            // Each entry describes this ticket's membership in ONE release
+            releases: [],
+          };
+          byKey.set(ticket.key, record);
+        }
+
+        record.releases.push({
+          repo: release.repo,
+          version: releaseVersion,
+          inTarget,
+          inFixVersion,
+          source: inTarget && inFixVersion ? 'both' : inTarget ? 'target' : 'fixVersion',
+        });
+      }
+    }
+
+    // Sort ticket releases by the same column order as releaseColumns, so the
+    // frontend can render them in a consistent left-to-right order.
+    const columnOrder = new Map();
+    releaseColumns.forEach((c, idx) => columnOrder.set(`${c.repo}:${c.version}`, idx));
+    for (const record of byKey.values()) {
+      record.releases.sort((a, b) => {
+        const ai = columnOrder.get(`${a.repo}:${a.version}`) ?? 999;
+        const bi = columnOrder.get(`${b.repo}:${b.version}`) ?? 999;
+        return ai - bi;
+      });
+    }
+
+    const tickets = Array.from(byKey.values());
+    // Headline stats so the frontend can render a compact summary bar
+    const stats = {
+      total: tickets.length,
+      plannedOnly: tickets.filter(t => t.releases.every(r => r.source === 'target')).length,
+      deliveredAsPlanned: tickets.filter(t => t.releases.every(r => r.source === 'both')).length,
+      anyUnplanned: tickets.filter(t => t.releases.some(r => r.source === 'fixVersion')).length,
+      anyMissing: tickets.filter(t => t.releases.some(r => r.source === 'target')).length,
+    };
+
+    res.json({
+      releases: releaseColumns,
+      stats,
+      tickets,
+    });
+  });
+
   // ── Config (safe values exposed to frontend) ──────────
 
   router.get('/config', (req, res) => {

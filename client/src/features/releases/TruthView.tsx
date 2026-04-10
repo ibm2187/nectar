@@ -6,7 +6,7 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { JiraLink } from '../../components/JiraLink'
 import { apiFetch } from '../../api/client'
-import type { ReleaseTruthReport, DeploymentImpactReport, VerifiedTicket, Health, HealthCategory } from '../../api/client'
+import type { ReleaseTruthReport, DeploymentImpactReport, VerifiedTicket, Health, HealthCategory, ZohoRef } from '../../api/client'
 import { cn, timeAgo } from '../../lib/utils'
 import { useWsStore } from '../../stores/wsStore'
 import { NectarLoader, NectarSpinner } from '../../components/NectarLoader'
@@ -506,11 +506,38 @@ function SortHeader({
 
 function TicketRow({ ticket: t }: { ticket: VerifiedTicket }) {
   const info = HEALTH_INFO[t.health]
+  // A ticket is a "missing plan" for this release if it appears in Target FixVersion
+  // but NOT in the canonical fixVersions — meaning the plan says it should ship here,
+  // but no cherry-pick has landed to prove it will.
+  const isPlannedOnly = t.inTarget === true && t.inFixVersion === false
+  const isUnplannedAdd = t.inTarget === false && t.inFixVersion === true
   return (
-    <tr className="border-b border-border/30 hover:bg-accent/30 transition-colors">
+    <tr className={cn(
+      "border-b border-border/30 hover:bg-accent/30 transition-colors",
+      isPlannedOnly && "bg-yellow-500/[0.03]"
+    )}>
       {/* Key */}
       <td className="px-3 py-2 align-top">
-        <JiraLink jiraKey={t.key} />
+        <div className="flex flex-col gap-1">
+          <JiraLink jiraKey={t.key} />
+          {isPlannedOnly && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono w-fit bg-yellow-500/15 text-yellow-400 border border-yellow-500/40"
+              title="In Target FixVersion but not in canonical fixVersions — the plan says this should ship here, but it's not on the branch yet"
+            >
+              📋 Planned
+            </span>
+          )}
+          {isUnplannedAdd && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono w-fit bg-orange-500/15 text-orange-400 border border-orange-500/40"
+              title="In canonical fixVersions but not in Target FixVersion — unplanned addition / late cherry-pick"
+            >
+              ⚡ Unplanned
+            </span>
+          )}
+          {t.zohoRef && <ZohoBadge refData={t.zohoRef} />}
+        </div>
       </td>
 
       {/* Title */}
@@ -567,5 +594,50 @@ function TicketRow({ ticket: t }: { ticket: VerifiedTicket }) {
         </div>
       </td>
     </tr>
+  )
+}
+
+function ZohoBadge({ refData }: { refData: ZohoRef }) {
+  const baseClasses = "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono border w-fit"
+
+  if (refData.kind === 'url' && refData.zohoUrl) {
+    return (
+      <a
+        href={refData.zohoUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={e => e.stopPropagation()}
+        className={cn(baseClasses, "bg-orange-500/10 text-orange-400 border-orange-500/30 hover:bg-orange-500/20")}
+        title={`Open Zoho ticket ${refData.id}`}
+      >
+        <span>Zoho</span>
+        <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+          <polyline points="15 3 21 3 21 9"/>
+          <line x1="10" y1="14" x2="21" y2="3"/>
+        </svg>
+      </a>
+    )
+  }
+
+  if (refData.kind === 'ticketNumber') {
+    return (
+      <span
+        className={cn(baseClasses, "bg-blue-500/10 text-blue-400 border-blue-500/30")}
+        title={`Zoho short-form ref — copy ${refData.ticketNumber} and search in Zoho Desk`}
+      >
+        {refData.ticketNumber}
+      </span>
+    )
+  }
+
+  // Unparseable — someone pasted garbage into customfield_10691
+  return (
+    <span
+      className={cn(baseClasses, "bg-muted/30 text-muted-foreground/70 border-muted/50 italic")}
+      title={`Unparseable Zoho ref in JIRA: ${refData.raw}`}
+    >
+      Zoho ?
+    </span>
   )
 }

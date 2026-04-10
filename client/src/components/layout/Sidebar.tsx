@@ -5,6 +5,7 @@ import { NectarIcon } from '../NectarLoader'
 const links = [
   { to: '/', label: 'Releases', icon: '📦' },
   { to: '/calendar', label: 'Calendar', icon: '📅' },
+  { to: '/tickets', label: 'Tickets', icon: '🎯' },
   { to: '/customers', label: 'Customers', icon: '🏢' },
   { to: '/features', label: 'Features', icon: '🚩' },
   { to: '/integrations', label: 'Integrations', icon: '🔌' },
