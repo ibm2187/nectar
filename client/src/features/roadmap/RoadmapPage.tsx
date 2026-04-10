@@ -58,7 +58,7 @@ export function RoadmapPage() {
 
   const search = searchParams.get('q') || ''
   const customerFilter = searchParams.get('customer') || ''
-  const zoom = (searchParams.get('zoom') as 'month' | 'quarter') || 'month'
+  const zoom = (searchParams.get('zoom') as 'week' | 'month' | 'quarter') || 'month'
 
   const [data, setData] = useState<RoadmapResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -106,11 +106,36 @@ export function RoadmapPage() {
     })
   }, [data, search])
 
-  // ── Determine visible month columns ───────────────────
-  const visibleMonths = useMemo(() => {
+  // ── Generate week columns ──────────────────────────────
+  const weekColumns = useMemo((): MonthColumn[] => {
+    // 12 weeks forward from Monday of the current week
+    const now = new Date()
+    const day = now.getDay()
+    const monday = new Date(now)
+    monday.setDate(now.getDate() - ((day + 6) % 7)) // Roll back to Monday
+    monday.setHours(0, 0, 0, 0)
+
+    const weeks: MonthColumn[] = []
+    for (let i = 0; i < 12; i++) {
+      const start = new Date(monday)
+      start.setDate(monday.getDate() + i * 7)
+      const end = new Date(start)
+      end.setDate(start.getDate() + 6)
+
+      const startStr = start.toISOString().slice(0, 10)
+      const endStr = end.toISOString().slice(0, 10)
+
+      const label = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      weeks.push({ key: `w-${startStr}`, label, start: startStr, end: endStr })
+    }
+    return weeks
+  }, [])
+
+  // ── Determine visible time columns ───────────────────
+  const visibleColumns = useMemo(() => {
     if (!data) return []
+    if (zoom === 'week') return weekColumns
     if (zoom === 'quarter') {
-      // Group months into quarters
       const quarters: MonthColumn[] = []
       for (let i = 0; i < data.months.length; i += 3) {
         const batch = data.months.slice(i, i + 3)
@@ -124,9 +149,9 @@ export function RoadmapPage() {
       }
       return quarters
     }
-    // Show 6 months by default (24 weeks)
+    // Month view: show 6 months
     return data.months.slice(0, 6)
-  }, [data, zoom])
+  }, [data, zoom, weekColumns])
 
   function toggleTheme(name: string) {
     setCollapsedThemes(prev => {
@@ -170,8 +195,15 @@ export function RoadmapPage() {
           <div className="flex rounded-md border text-xs">
             <button
               type="button"
+              onClick={() => updateParams({ zoom: 'week' })}
+              className={cn("px-3 py-1.5 rounded-l-md transition-colors", zoom === 'week' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+            >
+              Week
+            </button>
+            <button
+              type="button"
               onClick={() => updateParams({ zoom: null })}
-              className={cn("px-3 py-1.5 rounded-l-md transition-colors", zoom === 'month' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+              className={cn("px-3 py-1.5 border-l transition-colors", zoom === 'month' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
             >
               Month
             </button>
@@ -239,10 +271,13 @@ export function RoadmapPage() {
             <div className="w-52 shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Theme
             </div>
-            {visibleMonths.map(m => (
+            {visibleColumns.map(m => (
               <div
                 key={m.key}
-                className="flex-1 min-w-[140px] px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center border-l"
+                className={cn(
+                  "flex-1 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center border-l",
+                  zoom === 'week' ? "min-w-[110px]" : "min-w-[140px]"
+                )}
               >
                 {m.label}
               </div>
@@ -263,9 +298,10 @@ export function RoadmapPage() {
               <ThemeRow
                 key={theme.name}
                 theme={theme}
-                months={visibleMonths}
+                months={visibleColumns}
                 collapsed={collapsedThemes.has(theme.name)}
                 onToggle={() => toggleTheme(theme.name)}
+                isWeekView={zoom === 'week'}
               />
             ))
           )}
@@ -287,17 +323,32 @@ export function RoadmapPage() {
 
 // ── Theme row ──────────────────────────────────────────
 
-function ThemeRow({ theme, months, collapsed, onToggle }: {
+function ThemeRow({ theme, months, collapsed, onToggle, isWeekView }: {
   theme: Theme
   months: MonthColumn[]
   collapsed: boolean
   onToggle: () => void
+  isWeekView?: boolean
 }) {
-  // Check which month keys have cards
-  function getCardsForMonth(monthCol: MonthColumn): ReleaseCard[] {
+  // Get cards that fall within a time column's date range
+  function getCardsForColumn(col: MonthColumn): ReleaseCard[] {
     if (!theme.months) return []
-    // For quarter view, monthCol.key is "2026-04,2026-05,2026-06"
-    const keys = monthCol.key.split(',')
+
+    if (isWeekView) {
+      // For week view: scan ALL month buckets and match by jiraReleaseDate range
+      const cards: ReleaseCard[] = []
+      for (const [, monthCards] of Object.entries(theme.months)) {
+        for (const card of monthCards) {
+          if (card.jiraReleaseDate && card.jiraReleaseDate >= col.start && card.jiraReleaseDate <= col.end) {
+            cards.push(card)
+          }
+        }
+      }
+      return cards
+    }
+
+    // For month/quarter view: lookup by month key(s)
+    const keys = col.key.split(',')
     const cards: ReleaseCard[] = []
     for (const k of keys) {
       cards.push(...(theme.months[k] || []))
@@ -338,11 +389,11 @@ function ThemeRow({ theme, months, collapsed, onToggle }: {
 
       {/* Month cells */}
       {months.map(m => {
-        const cards = getCardsForMonth(m)
+        const cards = getCardsForColumn(m)
         return (
           <div
             key={m.key}
-            className="flex-1 min-w-[140px] px-1.5 py-2 border-l"
+            className={cn("flex-1 px-1.5 py-2 border-l", isWeekView ? "min-w-[110px]" : "min-w-[140px]")}
           >
             {!collapsed && cards.map(card => (
               <ReleaseCardView key={`${card.repo}:${card.version}`} card={card} />
