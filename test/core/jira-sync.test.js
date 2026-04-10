@@ -179,6 +179,52 @@ describe('JiraSync', () => {
     });
   });
 
+  describe('ticket pruning', () => {
+    it('removes tickets that JIRA no longer returns for a version', async () => {
+      releases.create({ repo: 'webplatform', version: '4.2.3' });
+      // Simulate a prior sync that added DEV-100 and DEV-200
+      releases.addTicket('webplatform:4.2.3', { key: 'DEV-100', summary: 'Old', source: 'jira', fixVersions: ['4.2.3'] });
+      releases.addTicket('webplatform:4.2.3', { key: 'DEV-200', summary: 'Removed', source: 'jira', fixVersions: ['4.2.3'] });
+
+      // Now JIRA only returns DEV-100 (DEV-200 had its fixVersion removed)
+      mockJira.getIssuesForVersion.mockResolvedValue([
+        {
+          key: 'DEV-100',
+          fields: {
+            summary: 'Old',
+            status: { name: 'Done' },
+            issuetype: { name: 'Bug' },
+            assignee: null,
+            fixVersions: [{ name: '4.2.3' }],
+            labels: [],
+          },
+        },
+      ]);
+
+      await jiraSync._syncVersionTickets('4.2.3');
+
+      const release = releases.get('4.2.3', 'webplatform');
+      expect(release.tickets).toHaveLength(1);
+      expect(release.tickets[0].key).toBe('DEV-100');
+    });
+
+    it('also prunes stale tickets from sharing repos', async () => {
+      releases.create({ repo: 'webplatform', version: '4.2.3' });
+      releases.create({ repo: 'bluesummit', version: '4.2.3', branch: 'VIV/4.2.3' });
+
+      // Simulate prior sync
+      releases.addTicket('bluesummit:4.2.3', { key: 'DEV-300', summary: 'Stale', source: 'jira', fixVersions: ['4.2.3'] });
+
+      // JIRA returns empty for this version
+      mockJira.getIssuesForVersion.mockResolvedValue([]);
+
+      await jiraSync._syncVersionTickets('4.2.3');
+
+      const bsRelease = releases.get('4.2.3', 'bluesummit');
+      expect(bsRelease.tickets.filter(t => t.source === 'jira')).toHaveLength(0);
+    });
+  });
+
   describe('_transitionPath', () => {
     it('returns path from planning to done', () => {
       const path = jiraSync._transitionPath('planning', 'done');

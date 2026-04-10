@@ -24,8 +24,6 @@ class JiraSync extends EventEmitter {
     this._running = false;
     this.lastRun = null;
     this.lastResults = null;
-    // Track last sync time per version for incremental updates
-    this.lastSyncTimes = new Map(); // versionName → ISO timestamp
   }
 
   start() {
@@ -216,25 +214,23 @@ class JiraSync extends EventEmitter {
   }
 
   /**
-   * Sync all tickets for a version with pagination + incremental.
+   * Sync all tickets for a JIRA version.
+   *
+   * Always does a full sync (no incremental) — pulls every ticket that
+   * currently references this version via fixVersion OR Target FixVersion,
+   * updates all fields, and prunes tickets that no longer belong.
+   *
+   * This ensures removals (fixVersion changed in JIRA) are detected on
+   * every cycle, not just on manual Refresh.
    */
   async _syncVersionTickets(versionName) {
-    const lastSync = this.lastSyncTimes.get(versionName);
-    const isIncremental = !!lastSync;
+    this.emit('sync:version-started', versionName, { incremental: false });
 
-    this.emit('sync:version-started', versionName, { incremental: isIncremental });
-
-    const opts = {
+    const issues = await this.jira.getIssuesForVersion(versionName, {
       onPage: (fetched, total) => {
         this.emit('sync:version-progress', versionName, { fetched, total });
       },
-    };
-
-    if (isIncremental) {
-      opts.updatedSince = lastSync;
-    }
-
-    const issues = await this.jira.getIssuesForVersion(versionName, opts);
+    });
 
     // Find the release — strict repo match
     const { repo, cleanVersion } = this._parseVersionName(versionName);
@@ -244,9 +240,11 @@ class JiraSync extends EventEmitter {
       return { tickets: 0, updated: 0 };
     }
 
-    const key = this.releases._key(release.repo, release.version);
+    const releaseKey = this.releases._key(release.repo, release.version);
     let updated = 0;
 
+    // Build normalized ticket data
+    const syncedTickets = [];
     for (const issue of issues) {
       const normalized = JiraClient.normalizeIssue(issue);
       const ticketData = {
@@ -264,29 +262,23 @@ class JiraSync extends EventEmitter {
         source: 'jira',
         jiraSyncedAt: new Date().toISOString(),
       };
-      this.releases.addTicket(key, ticketData, 'jira-sync');
+      this.releases.addTicket(releaseKey, ticketData, 'jira-sync');
+      syncedTickets.push(ticketData);
       updated++;
     }
 
-    // On full (non-incremental) syncs, prune tickets that no longer reference
-    // this version — handles the case where fixVersion was removed in JIRA.
-    if (!isIncremental && issues.length > 0) {
-      const freshKeys = new Set(issues.map(i => i.key));
-      const before = release.tickets.length;
-      release.tickets = release.tickets.filter(t => {
-        if (t.source !== 'jira') return true;
-        // Keep if JIRA returned it in this sync
-        if (freshKeys.has(t.key)) return true;
-        // Keep if it was synced recently by another version (shared ticket)
-        // Remove if it only existed because of a stale fixVersion reference
-        const fv = Array.isArray(t.fixVersions) ? t.fixVersions : [];
-        const tv = Array.isArray(t.targetFixVersions) ? t.targetFixVersions : [];
-        return fv.includes(cleanVersion) || tv.includes(cleanVersion);
-      });
-      const pruned = before - release.tickets.length;
-      if (pruned > 0) {
-        log.info(`JIRA sync: ${versionName} — pruned ${pruned} stale tickets`);
-      }
+    // Prune tickets that JIRA no longer returns for this version.
+    // This catches fixVersion removals, ticket deletions, etc.
+    const freshKeys = new Set(issues.map(i => i.key));
+    const before = release.tickets.length;
+    release.tickets = release.tickets.filter(t => {
+      if (t.source !== 'jira') return true;
+      return freshKeys.has(t.key);
+    });
+    const pruned = before - release.tickets.length;
+    if (pruned > 0) {
+      log.info(`JIRA sync: ${versionName} — pruned ${pruned} stale tickets`);
+      this.releases._debounceSave();
     }
 
     // Also sync to repos that share this version number (e.g., bluesummit ← webplatform)
@@ -294,41 +286,30 @@ class JiraSync extends EventEmitter {
       const sharingRelease = this.releases.get(cleanVersion, sharingRepo);
       if (sharingRelease) {
         const sharingKey = this.releases._key(sharingRelease.repo, sharingRelease.version);
-        for (const issue of issues) {
-          const normalized = JiraClient.normalizeIssue(issue);
-          this.releases.addTicket(sharingKey, {
-            key: normalized.key,
-            summary: normalized.summary,
-            state: JiraClient.mapStatus(normalized.status),
-            jiraStatus: normalized.status,
-            type: normalized.type,
-            assignee: normalized.assignee,
-            fixVersions: normalized.fixVersions,
-            targetFixVersions: normalized.targetFixVersions,
-            component: normalized.component,
-            customerTags: normalized.customerTags,
-            zohoRef: normalized.zohoRef,
-            source: 'jira',
-            jiraSyncedAt: new Date().toISOString(),
-          }, 'jira-sync');
+        for (const td of syncedTickets) {
+          this.releases.addTicket(sharingKey, td, 'jira-sync');
         }
-        if (issues.length > 0) {
-          log.info(`JIRA sync: ${versionName} — also synced ${issues.length} tickets to ${sharingRepo}:${cleanVersion}`);
+        // Prune sharing release too
+        const sBefore = sharingRelease.tickets.length;
+        sharingRelease.tickets = sharingRelease.tickets.filter(t => {
+          if (t.source !== 'jira') return true;
+          return freshKeys.has(t.key);
+        });
+        const sPruned = sBefore - sharingRelease.tickets.length;
+        if (issues.length > 0 || sPruned > 0) {
+          log.info(`JIRA sync: ${versionName} — synced ${syncedTickets.length} tickets to ${sharingRepo}:${cleanVersion}${sPruned > 0 ? `, pruned ${sPruned}` : ''}`);
         }
       }
     }
 
-    // Log when tickets were added to help trace sync issues
-    if (issues.length > 0) {
-      log.info(`JIRA sync: ${versionName} — ${updated} tickets synced (${isIncremental ? 'incremental' : 'full'}, release has ${release.tickets.length} total)`);
+    if (issues.length > 0 || pruned > 0) {
+      log.info(`JIRA sync: ${versionName} — ${updated} tickets synced, release has ${release.tickets.length} total${pruned > 0 ? ` (pruned ${pruned})` : ''}`);
     }
-
-    this.lastSyncTimes.set(versionName, new Date().toISOString());
 
     this.emit('sync:version-done', versionName, {
       tickets: issues.length,
       updated,
-      incremental: isIncremental,
+      pruned,
     });
 
     return { tickets: issues.length, updated };
