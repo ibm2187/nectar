@@ -62,6 +62,40 @@ export const useWsStore = create<WsState>((set) => ({
 
 let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let reconnectDelay = 1000
+let pingTimer: ReturnType<typeof setInterval> | null = null
+let lastPong = 0
+
+const MIN_RECONNECT = 1000
+const MAX_RECONNECT = 60000
+
+function resetReconnectDelay() {
+  reconnectDelay = MIN_RECONNECT
+}
+
+function nextReconnectDelay() {
+  const delay = reconnectDelay
+  reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT)
+  return delay
+}
+
+function startHeartbeat() {
+  stopHeartbeat()
+  lastPong = Date.now()
+  pingTimer = setInterval(() => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    // If no pong in 45s, connection is dead — force reconnect
+    if (Date.now() - lastPong > 45000) {
+      ws.close()
+      return
+    }
+    ws.send(JSON.stringify({ type: 'ping' }))
+  }, 30000)
+}
+
+function stopHeartbeat() {
+  if (pingTimer) { clearInterval(pingTimer); pingTimer = null }
+}
 
 export function connectWebSocket() {
   const store = useWsStore.getState()
@@ -70,11 +104,19 @@ export function connectWebSocket() {
 
   ws.onopen = () => {
     store.setConnected(true)
+    resetReconnectDelay()
+    startHeartbeat()
   }
 
   ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data)
+    let msg
+    try { msg = JSON.parse(event.data) } catch { return }
     const s = useWsStore.getState()
+
+    if (msg.type === 'pong') {
+      lastPong = Date.now()
+      return
+    }
 
     switch (msg.type) {
       case 'init':
@@ -113,8 +155,10 @@ export function connectWebSocket() {
 
   ws.onclose = () => {
     store.setConnected(false)
+    stopHeartbeat()
     ws = null
-    reconnectTimer = setTimeout(connectWebSocket, 3000)
+    const delay = nextReconnectDelay()
+    reconnectTimer = setTimeout(connectWebSocket, delay)
   }
 
   ws.onerror = () => {
@@ -123,6 +167,8 @@ export function connectWebSocket() {
 }
 
 export function disconnectWebSocket() {
-  if (reconnectTimer) clearTimeout(reconnectTimer)
+  stopHeartbeat()
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   ws?.close()
+  ws = null
 }

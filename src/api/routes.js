@@ -1,7 +1,13 @@
 const { Router } = require('express');
+const log = require('../core/log');
 const ReleaseManager = require('../core/release');
 const { annotateReleases } = require('../core/release-status');
 const { aggregateFeatureFlags, aggregateIntegrations } = require('../core/feature-aggregator');
+
+/** Wrap async route handlers so rejected promises become proper error responses */
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
 
 /**
  * REST API routes — primary consumer is Hive.
@@ -132,14 +138,10 @@ module.exports = function createRoutes(services, config) {
   });
 
   // POST /api/releases/:version/cherry-pick/sync — force-sync from GitHub
-  router.post('/releases/:version/cherry-pick/sync', async (req, res) => {
-    try {
-      const count = await cherryPickWatcher.syncRelease(req.params.version);
-      res.json({ ok: true, synced: count });
-    } catch (err) {
-      res.status(400).json({ error: err.message });
-    }
-  });
+  router.post('/releases/:version/cherry-pick/sync', asyncHandler(async (req, res) => {
+    const count = await cherryPickWatcher.syncRelease(req.params.version);
+    res.json({ ok: true, synced: count });
+  }));
 
   // ── Approvals ─────────────────────────────────────────
 
@@ -173,7 +175,7 @@ module.exports = function createRoutes(services, config) {
 
   // ── Risk assessment ───────────────────────────────────
 
-  router.get('/releases/:version/risk', async (req, res) => {
+  router.get('/releases/:version/risk', asyncHandler(async (req, res) => {
     const release = releases.get(req.params.version);
     if (!release) return res.status(404).json({ error: 'Release not found' });
 
@@ -192,18 +194,14 @@ module.exports = function createRoutes(services, config) {
     }
 
     res.json(release.risk);
-  });
+  }));
 
   // ── Validation ────────────────────────────────────────
 
-  router.get('/releases/:version/validate', async (req, res) => {
-    try {
-      const report = await validator.validate(req.params.version);
-      res.json(report);
-    } catch (err) {
-      res.status(400).json({ error: err.message });
-    }
-  });
+  router.get('/releases/:version/validate', asyncHandler(async (req, res) => {
+    const report = await validator.validate(req.params.version);
+    res.json(report);
+  }));
 
   // ── Release notes (Phase 2 stub) ─────────────────────
 
@@ -290,15 +288,11 @@ module.exports = function createRoutes(services, config) {
 
   // ── Webplatform scan ──────────────────────────────────
 
-  router.post('/webplatform/scan', async (req, res) => {
-    try {
-      const scanResults = await webplatformScanner.scan();
-      const applied = customerStore.applyScanResults(scanResults);
-      res.json({ ok: true, ...applied, scanStatus: webplatformScanner.getStatus() });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  router.post('/webplatform/scan', asyncHandler(async (req, res) => {
+    const scanResults = await webplatformScanner.scan();
+    const applied = customerStore.applyScanResults(scanResults);
+    res.json({ ok: true, ...applied, scanStatus: webplatformScanner.getStatus() });
+  }));
 
   router.get('/webplatform/scan/status', (req, res) => {
     res.json(webplatformScanner.getStatus() || { neverRun: true });
@@ -306,14 +300,10 @@ module.exports = function createRoutes(services, config) {
 
   // ── Environment poller ────────────────────────────────
 
-  router.post('/environments/poll', async (req, res) => {
-    try {
-      const results = await envPoller.run();
-      res.json({ ok: true, ...results });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  router.post('/environments/poll', asyncHandler(async (req, res) => {
+    const results = await envPoller.run();
+    res.json({ ok: true, ...results });
+  }));
 
   router.get('/environments/poll/status', (req, res) => {
     res.json(envPoller.getStatus());
@@ -344,13 +334,12 @@ module.exports = function createRoutes(services, config) {
   // ── Upgrade script content (from local webplatform clone) ─
   // Reads the actual script file from master so users can see the code.
   // Extracts the JIRA key from the git commit message (reliable, not filename).
-  router.get('/upgrades/:upgradeName/source', async (req, res) => {
-    try {
-      const upgradeName = req.params.upgradeName;
-      // Sanitize — no path traversal, no absolute paths
-      if (upgradeName.includes('..') || upgradeName.startsWith('/')) {
-        return res.status(400).json({ error: 'Invalid upgrade name' });
-      }
+  router.get('/upgrades/:upgradeName/source', asyncHandler(async (req, res) => {
+    const upgradeName = req.params.upgradeName;
+    // Sanitize — no path traversal, no absolute paths
+    if (upgradeName.includes('..') || upgradeName.startsWith('/')) {
+      return res.status(400).json({ error: 'Invalid upgrade name' });
+    }
 
       // The file could have .upgrade.js suffix or not — try both
       const candidates = upgradeName.endsWith('.upgrade.js')
@@ -400,10 +389,7 @@ module.exports = function createRoutes(services, config) {
         introAuthor,
         introDate,
       });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  }));
 
   // ── Ticket lookup ─────────────────────────────────────
 
@@ -438,41 +424,29 @@ module.exports = function createRoutes(services, config) {
     res.json(discovery.getStatus());
   });
 
-  router.post('/discover', async (req, res) => {
-    try {
-      const results = await discovery.run();
-      res.json(results);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  router.post('/discover', asyncHandler(async (req, res) => {
+    const results = await discovery.run();
+    res.json(results);
+  }));
 
   // ── Release Truth ──────────────────────────────────────
 
-  router.get('/releases/:repo/:version/truth', async (req, res) => {
-    try {
-      const truth = await releaseTruth.compute(req.params.repo, req.params.version);
-      res.json(truth);
-    } catch (err) {
-      res.status(400).json({ error: err.message });
-    }
-  });
+  router.get('/releases/:repo/:version/truth', asyncHandler(async (req, res) => {
+    const truth = await releaseTruth.compute(req.params.repo, req.params.version);
+    res.json(truth);
+  }));
 
   // Deployment impact — diff between target release and current prod version
-  router.get('/releases/:repo/:version/impact', async (req, res) => {
-    try {
-      const { prodVersion } = req.query;
-      if (!prodVersion) {
-        return res.status(400).json({ error: 'prodVersion query parameter is required' });
-      }
-      const impact = await releaseTruth.computeImpact(
-        req.params.repo, req.params.version, prodVersion
-      );
-      res.json(impact);
-    } catch (err) {
-      res.status(400).json({ error: err.message });
+  router.get('/releases/:repo/:version/impact', asyncHandler(async (req, res) => {
+    const { prodVersion } = req.query;
+    if (!prodVersion) {
+      return res.status(400).json({ error: 'prodVersion query parameter is required' });
     }
-  });
+    const impact = await releaseTruth.computeImpact(
+      req.params.repo, req.params.version, prodVersion
+    );
+    res.json(impact);
+  }));
 
   // ── JIRA Sync ──────────────────────────────────────────
 
@@ -480,77 +454,64 @@ module.exports = function createRoutes(services, config) {
     res.json(jiraSync.getStatus());
   });
 
-  router.post('/jira/sync', async (req, res) => {
-    try {
-      const results = await jiraSync.run();
-      res.json(results);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  router.post('/jira/sync', asyncHandler(async (req, res) => {
+    const results = await jiraSync.run();
+    res.json(results);
+  }));
 
   // ── Issues (self-service bug/feedback on mavencare/nectar) ──
 
-  router.get('/issues', async (req, res) => {
+  router.get('/issues', asyncHandler(async (req, res) => {
     if (!github || !github.isConfigured()) {
       return res.status(503).json({ error: 'GitHub integration not configured' });
     }
-    try {
-      const { state = 'open', labels } = req.query;
-      const issues = await github.listIssues({
-        state,
-        labels: labels || null,
-        repoPath: NECTAR_REPO,
-      });
-      // Project down to only the fields the UI needs
-      const slim = issues.map(i => ({
-        number: i.number,
-        title: i.title,
-        body: i.body,
-        state: i.state,
-        url: i.html_url,
-        createdAt: i.created_at,
-        updatedAt: i.updated_at,
-        closedAt: i.closed_at,
-        comments: i.comments,
-        author: i.user ? { login: i.user.login, avatarUrl: i.user.avatar_url } : null,
-        labels: (i.labels || []).map(l => ({
-          name: typeof l === 'string' ? l : l.name,
-          color: typeof l === 'string' ? null : l.color,
-        })),
-      }));
-      res.json({ repo: NECTAR_REPO, issues: slim });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+    const { state = 'open', labels } = req.query;
+    const issues = await github.listIssues({
+      state,
+      labels: labels || null,
+      repoPath: NECTAR_REPO,
+    });
+    const slim = issues.map(i => ({
+      number: i.number,
+      title: i.title,
+      body: i.body,
+      state: i.state,
+      url: i.html_url,
+      createdAt: i.created_at,
+      updatedAt: i.updated_at,
+      closedAt: i.closed_at,
+      comments: i.comments,
+      author: i.user ? { login: i.user.login, avatarUrl: i.user.avatar_url } : null,
+      labels: (i.labels || []).map(l => ({
+        name: typeof l === 'string' ? l : l.name,
+        color: typeof l === 'string' ? null : l.color,
+      })),
+    }));
+    res.json({ repo: NECTAR_REPO, issues: slim });
+  }));
 
-  router.post('/issues', async (req, res) => {
+  router.post('/issues', asyncHandler(async (req, res) => {
     if (!github || !github.isConfigured()) {
       return res.status(503).json({ error: 'GitHub integration not configured' });
     }
-    try {
-      const { title, body, labels } = req.body || {};
-      if (!title || !title.trim()) {
-        return res.status(400).json({ error: 'title is required' });
-      }
-      const issue = await github.createIssue({
-        title: title.trim(),
-        body: body || '',
-        labels: Array.isArray(labels) ? labels : [],
-        repoPath: NECTAR_REPO,
-      });
-      res.status(201).json({
-        number: issue.number,
-        title: issue.title,
-        url: issue.html_url,
-        state: issue.state,
-        createdAt: issue.created_at,
-      });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    const { title, body, labels } = req.body || {};
+    if (!title || !title.trim()) {
+      return res.status(400).json({ error: 'title is required' });
     }
-  });
+    const issue = await github.createIssue({
+      title: title.trim(),
+      body: body || '',
+      labels: Array.isArray(labels) ? labels : [],
+      repoPath: NECTAR_REPO,
+    });
+    res.status(201).json({
+      number: issue.number,
+      title: issue.title,
+      url: issue.html_url,
+      state: issue.state,
+      createdAt: issue.created_at,
+    });
+  }));
 
   // ── Tickets aggregation (across all unreleased releases) ─
 
@@ -881,6 +842,18 @@ module.exports = function createRoutes(services, config) {
       states: ReleaseManager.STATES,
       transitions: ReleaseManager.TRANSITIONS,
     });
+  });
+
+  // ── Global error handler ─────────────────────────────
+  // Catches unhandled errors from asyncHandler and any throw in sync routes
+  router.use((err, req, res, _next) => {
+    const status = err.statusCode || 500;
+    const message = err.message || 'Internal server error';
+    if (status >= 500) {
+      log.error(`API error [${req.method} ${req.path}]:`, message);
+      if (err.stack) log.error(err.stack);
+    }
+    res.status(status).json({ error: message });
   });
 
   return router;

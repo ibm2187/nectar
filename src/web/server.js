@@ -2,6 +2,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { WebSocketServer } = require('ws');
 const log = require('../core/log');
 
@@ -18,7 +19,28 @@ function createWebServer(services, config) {
   const token = process.env.WEB_TOKEN;
 
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '1mb' }));
+
+  // ── Rate limiting ────────────────────────────────────
+  const apiLimiter = rateLimit({
+    windowMs: 60 * 1000,   // 1 minute
+    max: 200,              // 200 requests per minute per IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests, please try again later' },
+  });
+  app.use('/api/', apiLimiter);
+
+  // Stricter limit for mutation endpoints
+  const mutateLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    message: { error: 'Too many write requests, please slow down' },
+  });
+  app.use('/api/releases', (req, res, next) => {
+    if (req.method !== 'GET') return mutateLimiter(req, res, next);
+    next();
+  });
 
   // ── REST API ──────────────────────────────────────────
   const apiRoutes = require('../api/routes');
@@ -30,15 +52,28 @@ function createWebServer(services, config) {
 
   // ── Health check ──────────────────────────────────────
   app.get('/health', (req, res) => {
+    const memUsage = process.memoryUsage();
     res.json({
       status: 'ok',
       uptime: process.uptime(),
       releases: releases.releases.size,
+      customers: customerStore ? customerStore.customers.size : 0,
+      environments: customerStore ? customerStore.environments.size : 0,
+      wsClients: clients.size,
+      memory: {
+        rss: Math.round(memUsage.rss / 1024 / 1024),
+        heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+      },
       integrations: {
         jira: services.jira.isConfigured(),
         github: services.github.isConfigured(),
         jenkins: services.jenkins.isConfigured(),
         slack: services.slack.isConfigured(),
+      },
+      lastSync: {
+        jira: jiraSync ? jiraSync.getStatus() : null,
+        discovery: discovery ? discovery.getStatus() : null,
+        envPoller: envPoller ? envPoller.getStatus() : null,
       },
     });
   });
@@ -79,8 +114,23 @@ function createWebServer(services, config) {
     }
   }
 
+  // Server-side heartbeat: ping every 30s, terminate unresponsive clients
+  const HEARTBEAT_INTERVAL = 30000;
+  const heartbeatTimer = setInterval(() => {
+    for (const ws of clients) {
+      if (ws._nectarAlive === false) {
+        ws.terminate();
+        clients.delete(ws);
+        continue;
+      }
+      ws._nectarAlive = false;
+      if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' }));
+    }
+  }, HEARTBEAT_INTERVAL);
+
   wss.on('connection', (ws) => {
     let authenticated = !token;
+    ws._nectarAlive = true;
 
     const authTimeout = token ? setTimeout(() => {
       if (!authenticated) {
@@ -107,8 +157,13 @@ function createWebServer(services, config) {
         return;
       }
 
+      ws._nectarAlive = true;
+
       if (msg.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong' }));
+      }
+      if (msg.type === 'pong') {
+        // Client responded to our heartbeat — already marked alive above
       }
     });
 
@@ -240,6 +295,7 @@ function createWebServer(services, config) {
     wss,
     broadcast,
     close: () => {
+      clearInterval(heartbeatTimer);
       httpServer.close();
       for (const ws of clients) ws.close();
     },

@@ -14,6 +14,7 @@ client/.vite/
 client/*.tsbuildinfo
 
 # Logs
+logs/
 *.log
 npm-debug.log*
 

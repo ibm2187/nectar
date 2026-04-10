@@ -339,9 +339,14 @@ class ReleaseManager extends EventEmitter {
       savedAt: new Date().toISOString(),
     };
     try {
-      fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
+      const json = JSON.stringify(data, null, 2);
+      const tmpFile = STATE_FILE + '.tmp';
+      fs.writeFileSync(tmpFile, json);
+      fs.renameSync(tmpFile, STATE_FILE);
     } catch (err) {
       log.error('Failed to save state:', err.message);
+      // Clean up tmp file if rename failed
+      try { fs.unlinkSync(STATE_FILE + '.tmp'); } catch { /* ok */ }
     }
   }
 

@@ -40,7 +40,16 @@ module.exports = function createWebhookRoutes(releases, github, config) {
 
   // ── JIRA webhook ────────────────────────────────────────
   // Receives issue:updated events
+  const jiraWebhookToken = process.env.JIRA_WEBHOOK_TOKEN;
   router.post('/jira', (req, res) => {
+    // Optional token-based auth for JIRA webhooks
+    if (jiraWebhookToken) {
+      const provided = req.query.token || req.headers['x-jira-token'];
+      if (provided !== jiraWebhookToken) {
+        return res.status(401).json({ error: 'Invalid JIRA webhook token' });
+      }
+    }
+
     const payload = req.body;
 
     if (payload.webhookEvent === 'jira:issue_updated' || payload.issue) {

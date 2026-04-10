@@ -51,9 +51,13 @@ class ThemeConfig {
       updatedAt: this.updatedAt,
     };
     try {
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2));
+      const json = JSON.stringify(data, null, 2);
+      const tmpFile = CONFIG_FILE + '.tmp';
+      fs.writeFileSync(tmpFile, json);
+      fs.renameSync(tmpFile, CONFIG_FILE);
     } catch (err) {
       log.error('Failed to save theme config:', err.message);
+      try { fs.unlinkSync(CONFIG_FILE + '.tmp'); } catch { /* ok */ }
     }
   }
 
