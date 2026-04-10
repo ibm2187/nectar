@@ -34,9 +34,13 @@ export function ReleaseDetail() {
   const location = useLocation()
 
   // Determine where to go back based on navigation state
-  const fromCalendar = (location.state as { from?: string } | null)?.from === 'calendar'
-  const backPath = fromCalendar ? '/calendar' : '/'
-  const backLabel = fromCalendar ? 'Back to calendar' : 'Back to releases'
+  const from = (location.state as { from?: string } | null)?.from
+  const backPaths: Record<string, { path: string; label: string }> = {
+    calendar: { path: '/calendar', label: 'Back to calendar' },
+    roadmap:  { path: '/roadmap',  label: 'Back to roadmap' },
+    tickets:  { path: '/tickets',  label: 'Back to tickets' },
+  }
+  const { path: backPath, label: backLabel } = backPaths[from || ''] || { path: '/', label: 'Back to releases' }
 
   // key can be "repo:version" or just "version"
   const release = useWsStore(s => {

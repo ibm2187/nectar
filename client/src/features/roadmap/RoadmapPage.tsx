@@ -394,6 +394,7 @@ function ReleaseCardView({ card }: { card: ReleaseCard }) {
   return (
     <Link
       to={`/releases/${encodeURIComponent(releaseKey)}`}
+      state={{ from: 'roadmap' }}
       className={cn(
         "block rounded-md border p-2 mb-1.5 transition-all hover:scale-[1.02] hover:shadow-sm cursor-pointer",
         statusColor
