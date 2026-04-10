@@ -42,14 +42,18 @@ describe('ThemeConfig', () => {
     expect(tc.resolveComponent('comp1')).toBe('A');
   });
 
-  it('autoGenerate creates themes from components', () => {
-    tc.autoGenerate(['RCM - Billing', 'Ascend - Billing', 'Portal - Dashboard']);
+  it('autoGenerate creates themes grouped by prefix', () => {
+    tc.autoGenerate(['RCM - Billing', 'RCM - Payroll', 'Ascend - Billing', 'Portal - Dashboard']);
     expect(tc.themes.length).toBeGreaterThan(0);
-    // "Billing" should group RCM and Ascend
-    const billing = tc.themes.find(t => t.name === 'Billing');
-    expect(billing).toBeDefined();
-    expect(billing.components).toContain('RCM - Billing');
-    expect(billing.components).toContain('Ascend - Billing');
+    // Groups by prefix: "RCM" should contain both RCM components
+    const rcm = tc.themes.find(t => t.name === 'RCM');
+    expect(rcm).toBeDefined();
+    expect(rcm.components).toContain('RCM - Billing');
+    expect(rcm.components).toContain('RCM - Payroll');
+    // Ascend is its own group
+    const ascend = tc.themes.find(t => t.name === 'Ascend');
+    expect(ascend).toBeDefined();
+    expect(ascend.components).toContain('Ascend - Billing');
   });
 
   it('autoGenerate does not overwrite existing config', () => {
@@ -89,5 +93,64 @@ describe('ThemeConfig', () => {
 
     writeSpy.mockRestore();
     renameSpy.mockRestore();
+  });
+
+  describe('suggestThemes (static)', () => {
+    const ThemeConfig = require('../../src/core/theme-config');
+
+    it('groups by prefix before dash separator', () => {
+      const suggestions = ThemeConfig.suggestThemes([
+        'RCM - Billing', 'RCM - Payroll', 'Ascend - Invoices',
+      ]);
+      expect(suggestions.find(t => t.name === 'RCM')).toBeDefined();
+      expect(suggestions.find(t => t.name === 'RCM').components).toHaveLength(2);
+      expect(suggestions.find(t => t.name === 'Ascend')).toBeDefined();
+    });
+
+    it('merges bare components into matching prefix group', () => {
+      const suggestions = ThemeConfig.suggestThemes([
+        'Messages', 'Messages - Chat', 'Messages - SMS',
+      ]);
+      const msgs = suggestions.find(t => t.name === 'Messages');
+      expect(msgs).toBeDefined();
+      expect(msgs.components).toHaveLength(3);
+      expect(msgs.components).toContain('Messages');
+    });
+
+    it('groups by first word for non-dash components', () => {
+      const suggestions = ThemeConfig.suggestThemes([
+        'AI Agents', 'AI CoPilot', 'AI Forms',
+      ]);
+      const ai = suggestions.find(t => t.name === 'AI');
+      expect(ai).toBeDefined();
+      expect(ai.components).toHaveLength(3);
+    });
+
+    it('puts true singletons in General', () => {
+      const suggestions = ThemeConfig.suggestThemes([
+        'Compliance', 'DevOps', 'OVM',
+      ]);
+      const general = suggestions.find(t => t.name === 'General');
+      expect(general).toBeDefined();
+      expect(general.components).toContain('Compliance');
+    });
+
+    it('excludes already-mapped components', () => {
+      const existing = [{ name: 'RCM', components: ['RCM - Billing'], icon: null }];
+      const suggestions = ThemeConfig.suggestThemes(
+        ['RCM - Billing', 'RCM - Payroll', 'Ascend - Invoices'],
+        existing,
+      );
+      // RCM - Billing is already mapped, so only RCM - Payroll should appear
+      const rcm = suggestions.find(t => t.name === 'RCM');
+      expect(rcm).toBeDefined();
+      expect(rcm.components).toEqual(['RCM - Payroll']);
+      expect(rcm.components).not.toContain('RCM - Billing');
+    });
+
+    it('returns empty when all components are mapped', () => {
+      const existing = [{ name: 'All', components: ['A', 'B'], icon: null }];
+      expect(ThemeConfig.suggestThemes(['A', 'B'], existing)).toEqual([]);
+    });
   });
 });

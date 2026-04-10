@@ -835,6 +835,23 @@ module.exports = function createRoutes(services, config) {
     }
   });
 
+  // Auto-categorize: suggest theme groupings from all observed JIRA components
+  router.post('/config/themes/auto', (req, res) => {
+    // Gather all observed components from active releases
+    const components = new Set();
+    for (const release of releases.list()) {
+      for (const ticket of release.tickets || []) {
+        if (ticket.component) components.add(ticket.component);
+      }
+    }
+    const ThemeConfig = require('../core/theme-config');
+    const suggestions = ThemeConfig.suggestThemes(
+      Array.from(components),
+      themeConfig.themes,
+    );
+    res.json({ suggestions, totalComponents: components.size });
+  });
+
   // ── Meta ──────────────────────────────────────────────
 
   router.get('/states', (req, res) => {

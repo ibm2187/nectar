@@ -28,6 +28,7 @@ export function ConfigPage() {
 
   // All observed components (from the roadmap endpoint)
   const [observedComponents, setObservedComponents] = useState<string[]>([])
+  const [autoLoading, setAutoLoading] = useState(false)
 
   async function load() {
     setLoading(true)
@@ -112,6 +113,55 @@ export function ConfigPage() {
     setDirty(true)
   }
 
+  async function autoCategorize() {
+    if (!config) return
+    setAutoLoading(true)
+    setError(null)
+    try {
+      const result = await apiFetch<{ suggestions: ThemeEntry[] }>('/config/themes/auto', {
+        method: 'POST',
+      })
+      if (result.suggestions.length === 0) {
+        setSaveMsg('No new groupings found.')
+        setTimeout(() => setSaveMsg(null), 3000)
+        return
+      }
+      // Merge suggestions into existing themes
+      const merged = [...config.themes]
+      for (const suggestion of result.suggestions) {
+        // Check if a theme with this name already exists
+        const existingIdx = merged.findIndex(t =>
+          t.name.toLowerCase() === suggestion.name.toLowerCase()
+        )
+        if (existingIdx >= 0) {
+          // Add new components to existing theme
+          const existing = new Set(merged[existingIdx].components.map(c => c.toLowerCase()))
+          const newComps = suggestion.components.filter(c => !existing.has(c.toLowerCase()))
+          if (newComps.length > 0) {
+            merged[existingIdx] = {
+              ...merged[existingIdx],
+              components: [...merged[existingIdx].components, ...newComps],
+            }
+          }
+        } else {
+          merged.push(suggestion)
+        }
+      }
+      merged.sort((a, b) => a.name.localeCompare(b.name))
+      setConfig({ ...config, themes: merged })
+      setDirty(true)
+      // Re-compute unmapped after merge
+      const mappedSet = new Set<string>()
+      for (const t of merged) for (const c of t.components) mappedSet.add(c)
+      setObservedComponents(prev => prev.filter(c => !mappedSet.has(c)))
+      setSaveMsg(`Added ${result.suggestions.length} theme groups. Review and save.`)
+      setTimeout(() => setSaveMsg(null), 5000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Auto-categorize failed')
+    }
+    setAutoLoading(false)
+  }
+
   function assignUnmapped(component: string, themeIndex: number) {
     if (!config) return
     const updated = [...config.themes]
@@ -157,6 +207,9 @@ export function ConfigPage() {
         <div className="flex items-center gap-2">
           {saveMsg && <span className="text-xs text-green-400">{saveMsg}</span>}
           {error && <span className="text-xs text-destructive">{error}</span>}
+          <Button variant="outline" size="sm" onClick={autoCategorize} disabled={saving || autoLoading}>
+            {autoLoading ? 'Categorizing...' : 'Auto-categorize'}
+          </Button>
           <Button variant="outline" size="sm" onClick={load} disabled={saving}>Reset</Button>
           <Button size="sm" onClick={save} disabled={saving || !dirty}>
             {saving ? 'Saving...' : dirty ? 'Save Changes' : 'Saved'}
