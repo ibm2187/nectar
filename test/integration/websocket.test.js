@@ -63,6 +63,8 @@ describe('WebSocket Integration', () => {
 
   beforeAll(async () => {
     delete process.env.WEB_TOKEN;
+    // Use a random high port to avoid conflicts with running Nectar instance
+    process.env.WEB_PORT = String(40000 + Math.floor(Math.random() * 20000));
     const { createWebServer } = require('../../src/web/server');
     const services = createMinimalServices();
     const config = {};

@@ -46,6 +46,19 @@ module.exports = {
       jiraProject: 'DEV',
       risk: {},
     },
+    {
+      name: 'bluesummit',
+      github: 'mavencare/bluesummit',
+      releaseBranchPrefix: 'VIV/',
+      versionSource: null, // No .version file — version derived from branch name
+      cherryPick: null,
+      ci: null,
+      jiraProject: 'DEV',
+      // BlueSummit releases share JIRA version numbers with webplatform.
+      // Tickets from DEV project fixVersions like "4.2.3" apply to both repos.
+      sharesVersionsWith: 'webplatform',
+      risk: {},
+    },
   ],
 
   // ── JIRA ────────────────────────────────────────────────

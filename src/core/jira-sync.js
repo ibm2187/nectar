@@ -197,6 +197,22 @@ class JiraSync extends EventEmitter {
         } catch { /* transition not possible */ }
       }
     }
+
+    // Also update JIRA metadata on repos that share version numbers.
+    // E.g., bluesummit shares versions with webplatform — if a bluesummit
+    // release exists for this version (created by discovery), tag it with
+    // the same JIRA metadata.
+    for (const sharingRepo of this._getVersionSharingRepos(repo)) {
+      const sharingRelease = this.releases.get(cleanVersion, sharingRepo);
+      if (sharingRelease) {
+        sharingRelease.jiraVersionId = jiraVersion.id;
+        sharingRelease.jiraVersionName = versionName;
+        sharingRelease.jiraReleased = jiraVersion.released;
+        sharingRelease.jiraReleaseDate = jiraVersion.releaseDate;
+        sharingRelease.jiraArchived = jiraVersion.archived;
+        sharingRelease.updatedAt = new Date().toISOString();
+      }
+    }
   }
 
   /**
@@ -252,6 +268,35 @@ class JiraSync extends EventEmitter {
       updated++;
     }
 
+    // Also sync to repos that share this version number (e.g., bluesummit ← webplatform)
+    for (const sharingRepo of this._getVersionSharingRepos(repo)) {
+      const sharingRelease = this.releases.get(cleanVersion, sharingRepo);
+      if (sharingRelease) {
+        const sharingKey = this.releases._key(sharingRelease.repo, sharingRelease.version);
+        for (const issue of issues) {
+          const normalized = JiraClient.normalizeIssue(issue);
+          this.releases.addTicket(sharingKey, {
+            key: normalized.key,
+            summary: normalized.summary,
+            state: JiraClient.mapStatus(normalized.status),
+            jiraStatus: normalized.status,
+            type: normalized.type,
+            assignee: normalized.assignee,
+            fixVersions: normalized.fixVersions,
+            targetFixVersions: normalized.targetFixVersions,
+            component: normalized.component,
+            customerTags: normalized.customerTags,
+            zohoRef: normalized.zohoRef,
+            source: 'jira',
+            jiraSyncedAt: new Date().toISOString(),
+          }, 'jira-sync');
+        }
+        if (issues.length > 0) {
+          log.info(`JIRA sync: ${versionName} — also synced ${issues.length} tickets to ${sharingRepo}:${cleanVersion}`);
+        }
+      }
+    }
+
     // Log when tickets were added to help trace sync issues
     if (issues.length > 0) {
       log.info(`JIRA sync: ${versionName} — ${updated} tickets synced (${isIncremental ? 'incremental' : 'full'}, release has ${release.tickets.length} total)`);
@@ -285,6 +330,17 @@ class JiraSync extends EventEmitter {
     }
     // Default: assume webplatform for bare version numbers
     return { repo: 'webplatform', cleanVersion: versionName };
+  }
+
+  /**
+   * Find repos that share JIRA version numbers with the primary repo.
+   * Used to sync tickets to both the primary and sharing repos.
+   */
+  _getVersionSharingRepos(primaryRepo) {
+    const repos = this.config.repos || [];
+    return repos
+      .filter(r => r.sharesVersionsWith === primaryRepo)
+      .map(r => r.name);
   }
 
   /**
