@@ -7,6 +7,7 @@ client/node_modules/
 .env.local
 .nectar-state.json
 .nectar-customers.json
+.nectar-themes.json
 
 # Build output
 client/dist/
