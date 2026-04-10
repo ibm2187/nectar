@@ -1,0 +1,24 @@
+[Unit]
+Description=Nectar Release Intelligence
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/nectar
+ExecStartPre=/bin/bash /home/ubuntu/nectar/cloud/scripts/boot.sh
+ExecStart=/usr/bin/node /home/ubuntu/nectar/src/index.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/home/ubuntu/nectar.log
+StandardError=append:/home/ubuntu/nectar.log
+Environment=NODE_ENV=production
+
+# Grant boot.sh enough time to fetch the secret from AWS Secrets Manager
+# (runs as the ubuntu user via ExecStartPre — inherits User=ubuntu above)
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
