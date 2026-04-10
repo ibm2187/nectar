@@ -11,6 +11,7 @@ import { EnvironmentDetailPage } from './features/customers/EnvironmentDetailPag
 import { IssuesPage } from './features/issues/IssuesPage'
 import { TicketsPage } from './features/tickets/TicketsPage'
 import { RoadmapPage } from './features/roadmap/RoadmapPage'
+import { ConfigPage } from './features/config/ConfigPage'
 import { connectWebSocket, disconnectWebSocket, useWsStore } from './stores/wsStore'
 
 declare global {
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/issues" element={<IssuesPage />} />
           <Route path="/tickets" element={<TicketsPage />} />
           <Route path="/roadmap" element={<RoadmapPage />} />
+          <Route path="/config" element={<ConfigPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
