@@ -29,9 +29,7 @@ resource "aws_instance" "nectar" {
     }
   }
 
-  user_data = base64encode(templatefile("${path.module}/../scripts/init.sh", {
-    repo_url = var.repo_url
-  }))
+  user_data = base64encode(file("${path.module}/../scripts/init.sh"))
 
   tags = {
     Name               = var.name

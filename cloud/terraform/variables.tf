@@ -82,9 +82,3 @@ variable "ebs_volume_size" {
   type        = number
   default     = 30
 }
-
-variable "repo_url" {
-  description = "HTTPS URL of the nectar git repo (used by init.sh)"
-  type        = string
-  default     = "https://github.com/mavencare/nectar.git"
-}

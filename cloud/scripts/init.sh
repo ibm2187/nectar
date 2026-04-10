@@ -8,7 +8,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 UBUNTU_HOME="/home/ubuntu"
 NECTAR_DIR="${UBUNTU_HOME}/nectar"
-REPO_URL="${repo_url}"
+REPO_URL="https://github.com/mavencare/nectar.git"
 
 log() { echo "[$(date '+%H:%M:%S')] $1"; }
 
