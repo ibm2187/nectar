@@ -15,7 +15,7 @@ const asyncHandler = (fn) => (req, res, next) => {
  * @param {object} config
  */
 module.exports = function createRoutes(services, config) {
-  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, releaseNotes, customerStore, webplatformScanner, envPoller, themeConfig, gamma, slack } = services;
+  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig } = services;
 
   // Nectar's own repo — used by the Issues page so users can file bugs/feedback.
   const NECTAR_REPO = 'mavencare/nectar';
@@ -203,7 +203,8 @@ module.exports = function createRoutes(services, config) {
     res.json(report);
   }));
 
-  // ── Release notes & presentation ─────────────────────
+  // ── Release notes ────────────────────────────────────
+  // Notes and presentation URLs are populated by Hive via the task queue (Phase 2).
 
   router.get('/releases/:version/notes', (req, res) => {
     const release = releases.get(req.params.version);
@@ -215,62 +216,6 @@ module.exports = function createRoutes(services, config) {
       generated: !!(release.notes || release.presentationUrl),
     });
   });
-
-  router.post('/releases/:version/presentation', asyncHandler(async (req, res) => {
-    const version = req.params.version;
-    const release = releases.get(version);
-    if (!release) return res.status(404).json({ error: 'Release not found' });
-    if (!release.repo) return res.status(400).json({ error: 'Release has no repo' });
-
-    const compareVersion = req.body.compareVersion || null;
-    const slackUserId = req.body.slackUserId || null;
-
-    // Step 1: Generate structured release notes
-    const { markdown, metadata } = await releaseNotes.generate(
-      release.repo, version, compareVersion
-    );
-
-    // Store the markdown on the release
-    release.notes = markdown;
-    release.notesMetadata = metadata;
-    release.updatedAt = new Date().toISOString();
-    releases._debounceSave();
-
-    // Step 2: Generate Gamma presentation (if configured)
-    let gammaResult = null;
-    if (gamma && gamma.isConfigured()) {
-      try {
-        gammaResult = await gamma.generateAndWait(markdown);
-        release.presentationUrl = gammaResult.gammaUrl;
-        release.presentationGeneratedAt = new Date().toISOString();
-        releases._debounceSave();
-      } catch (err) {
-        log.error(`Gamma generation failed for ${version}: ${err.message}`);
-        // Continue — we still have the markdown
-      }
-    }
-
-    // Step 3: Notify via Slack (if requested)
-    if (slackUserId && slack && gammaResult) {
-      const compareText = compareVersion ? ` (diff from ${compareVersion})` : '';
-      await slack.dmUser(slackUserId, [
-        `:memo: *Release notes ready for ${version}*${compareText}`,
-        `Presentation: ${gammaResult.gammaUrl}`,
-        `${metadata.ticketCount} tickets · ${metadata.rogueCount} rogue commits`,
-      ].join('\n'));
-    }
-
-    res.json({
-      version,
-      notes: markdown,
-      metadata,
-      presentation: gammaResult ? {
-        url: gammaResult.gammaUrl,
-        gammaId: gammaResult.gammaId,
-        credits: gammaResult.credits,
-      } : null,
-    });
-  }));
 
   // ── Customers ─────────────────────────────────────────
 

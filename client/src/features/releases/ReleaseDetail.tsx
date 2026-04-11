@@ -60,8 +60,6 @@ export function ReleaseDetail() {
   const jiraProject = useWsStore(s => s.config.jiraProject || 'DEV')
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [validation, setValidation] = useState<ValidationReport | null>(null)
-  const [presentationUrl, setPresentationUrl] = useState<string | null>(release?.presentationUrl || null)
-  const [generatingPresentation, setGeneratingPresentation] = useState(false)
   useEffect(() => {
     if (version) {
       apiFetch<AuditEntry[]>(`/audit/${version}`).then(setAudit).catch(() => {})
@@ -88,23 +86,6 @@ export function ReleaseDetail() {
 
   async function assessRisk() {
     await apiFetch(`/releases/${version}/risk?refresh=true`)
-  }
-
-  async function generatePresentation() {
-    setGeneratingPresentation(true)
-    try {
-      const result = await apiFetch<{ presentation?: { url: string } }>(`/releases/${version}/presentation`, {
-        method: 'POST',
-        body: JSON.stringify({}),
-      })
-      if (result.presentation?.url) {
-        setPresentationUrl(result.presentation.url)
-        window.open(result.presentation.url, '_blank')
-      }
-    } catch (err) {
-      // error handled by apiFetch
-    }
-    setGeneratingPresentation(false)
   }
 
   // ── Date helpers (consistent ISO format) ──────────────
@@ -182,20 +163,10 @@ export function ReleaseDetail() {
           ))}
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={validate}>Validate</Button>
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={assessRisk}>Risk</Button>
-          {presentationUrl ? (
-            <a href={presentationUrl} target="_blank" rel="noopener noreferrer">
+          {release.presentationUrl && (
+            <a href={release.presentationUrl} target="_blank" rel="noopener noreferrer">
               <Button variant="outline" size="sm" className="text-xs h-7">Presentation</Button>
             </a>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-xs h-7"
-              onClick={generatePresentation}
-              disabled={generatingPresentation}
-            >
-              {generatingPresentation ? 'Generating...' : 'Generate Presentation'}
-            </Button>
           )}
         </div>
       </div>

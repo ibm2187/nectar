@@ -65,9 +65,6 @@ const jenkins = new JenkinsClient(config);
 const SlackNotifier = require('./integrations/slack');
 const slack = new SlackNotifier(config);
 
-const GammaClient = require('./integrations/gamma');
-const gamma = new GammaClient();
-if (gamma.isConfigured()) log.info('Gamma client configured');
 
 // ── Initialize core feature engines ─────────────────────
 const RiskAssessor = require('./core/risk');
@@ -96,8 +93,6 @@ const jiraSync = new JiraSync(releases, jira, config);
 const ReleaseTruth = require('./core/release-truth');
 const releaseTruth = new ReleaseTruth(releases, repoManager, github, jira, config);
 
-const ReleaseNotesGenerator = require('./core/release-notes');
-const releaseNotes = new ReleaseNotesGenerator(releaseTruth, releases, repoManager, config);
 
 const CustomerStore = require('./core/customer-store');
 const customerStore = new CustomerStore();
@@ -149,9 +144,9 @@ cherryPickWatcher.on('cherry-pick:conflict', (release, parsed) => {
 // ── Start services ──────────────────────────────────────
 const { createWebServer } = require('./web/server');
 const services = {
-  releases, repoManager, jira, github, jenkins, slack, gamma,
+  releases, repoManager, jira, github, jenkins, slack,
   risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth,
-  releaseNotes, customerStore, webplatformScanner, envPoller, themeConfig,
+  customerStore, webplatformScanner, envPoller, themeConfig,
 };
 const webServer = createWebServer(services, config);
 
