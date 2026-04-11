@@ -1,0 +1,21 @@
+# Log rotation for Nectar.
+# Installed to /etc/logrotate.d/nectar by init.sh — runs via daily cron.
+#
+# copytruncate is critical here: systemd opens nectar.log with append mode
+# (StandardOutput=append:...) and keeps the file descriptor. A mv+create
+# rotation would leave systemd writing to the old inode. copytruncate copies
+# the contents and truncates the original in place, preserving the fd.
+
+/home/ubuntu/nectar.log
+/home/ubuntu/nectar-update.log
+{
+    daily
+    rotate 14
+    maxsize 100M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su ubuntu ubuntu
+}

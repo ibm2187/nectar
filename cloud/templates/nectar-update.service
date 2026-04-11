@@ -1,0 +1,15 @@
+[Unit]
+Description=Nectar auto-update — pulls origin/main and restarts if changed
+# Don't start if network is down (prevents spurious "Could not resolve host")
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# update.sh drops to ubuntu for git/npm and uses systemctl to restart nectar.
+# Running as root means the final systemctl restart works without a sudoers dance.
+ExecStart=/bin/bash /home/ubuntu/nectar/cloud/scripts/update.sh
+StandardOutput=append:/home/ubuntu/nectar-update.log
+StandardError=append:/home/ubuntu/nectar-update.log
+# Hard cap so a hung git/npm can't block the next timer fire
+TimeoutStartSec=600

@@ -2,8 +2,8 @@
 
 Deploy Nectar to a dedicated EC2 instance in the **Jenkins VPC** (Viv root AWS
 account). Direct Node.js execution (no Docker), systemd-managed, Secrets Manager
-for `.env`, ALB with TLS. Code updates happen via an `update.sh` script invoked
-through SSM — no in-app updater.
+for `.env`, ALB with TLS, automatic deploys via a systemd timer that polls
+`origin/main` every 5 minutes. Server logs rotate daily.
 
 ## Architecture
 
@@ -78,13 +78,15 @@ Viv root account (140947722076), us-east-1. Store as JSON:
 {
   "WEB_PORT": "4000",
   "GITHUB_TOKEN": "<github-pat-with-repo-scope>",
-  "JIRA_URL": "https://vivtechnologies.atlassian.net",
-  "JIRA_USERNAME": "<jira-email>",
+  "JIRA_BASE_URL": "https://vivtechnologies.atlassian.net",
+  "JIRA_EMAIL": "<jira-email>",
   "JIRA_API_TOKEN": "<jira-api-token>",
+  "JENKINS_BASE_URL": "https://jenkins.vivtechnologies.com",
+  "JENKINS_USER": "<jenkins-user>",
+  "JENKINS_TOKEN": "<jenkins-api-token>",
   "SLACK_BOT_TOKEN": "<slack-bot-token>",
   "SLACK_APP_TOKEN": "<slack-app-token>",
-  "WEB_TOKEN": "<random-token-for-api-auth>",
-  "GITHUB_WEBHOOK_SECRET": "<webhook-secret>"
+  "GITHUB_WEBHOOK_SECRET": "<optional-webhook-secret>"
 }
 ```
 
@@ -94,6 +96,11 @@ aws secretsmanager create-secret \
   --secret-string file://nectar-env.json \
   --region us-east-1
 ```
+
+**Do NOT set `WEB_TOKEN`.** The server would require every WebSocket client to
+authenticate with that token, but the React client doesn't send one — the
+dashboard would hang on the loading screen forever. Access control is already
+handled by the ALB security group (office IPs only).
 
 ### 2. Provision AWS resources (Terraform)
 
@@ -105,13 +112,14 @@ tofu apply   # requires confirmation
 ```
 
 This creates:
-- EC2 instance (t3.small, Ubuntu 22.04, 30GB gp3)
+- EC2 instance (t3.medium, Ubuntu 22.04, 30GB gp3)
 - ALB + target group + HTTPS listener
 - Security groups (office IPs → ALB → EC2:4000)
 - IAM role with Secrets Manager + SSM access
 
-The EC2 user-data runs `scripts/init.sh` on first boot to install dependencies,
-clone the repo, build the client, and install the systemd service.
+The EC2 user-data runs `scripts/init.sh` on first boot to install Node 22 and
+other dependencies, clone the repo, build the client, install the systemd
+service, install the auto-update timer, and install the logrotate config.
 
 ### 3. Add DNS CNAME in GoDaddy
 
@@ -128,23 +136,52 @@ Expected: `{"status":"ok","uptime":...,"integrations":{...}}`
 
 ## How it runs
 
-On every boot, systemd runs:
+Three systemd units work together on the instance:
 
-1. `ExecStartPre=boot.sh` — fetches the `nectar/env` secret from Secrets Manager
-   and merges it into `/home/ubuntu/nectar/.env` (instance tag `nectar-secret-name`
-   overrides the default secret name).
-2. `ExecStart=node src/index.js` — starts Nectar.
-3. If Nectar crashes, systemd restarts it after 10 seconds (`Restart=on-failure`).
+| Unit | Type | What it does |
+|------|------|--------------|
+| `nectar.service` | long-running | Runs Nectar. `ExecStartPre=boot.sh` fetches the `nectar/env` secret from Secrets Manager and merges it into `.env` before the Node process starts. `Restart=on-failure` auto-recovers on crashes. |
+| `nectar-update.service` | oneshot | Runs `cloud/scripts/update.sh`: git fetch → `git pull --ff-only` → conditional `npm install` / client rebuild → `sudo systemctl restart nectar`. Logs append to `/home/ubuntu/nectar-update.log`. |
+| `nectar-update.timer` | timer | Fires `nectar-update.service` 2 min after boot, then every 5 min from the previous run's completion. `Persistent=true` catches up on missed runs after reboots. |
 
-Logs are appended to `/home/ubuntu/nectar.log`. Use `journalctl -u nectar -f` for
-live tailing via SSM Session Manager.
+The instance tag `nectar-secret-name` overrides the default `nectar/env` secret
+name, letting you point one instance at a different secret if needed.
+
+### Logs
+
+| File | What's in it |
+|------|--------------|
+| `/home/ubuntu/nectar.log` | Nectar server stdout/stderr (from `nectar.service`) |
+| `/home/ubuntu/nectar-update.log` | Output of every auto-update run (from `nectar-update.service`) |
+
+Both files rotate daily via `/etc/logrotate.d/nectar` — also triggered early if
+either file crosses 100 MB. 14 rotations kept, compressed with gzip. Uses
+`copytruncate` because systemd holds an append-mode file descriptor that a
+normal `mv`+`create` rotation would invalidate.
+
+Tail them live via SSM Session Manager:
+```bash
+aws ssm start-session --target <instance-id>
+sudo tail -f /home/ubuntu/nectar.log            # server output
+sudo tail -f /home/ubuntu/nectar-update.log     # auto-update runs
+```
+
+Or the systemd journal:
+```bash
+sudo journalctl -u nectar -f                    # server
+sudo journalctl -u nectar-update.service -f     # update runs
+```
 
 ## Updating Nectar (code)
 
-Code updates are handled by `cloud/scripts/update.sh`, which is checked into
-the repo and already on the instance after first boot. Trigger it via SSM.
+**Automatic** — merge to `main` and wait up to 5 minutes. The `nectar-update.timer`
+on the instance polls `origin/main`, detects the new commit, runs `update.sh`
+(which git-pulls, reinstalls deps if changed, rebuilds the client if changed,
+and restarts the service), and logs everything to `/home/ubuntu/nectar-update.log`.
 
-### Option A — SSM send-command (one-shot)
+No-op when HEAD hasn't moved — safe to fire every 5 minutes forever.
+
+### Forcing an immediate update (bypass the timer)
 
 ```bash
 INSTANCE_ID=$(tofu -chdir=cloud/terraform output -raw instance_id)
@@ -152,30 +189,37 @@ INSTANCE_ID=$(tofu -chdir=cloud/terraform output -raw instance_id)
 aws ssm send-command \
   --instance-ids "$INSTANCE_ID" \
   --document-name "AWS-RunShellScript" \
-  --parameters 'commands=["bash /home/ubuntu/nectar/cloud/scripts/update.sh"]' \
+  --parameters 'commands=["sudo systemctl start nectar-update.service"]' \
   --region us-east-1
 ```
 
-`update.sh` does:
-- `git fetch origin` + `git pull --ff-only`
-- `npm install` if `package-lock.json` changed
-- `cd client && npm install && npm run build` if `client/` changed
-- `sudo systemctl restart nectar`
-
-No-op if HEAD hasn't moved.
-
-### Option B — SSM Session Manager (interactive)
-
+Or via an SSM Session Manager shell:
 ```bash
 aws ssm start-session --target "$INSTANCE_ID"
-# inside the session:
-bash ~/nectar/cloud/scripts/update.sh
+sudo systemctl start nectar-update.service
+# tail the log in another session:
+sudo tail -f /home/ubuntu/nectar-update.log
 ```
 
-### Optional: auto-update on a timer
+### Checking the timer
 
-Add a systemd timer on the instance that runs `update.sh` every N minutes for
-fully automatic deploys. Left off by default — easy to add later.
+```bash
+sudo systemctl list-timers nectar-update.timer
+sudo systemctl status nectar-update.service
+```
+
+### If an update breaks Nectar
+
+`update.sh` exits non-zero if any step fails (bad pull, failed build, etc.),
+which means the final `sudo systemctl restart nectar` is never reached — the
+old Nectar keeps running. Fix the bad commit in `main`, and the next timer
+fire (within 5 min) picks up the fix automatically.
+
+To skip the broken commit manually, SSM in and run the update yourself:
+```bash
+sudo -u ubuntu bash -c 'cd ~/nectar && git pull && npm install'
+sudo systemctl restart nectar
+```
 
 ## Updating Nectar (secrets)
 
@@ -222,15 +266,11 @@ Nectar already polls on intervals — webhooks just make updates faster.
 
 ### Service won't start
 ```bash
-# Shell via SSM Session Manager:
-aws ssm start-session --target "$INSTANCE_ID"
+aws ssm start-session --target <instance-id>
 
-# Check status
 sudo systemctl status nectar
 sudo journalctl -u nectar -n 100 --no-pager
-
-# Check log file
-tail -100 /home/ubuntu/nectar.log
+sudo tail -100 /home/ubuntu/nectar.log
 ```
 
 ### boot.sh failing to fetch secret
@@ -238,6 +278,42 @@ tail -100 /home/ubuntu/nectar.log
   on `arn:aws:secretsmanager:us-east-1:140947722076:secret:nectar/*`.
 - Confirm the `nectar/env` secret exists and is valid JSON.
 - Check `ec2:DescribeTags` is present (for reading the `nectar-secret-name` tag).
+
+### Dashboard stuck on the loading screen
+The WebSocket is failing auth. The most common cause: `WEB_TOKEN` is set in the
+`nectar/env` secret. The React client doesn't send an auth message, so the
+server closes the connection after 5 seconds and the client loops forever.
+Remove `WEB_TOKEN` from the secret and restart the service.
+
+### Auto-updates stopped working
+```bash
+# Is the timer still running?
+sudo systemctl list-timers nectar-update.timer
+sudo systemctl status nectar-update.timer
+
+# What did the last few runs do?
+sudo tail -50 /home/ubuntu/nectar-update.log
+sudo journalctl -u nectar-update.service -n 50 --no-pager
+
+# Force an immediate run to see errors live
+sudo systemctl start nectar-update.service
+sudo journalctl -u nectar-update.service -f
+```
+
+A hung `git fetch` or `npm install` can block the next timer fire until
+`TimeoutStartSec=600` expires. If you see "start operation timed out",
+check the network path from the instance to GitHub and npm registry.
+
+### Log file not rotating
+```bash
+# Validate the config parses
+sudo logrotate -d /etc/logrotate.d/nectar
+
+# Force a rotation manually (won't actually rotate if file is below maxsize
+# and hasn't aged a day — pass -f to force)
+sudo logrotate -f /etc/logrotate.d/nectar
+ls -la /home/ubuntu/nectar*.log*
+```
 
 ### ALB health check failing
 - Target must return HTTP 200 on `GET /health:4000`.
@@ -277,8 +353,11 @@ cloud/
 │   └── outputs.tf               # instance_id, alb_dns_name, etc.
 ├── scripts/
 │   ├── init.sh                  # First-boot setup (EC2 user-data)
-│   ├── boot.sh                  # Every-boot secret fetch (ExecStartPre)
-│   └── update.sh                # Pull latest code + restart (triggered via SSM)
+│   ├── boot.sh                  # Every-boot secret fetch (runs as ExecStartPre of nectar.service)
+│   └── update.sh                # Pull latest code + restart (invoked by the timer or manually via SSM)
 └── templates/
-    └── nectar.service           # systemd unit
+    ├── nectar.service           # Main Nectar systemd unit (Node.js server, Restart=on-failure)
+    ├── nectar-update.service    # Oneshot unit that runs update.sh and appends output to nectar-update.log
+    ├── nectar-update.timer      # Fires nectar-update.service 2 min after boot, then every 5 min
+    └── nectar.logrotate         # logrotate config for nectar.log and nectar-update.log
 ```

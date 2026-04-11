@@ -72,14 +72,27 @@ cd "${NECTAR_DIR}/client"
 sudo -u ubuntu npm install 2>&1 | tail -1
 sudo -u ubuntu npm run build 2>&1 | tail -1
 
-# ── Install systemd service ───────────────────────────────────────────────
+# ── Install systemd services + timer ─────────────────────────────────────
 log "Installing nectar systemd service..."
 cp "${NECTAR_DIR}/cloud/templates/nectar.service" /etc/systemd/system/nectar.service
+cp "${NECTAR_DIR}/cloud/templates/nectar-update.service" /etc/systemd/system/nectar-update.service
+cp "${NECTAR_DIR}/cloud/templates/nectar-update.timer" /etc/systemd/system/nectar-update.timer
 systemctl daemon-reload
 systemctl enable nectar.service
+systemctl enable nectar-update.timer
+
+# ── Install logrotate config ──────────────────────────────────────────────
+log "Installing nectar logrotate config..."
+cp "${NECTAR_DIR}/cloud/templates/nectar.logrotate" /etc/logrotate.d/nectar
+# Validate it parses — `logrotate -d` is a dry run. Fatal errors abort init.
+logrotate -d /etc/logrotate.d/nectar > /dev/null
 
 # ── Start Nectar (systemd runs boot.sh as ExecStartPre) ───────────────────
 log "Starting nectar service..."
 systemctl start nectar.service
+
+# ── Start the auto-update timer ───────────────────────────────────────────
+log "Starting nectar-update.timer..."
+systemctl start nectar-update.timer
 
 log "Init complete."
