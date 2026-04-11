@@ -314,6 +314,7 @@ export interface VerifiedTicket {
   inTarget?: boolean
   /** True if this release is in the ticket's canonical fixVersions */
   inFixVersion?: boolean
+  component?: string | null
   zohoRef?: ZohoRef | null
 }
 
@@ -321,6 +322,12 @@ export interface RogueCommit {
   key: string
   commitSha: string | null
   commitMessage: string | null
+  summary: string | null
+  jiraStatus: string | null
+  type: string | null
+  assignee: string | null
+  component: string | null
+  fixVersions: string[] | null
 }
 
 export interface ReleaseTruthReport {

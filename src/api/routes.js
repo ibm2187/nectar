@@ -808,6 +808,71 @@ module.exports = function createRoutes(services, config) {
     });
   });
 
+  // ── Roadmap drill-down: tickets for a theme × release ──
+
+  router.get('/roadmap/:theme/:version', (req, res) => {
+    const themeName = decodeURIComponent(req.params.theme);
+    const version = decodeURIComponent(req.params.version);
+
+    const release = releases.get(version) || releases.active().find(r => r.version === version);
+    if (!release) return res.status(404).json({ error: 'Release not found' });
+
+    // Ensure theme config is initialized
+    if (themeConfig.themes.length === 0) {
+      const components = new Set();
+      for (const r of releases.active()) {
+        for (const t of r.tickets || []) {
+          if (t.component) components.add(t.component);
+        }
+      }
+      if (components.size > 0) themeConfig.autoGenerate(Array.from(components));
+    }
+
+    const tickets = [];
+    for (const ticket of release.tickets || []) {
+      if (ticket.source !== 'jira') continue;
+      const resolved = themeConfig.resolveComponent(ticket.component);
+      if (resolved !== themeName) continue;
+
+      const targetVersions = Array.isArray(ticket.targetFixVersions) ? ticket.targetFixVersions : [];
+      const fixVersions = Array.isArray(ticket.fixVersions) ? ticket.fixVersions : [];
+      const inTarget = targetVersions.includes(release.version);
+      const inFixVersion = fixVersions.includes(release.version);
+
+      tickets.push({
+        key: ticket.key,
+        summary: ticket.summary || '',
+        jiraStatus: ticket.jiraStatus || 'Unknown',
+        state: ticket.state || 'pending',
+        type: ticket.type || null,
+        assignee: ticket.assignee || null,
+        component: ticket.component || null,
+        customerTags: Array.isArray(ticket.customerTags) ? ticket.customerTags : [],
+        inTarget,
+        inFixVersion,
+      });
+    }
+
+    const done = tickets.filter(t => {
+      const s = (t.state || '').toLowerCase();
+      return s === 'done' || s === 'cherry-picked' || s === 'ready-for-testing';
+    }).length;
+
+    res.json({
+      theme: themeName,
+      version: release.version,
+      repo: release.repo,
+      state: release.state,
+      jiraReleaseDate: release.jiraReleaseDate || null,
+      tickets,
+      stats: {
+        total: tickets.length,
+        done,
+        remaining: tickets.length - done,
+      },
+    });
+  });
+
   // ── Theme configuration (roadmap) ─────────────────────
 
   router.get('/config/themes', (req, res) => {

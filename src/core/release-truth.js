@@ -256,16 +256,47 @@ class ReleaseTruth {
     // ── 5. Find rogue keys ────────────────────────────────
     // Rogues = JIRA keys cherry-picked POST-CUT but not in JIRA fixVersion.
     // We use pickedKeys (post-cut only) so we don't flag everything inherited from master.
-    const rogues = [];
+    const rogueKeys = [];
     for (const key of pickedKeys) {
       if (!jiraKeys.has(key)) {
-        const commit = pickedCommits.find(c => c.message.includes(key));
-        rogues.push({
-          key,
-          commitSha: commit ? commit.sha : null,
-          commitMessage: commit ? commit.message.substring(0, 120) : null,
-        });
+        rogueKeys.push(key);
       }
+    }
+
+    // Enrich rogues with JIRA ticket data so they render like real tickets
+    const rogues = [];
+    let rogueJiraMap = new Map();
+    if (rogueKeys.length > 0 && this.jira.isConfigured()) {
+      try {
+        const keyList = rogueKeys.slice(0, 200).map(k => `"${k}"`).join(', ');
+        const issues = await this.jira.searchAllIssues(
+          `key IN (${keyList})`,
+          { fields: JiraClient.NECTAR_FIELDS }
+        );
+        for (const issue of issues) {
+          const normalized = JiraClient.normalizeIssue(issue);
+          rogueJiraMap.set(issue.key, normalized);
+        }
+      } catch (err) {
+        log.warn(`Truth: failed to fetch JIRA data for ${rogueKeys.length} rogue keys: ${err.message}`);
+      }
+    }
+
+    for (const key of rogueKeys) {
+      const commit = pickedCommits.find(c => c.message.includes(key));
+      const jira = rogueJiraMap.get(key);
+      rogues.push({
+        key,
+        commitSha: commit ? commit.sha : null,
+        commitMessage: commit ? commit.message.substring(0, 120) : null,
+        // JIRA enrichment (null if ticket not found / JIRA unavailable)
+        summary: jira ? jira.summary : null,
+        jiraStatus: jira ? jira.status : null,
+        type: jira ? jira.type : null,
+        assignee: jira ? jira.assignee : null,
+        component: jira ? jira.component : null,
+        fixVersions: jira ? jira.fixVersions : null,
+      });
     }
 
     // ── 6. Compute rollup by health ──────────────────────
@@ -631,6 +662,11 @@ class ReleaseTruth {
     // They'll appear in the target's rogues already, so just count them.
     const deltaOnlyKeys = [...deltaJiraKeys].filter(k => !targetTicketMap.has(k) && !prodTicketKeys.has(k));
 
+    // Filter rogues to only those in the delta range (between prod and target).
+    // Without this, the impact view shows ALL rogues on the entire branch since
+    // it diverged from master, most of which shipped in prior releases.
+    const deltaRogues = targetTruth.rogues.filter(r => deltaJiraKeys.has(r.key));
+
     // ── 5. Rollup of new tickets only ───────────────────────
     const rollup = {
       planned: newTickets.length,
@@ -673,7 +709,7 @@ class ReleaseTruth {
         },
 
         rollup,
-        rogues: targetTruth.rogues,
+        rogues: deltaRogues,
       },
 
       computedAt: new Date().toISOString(),

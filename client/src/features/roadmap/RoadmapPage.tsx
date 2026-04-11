@@ -4,7 +4,10 @@ import { Link } from 'react-router-dom'
 import { apiFetch } from '../../api/client'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
-import { NectarLoader } from '../../components/NectarLoader'
+import { Badge } from '../../components/ui/badge'
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetBody } from '../../components/ui/sheet'
+import { JiraLink } from '../../components/JiraLink'
+import { NectarLoader, NectarSpinner } from '../../components/NectarLoader'
 import { cn } from '../../lib/utils'
 
 // ── Types ──────────────────────────────────────────────
@@ -64,6 +67,7 @@ export function RoadmapPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [collapsedThemes, setCollapsedThemes] = useState<Set<string>>(new Set())
+  const [drawer, setDrawer] = useState<{ theme: string; version: string; repo: string } | null>(null)
 
   function updateParams(updates: Record<string, string | null>) {
     setSearchParams(prev => {
@@ -302,6 +306,7 @@ export function RoadmapPage() {
                 collapsed={collapsedThemes.has(theme.name)}
                 onToggle={() => toggleTheme(theme.name)}
                 isWeekView={zoom === 'week'}
+                onCardClick={(version, repo) => setDrawer({ theme: theme.name, version, repo })}
               />
             ))
           )}
@@ -317,18 +322,29 @@ export function RoadmapPage() {
           <Link to="/config" className="text-primary hover:underline">Configure themes</Link>
         </div>
       )}
+
+      {/* Theme × Release drawer */}
+      {drawer && (
+        <ThemeReleaseDrawer
+          theme={drawer.theme}
+          version={drawer.version}
+          repo={drawer.repo}
+          onClose={() => setDrawer(null)}
+        />
+      )}
     </div>
   )
 }
 
 // ── Theme row ──────────────────────────────────────────
 
-function ThemeRow({ theme, months, collapsed, onToggle, isWeekView }: {
+function ThemeRow({ theme, months, collapsed, onToggle, isWeekView, onCardClick }: {
   theme: Theme
   months: MonthColumn[]
   collapsed: boolean
   onToggle: () => void
   isWeekView?: boolean
+  onCardClick: (version: string, repo: string) => void
 }) {
   // Get cards that fall within a time column's date range
   function getCardsForColumn(col: MonthColumn): ReleaseCard[] {
@@ -396,7 +412,7 @@ function ThemeRow({ theme, months, collapsed, onToggle, isWeekView }: {
             className={cn("flex-1 px-1.5 py-2 border-l", isWeekView ? "min-w-[110px]" : "min-w-[140px]")}
           >
             {!collapsed && cards.map(card => (
-              <ReleaseCardView key={`${card.repo}:${card.version}`} card={card} />
+              <ReleaseCardView key={`${card.repo}:${card.version}`} card={card} onClick={() => onCardClick(card.version, card.repo)} />
             ))}
             {collapsed && cards.length > 0 && (
               <div className="text-[10px] text-muted-foreground text-center py-1">
@@ -410,7 +426,7 @@ function ThemeRow({ theme, months, collapsed, onToggle, isWeekView }: {
       {/* Unscheduled cell */}
       <div className="w-36 shrink-0 px-1.5 py-2 border-l">
         {!collapsed && unscheduledCards.map(card => (
-          <ReleaseCardView key={`${card.repo}:${card.version}`} card={card} />
+          <ReleaseCardView key={`${card.repo}:${card.version}`} card={card} onClick={() => onCardClick(card.version, card.repo)} />
         ))}
         {collapsed && unscheduledCards.length > 0 && (
           <div className="text-[10px] text-muted-foreground text-center py-1">
@@ -424,7 +440,7 @@ function ThemeRow({ theme, months, collapsed, onToggle, isWeekView }: {
 
 // ── Release card ───────────────────────────────────────
 
-function ReleaseCardView({ card }: { card: ReleaseCard }) {
+function ReleaseCardView({ card, onClick }: { card: ReleaseCard; onClick: () => void }) {
   const statusColor = card.progress === 100
     ? 'border-green-500/40 bg-green-500/5'
     : card.missingPlan > 0
@@ -437,17 +453,12 @@ function ReleaseCardView({ card }: { card: ReleaseCard }) {
     card.missingPlan > 0 ? '⚠' :
     card.progress > 0 ? '🟡' : '🔵'
 
-  // Build release detail URL — includes repo prefix if not webplatform
-  const releaseKey = card.repo && card.repo !== 'webplatform'
-    ? `${card.repo}:${card.version}`
-    : card.version
-
   return (
-    <Link
-      to={`/releases/${encodeURIComponent(releaseKey)}`}
-      state={{ from: 'roadmap' }}
+    <button
+      type="button"
+      onClick={onClick}
       className={cn(
-        "block rounded-md border p-2 mb-1.5 transition-all hover:scale-[1.02] hover:shadow-sm cursor-pointer",
+        "block w-full text-left rounded-md border p-2 mb-1.5 transition-all hover:scale-[1.02] hover:shadow-sm cursor-pointer",
         statusColor
       )}
     >
@@ -484,6 +495,138 @@ function ReleaseCardView({ card }: { card: ReleaseCard }) {
           ))}
         </div>
       )}
-    </Link>
+    </button>
+  )
+}
+
+// ── Theme × Release Drawer ────────────────────────────
+
+interface DrawerTicket {
+  key: string
+  summary: string
+  jiraStatus: string
+  state: string
+  type: string | null
+  assignee: string | null
+  inTarget: boolean
+  inFixVersion: boolean
+}
+
+interface ThemeReleaseDetail {
+  theme: string
+  version: string
+  repo: string
+  state: string
+  jiraReleaseDate: string | null
+  tickets: DrawerTicket[]
+  stats: { total: number; done: number; remaining: number }
+}
+
+function ThemeReleaseDrawer({ theme, version, repo, onClose }: {
+  theme: string
+  version: string
+  repo: string
+  onClose: () => void
+}) {
+  const [data, setData] = useState<ThemeReleaseDetail | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    apiFetch<ThemeReleaseDetail>(`/roadmap/${encodeURIComponent(theme)}/${encodeURIComponent(version)}`)
+      .then(setData)
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [theme, version])
+
+  const releaseKey = repo && repo !== 'webplatform'
+    ? `${repo}:${version}`
+    : version
+
+  const stateColor = (state: string) => {
+    const s = state.toLowerCase()
+    if (s === 'done' || s === 'cherry-picked' || s === 'ready-for-testing') return 'text-green-400'
+    if (s === 'in-progress') return 'text-blue-400'
+    return 'text-muted-foreground'
+  }
+
+  return (
+    <Sheet open onOpenChange={() => onClose()}>
+      <SheetContent>
+        <SheetHeader>
+          <SheetTitle>{theme}</SheetTitle>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="font-mono text-sm text-muted-foreground">{version}</span>
+            {data?.state && (
+              <Badge variant="outline" className={`state-${data.state} text-xs`}>{data.state}</Badge>
+            )}
+            {data?.jiraReleaseDate && (
+              <span className="text-xs text-muted-foreground">{data.jiraReleaseDate}</span>
+            )}
+          </div>
+          {data && (
+            <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+              <span><span className="text-green-400 font-medium">{data.stats.done}</span> done</span>
+              <span><span className="text-foreground font-medium">{data.stats.remaining}</span> remaining</span>
+              <span>{data.stats.total} total</span>
+            </div>
+          )}
+        </SheetHeader>
+        <SheetBody>
+          {loading ? (
+            <div className="flex justify-center py-12">
+              <NectarSpinner />
+            </div>
+          ) : data && data.tickets.length > 0 ? (
+            <div className="space-y-1">
+              {data.tickets.map(t => (
+                <div
+                  key={t.key}
+                  className={cn(
+                    "flex items-start gap-3 py-2 px-2 rounded-md hover:bg-accent/30 transition-colors border-b border-border/30 last:border-0",
+                    t.inTarget && !t.inFixVersion && "bg-yellow-500/[0.03]"
+                  )}
+                >
+                  <div className="shrink-0 pt-0.5">
+                    <JiraLink jiraKey={t.key} className="text-xs" />
+                    {t.inTarget && !t.inFixVersion && (
+                      <div className="text-[9px] text-yellow-400 mt-0.5">planned</div>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm leading-tight line-clamp-2">{t.summary}</div>
+                    <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+                      {t.type && <span>{t.type}</span>}
+                      {t.assignee && <span>{t.type ? '·' : ''} {t.assignee}</span>}
+                    </div>
+                  </div>
+                  <div className="shrink-0">
+                    <span className={cn("text-xs", stateColor(t.state))}>{t.jiraStatus}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground italic py-8 text-center">No tickets</p>
+          )}
+
+          {/* Link to full release */}
+          <div className="mt-6 pt-4 border-t">
+            <Link
+              to={`/releases/${encodeURIComponent(releaseKey)}`}
+              state={{ from: 'roadmap' }}
+              className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+              onClick={onClose}
+            >
+              Open full release {version}
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 12h14"/>
+                <path d="m12 5 7 7-7 7"/>
+              </svg>
+            </Link>
+          </div>
+        </SheetBody>
+      </SheetContent>
+    </Sheet>
   )
 }

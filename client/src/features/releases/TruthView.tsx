@@ -451,15 +451,68 @@ export function TruthView({ repo, version }: Props) {
               <span className="text-xs text-muted-foreground font-normal ml-2">(JIRA keys in commits but not in fixVersion)</span>
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-1 max-h-64 overflow-auto">
-              {activeRogues.map(r => (
-                <div key={r.key} className="flex items-center gap-2 text-sm py-1">
-                  <JiraLink jiraKey={r.key} className="text-purple-400 hover:text-purple-300" />
-                  {r.commitSha && <span className="font-mono text-xs text-muted-foreground">{r.commitSha.substring(0, 7)}</span>}
-                  <span className="text-muted-foreground truncate flex-1">{r.commitMessage}</span>
-                </div>
-              ))}
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm table-fixed">
+                <colgroup>
+                  <col className="w-28" />
+                  <col />{/* title / commit */}
+                  <col className="w-36" />
+                  <col className="w-28" />
+                  <col className="w-24" />
+                </colgroup>
+                <thead>
+                  <tr className="border-b text-left">
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Key</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Title / Commit</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">JIRA Status</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Assignee</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Commit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeRogues.map(r => (
+                    <tr key={r.key} className="border-b border-border/30 hover:bg-accent/30 transition-colors bg-purple-500/[0.02]">
+                      <td className="px-3 py-2 align-top">
+                        <JiraLink jiraKey={r.key} className="text-purple-400 hover:text-purple-300" />
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        {r.summary ? (
+                          <>
+                            <div className="text-foreground line-clamp-2" title={r.summary}>{r.summary}</div>
+                            <div className="text-xs text-muted-foreground mt-0.5 truncate">
+                              {r.type && <span>{r.type}</span>}
+                              {r.component && (
+                                <span className="inline-flex items-center ml-1.5 px-1.5 py-px rounded text-[10px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                                  {r.component}
+                                </span>
+                              )}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground truncate text-xs">{r.commitMessage}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <span className="text-xs">{r.jiraStatus || '—'}</span>
+                        {r.fixVersions && r.fixVersions.length > 0 && (
+                          <div className="text-[10px] text-muted-foreground mt-0.5 truncate" title={r.fixVersions.join(', ')}>
+                            fix: {r.fixVersions.join(', ')}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <span className="text-xs text-muted-foreground">{r.assignee || '—'}</span>
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        {r.commitSha && (
+                          <span className="font-mono text-xs text-muted-foreground">{r.commitSha.substring(0, 7)}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </CardContent>
         </Card>
@@ -546,6 +599,11 @@ function TicketRow({ ticket: t }: { ticket: VerifiedTicket }) {
         <div className="text-xs text-muted-foreground mt-0.5 truncate">
           {t.type && <span>{t.type}</span>}
           {t.assignee && <span>{t.type ? ' · ' : ''}{t.assignee}</span>}
+          {t.component && (
+            <span className="inline-flex items-center ml-1.5 px-1.5 py-px rounded text-[10px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+              {t.component}
+            </span>
+          )}
         </div>
       </td>
 
