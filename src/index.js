@@ -106,6 +106,14 @@ const envPoller = new EnvironmentPoller(customerStore, config);
 const ThemeConfig = require('./core/theme-config');
 const themeConfig = new ThemeConfig();
 
+const ApiKeyManager = require('./core/api-keys');
+const apiKeys = new ApiKeyManager();
+log.info(`API key manager initialized (${apiKeys.keys.size} keys loaded)`);
+
+const TaskQueue = require('./core/task-queue');
+const taskQueue = new TaskQueue();
+log.info(`Task queue initialized (${taskQueue.tasks.size} tasks loaded)`);
+
 // ── Wire Slack lifecycle notifications ──────────────────
 // Skip notifications for automated actions (discovery, jira-sync)
 const AUTOMATED_USERS = new Set(['discovery', 'jira-sync', 'cherry-pick-watcher', 'cherry-pick-sync', 'github-webhook', 'jira-webhook', 'risk-assessor']);
@@ -147,6 +155,7 @@ const services = {
   releases, repoManager, jira, github, jenkins, slack,
   risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth,
   customerStore, webplatformScanner, envPoller, themeConfig,
+  apiKeys, taskQueue,
 };
 const webServer = createWebServer(services, config);
 
@@ -197,6 +206,7 @@ function shutdown() {
   slack.stop().catch(() => {});
   releases.flush();
   customerStore.flush();
+  taskQueue.flush();
   if (webServer) webServer.close();
   process.exit(0);
 }

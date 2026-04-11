@@ -14,12 +14,20 @@ const log = require('../core/log');
  * @returns {{ app, httpServer, wss, close }}
  */
 function createWebServer(services, config) {
-  const { releases, customers, discovery, jiraSync, customerStore, envPoller } = services;
+  const { releases, customers, discovery, jiraSync, customerStore, envPoller, apiKeys, taskQueue } = services;
   const port = parseInt(process.env.WEB_PORT) || 4000;
   const token = process.env.WEB_TOKEN;
 
   const app = express();
   app.use(express.json({ limit: '1mb' }));
+
+  // ── Auth routes (before auth middleware) ──────────────
+  const { createAuthRoutes, createAuthMiddleware } = require('../api/auth');
+  app.use('/api/auth', createAuthRoutes());
+
+  // ── Auth middleware (conditional on ENABLE_GOOGLE_SSO) ─
+  const authMiddleware = createAuthMiddleware(apiKeys);
+  app.use(authMiddleware);
 
   // ── Rate limiting ────────────────────────────────────
   const apiLimiter = rateLimit({
@@ -261,12 +269,30 @@ function createWebServer(services, config) {
     );
   }
 
+  // ── Task queue events → WebSocket broadcasts ──────────
+  if (taskQueue) {
+    taskQueue.on('task:created', (task) =>
+      broadcast({ type: 'task:created', task })
+    );
+    taskQueue.on('task:claimed', (task) =>
+      broadcast({ type: 'task:updated', task })
+    );
+    taskQueue.on('task:completed', (task) =>
+      broadcast({ type: 'task:updated', task })
+    );
+    taskQueue.on('task:failed', (task) =>
+      broadcast({ type: 'task:updated', task })
+    );
+  }
+
   // ── MCP server (for Hive integration) ─────────────────
   const { mountMcp } = require('../mcp/server');
   mountMcp(app, '/mcp', {
     customerStore,
     releases,
     releaseTruth: services.releaseTruth,
+    taskQueue,
+    apiKeys,
   });
 
   // ── HTTP server with WebSocket upgrade ────────────────

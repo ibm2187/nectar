@@ -15,21 +15,15 @@ const asyncHandler = (fn) => (req, res, next) => {
  * @param {object} config
  */
 module.exports = function createRoutes(services, config) {
-  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig } = services;
+  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig, apiKeys, taskQueue } = services;
 
   // Nectar's own repo — used by the Issues page so users can file bugs/feedback.
   const NECTAR_REPO = 'mavencare/nectar';
   const router = Router();
 
-  // ── Token auth middleware (optional) ────────────────────
-  const token = process.env.WEB_TOKEN;
-  router.use((req, res, next) => {
-    if (!token) return next();
-    const auth = req.headers.authorization;
-    if (auth === `Bearer ${token}`) return next();
-    if (req.query.token === token) return next();
-    res.status(401).json({ error: 'Unauthorized' });
-  });
+  // NOTE: Auth is now handled by the unified auth middleware in web/server.js.
+  // The old WEB_TOKEN-only middleware has been replaced by createAuthMiddleware
+  // which supports API keys, WEB_TOKEN, and Google SSO JWT cookies.
 
   // ── Releases ──────────────────────────────────────────
 
@@ -919,6 +913,166 @@ module.exports = function createRoutes(services, config) {
     );
     res.json({ suggestions, totalComponents: components.size });
   });
+
+  // ── API Keys ─────────────────────────────────────────
+
+  if (apiKeys) {
+    router.post('/keys', (req, res) => {
+      try {
+        const { label } = req.body || {};
+        const createdBy = req.user ? req.user.email : null;
+        const result = apiKeys.create(label, createdBy);
+        res.status(201).json(result);
+      } catch (err) {
+        res.status(400).json({ error: err.message });
+      }
+    });
+
+    router.get('/keys', (req, res) => {
+      res.json(apiKeys.list());
+    });
+
+    router.delete('/keys/:id', (req, res) => {
+      const deleted = apiKeys.revoke(req.params.id);
+      if (!deleted) return res.status(404).json({ error: 'Key not found' });
+      res.json({ ok: true });
+    });
+  }
+
+  // ── Tasks ───────────────────────────────────────────
+
+  if (taskQueue) {
+    router.post('/tasks', asyncHandler(async (req, res) => {
+      const { type, version, slackUserId } = req.body || {};
+
+      if (!type) {
+        return res.status(400).json({ error: 'type is required' });
+      }
+
+      // Build task input from release truth data
+      let input = req.body.input;
+      if (!input && version) {
+        // Auto-gather input from release
+        const release = releases.get(version);
+        if (!release) {
+          return res.status(404).json({ error: `Release not found: ${version}` });
+        }
+
+        // Try to compute truth data for richer input
+        let truth = null;
+        if (release.repo && releaseTruth) {
+          try {
+            truth = await releaseTruth.compute(release.repo, release.version);
+          } catch (err) {
+            log.warn(`Could not compute truth for task input: ${err.message}`);
+          }
+        }
+
+        input = {
+          repo: release.repo || 'webplatform',
+          version: release.version,
+          branch: release.branch,
+          jiraReleaseDate: release.jiraReleaseDate || null,
+          tickets: truth ? truth.verified.map(t => ({
+            key: t.key,
+            summary: t.summary,
+            type: t.type,
+            component: t.component || null,
+            assignee: t.assignee || null,
+            qaAssignee: t.qaAssignee || null,
+            jiraStatus: t.jiraStatus,
+            health: t.health,
+            pr: t.pr ? t.pr.prNumber : null,
+            zohoRef: t.zohoRef || null,
+            customerTags: t.customerTags || [],
+          })) : (release.tickets || []).map(t => ({
+            key: t.key,
+            summary: t.summary,
+            type: t.type || null,
+            component: t.component || null,
+            assignee: t.assignee || null,
+            qaAssignee: t.qaAssignee || null,
+            jiraStatus: t.jiraStatus || null,
+            pr: t.pr || null,
+            zohoRef: t.zohoRef || null,
+            customerTags: t.customerTags || [],
+          })),
+          rogues: truth ? truth.rogues : [],
+          riskScore: release.risk ? release.risk.numericScore : null,
+          riskFactors: release.risk ? release.risk.factors : [],
+        };
+      }
+
+      if (!input) {
+        return res.status(400).json({ error: 'Either version or input is required' });
+      }
+
+      const requestedBy = req.user ? req.user.email : null;
+      const task = taskQueue.createTask(type, input, requestedBy, { slackUserId });
+      res.status(201).json(task);
+    }));
+
+    router.get('/tasks', (req, res) => {
+      const filters = {};
+      if (req.query.status) filters.status = req.query.status;
+      if (req.query.type) filters.type = req.query.type;
+      if (req.query.limit) filters.limit = parseInt(req.query.limit);
+      res.json(taskQueue.listTasks(filters));
+    });
+
+    router.get('/tasks/:id', (req, res) => {
+      const task = taskQueue.getTask(req.params.id);
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+      res.json(task);
+    });
+
+    router.patch('/tasks/:id', (req, res) => {
+      const task = taskQueue.getTask(req.params.id);
+      if (!task) return res.status(404).json({ error: 'Task not found' });
+
+      const { status, output, error: errorMsg } = req.body || {};
+
+      try {
+        let updated;
+        if (status === 'in-progress') {
+          updated = taskQueue.claim(req.params.id);
+        } else if (status === 'completed') {
+          updated = taskQueue.complete(req.params.id, output);
+
+          // On completion: store results on release and notify via Slack
+          if (updated.input && updated.input.version) {
+            const release = releases.get(updated.input.version);
+            if (release && output) {
+              const updates = {};
+              if (output.gammaUrl) updates.presentationUrl = output.gammaUrl;
+              if (output.notes) updates.notes = output.notes;
+              if (Object.keys(updates).length > 0) {
+                releases.update(updated.input.version, updates, 'task-queue');
+              }
+            }
+          }
+
+          // Slack DM on completion
+          if (updated.slackUserId && services.slack) {
+            const version = updated.input ? updated.input.version : 'unknown';
+            const gammaLink = output && output.gammaUrl ? `\n<${output.gammaUrl}|View Presentation>` : '';
+            services.slack.dmUser(
+              updated.slackUserId,
+              `Your ${updated.type} task for *${version}* is complete!${gammaLink}`
+            ).catch(() => {});
+          }
+        } else if (status === 'failed') {
+          updated = taskQueue.fail(req.params.id, errorMsg || 'Failed');
+        } else {
+          return res.status(400).json({ error: 'Invalid status. Must be in-progress, completed, or failed' });
+        }
+
+        res.json(updated);
+      } catch (err) {
+        res.status(400).json({ error: err.message });
+      }
+    });
+  }
 
   // ── Meta ──────────────────────────────────────────────
 

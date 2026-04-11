@@ -1,5 +1,5 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useWsStore } from '../../stores/wsStore'
 import { apiFetch } from '../../api/client'
 import type { AuditEntry, ValidationReport } from '../../api/client'
@@ -9,6 +9,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/ca
 import { timeAgo, cn } from '../../lib/utils'
 import { TruthView } from './TruthView'
 import { NectarLoader } from '../../components/NectarLoader'
+
+interface TaskInfo {
+  id: string
+  type: string
+  status: 'pending' | 'in-progress' | 'completed' | 'failed'
+  output: { gammaUrl?: string; notes?: string } | null
+  error: string | null
+  createdAt: string
+}
 
 const TRANSITIONS: Record<string, string[]> = {
   planning: ['cutting'],
@@ -60,11 +69,79 @@ export function ReleaseDetail() {
   const jiraProject = useWsStore(s => s.config.jiraProject || 'DEV')
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [validation, setValidation] = useState<ValidationReport | null>(null)
+  const [task, setTask] = useState<TaskInfo | null>(null)
+  const [taskLoading, setTaskLoading] = useState(false)
+  const [taskError, setTaskError] = useState<string | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
   useEffect(() => {
     if (version) {
       apiFetch<AuditEntry[]>(`/audit/${version}`).then(setAudit).catch(() => {})
     }
   }, [version, release?.updatedAt])
+
+  // Check for existing tasks for this release
+  useEffect(() => {
+    if (!version) return
+    apiFetch<TaskInfo[]>(`/tasks?type=release-presentation&limit=1`)
+      .then(tasks => {
+        // Find a task matching this release version
+        const match = tasks.find((t: any) => t.input?.version === version)
+        if (match) setTask(match)
+      })
+      .catch(() => {})
+  }, [version])
+
+  // Poll for task status when task is pending or in-progress
+  useEffect(() => {
+    if (!task || (task.status !== 'pending' && task.status !== 'in-progress')) {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+      return
+    }
+
+    pollRef.current = setInterval(() => {
+      apiFetch<TaskInfo>(`/tasks/${task.id}`)
+        .then(updated => {
+          setTask(updated)
+          if (updated.status === 'completed' || updated.status === 'failed') {
+            if (pollRef.current) {
+              clearInterval(pollRef.current)
+              pollRef.current = null
+            }
+          }
+        })
+        .catch(() => {})
+    }, 5000)
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+  }, [task?.id, task?.status])
+
+  const generatePresentation = useCallback(async () => {
+    if (!version) return
+    setTaskLoading(true)
+    setTaskError(null)
+    try {
+      const newTask = await apiFetch<TaskInfo>('/tasks', {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'release-presentation',
+          version,
+        }),
+      })
+      setTask(newTask)
+    } catch (err) {
+      setTaskError(err instanceof Error ? err.message : 'Failed to create task')
+    }
+    setTaskLoading(false)
+  }, [version])
 
   if (!release) {
     return <NectarLoader message="Loading release..." className="mt-32" />
@@ -163,13 +240,46 @@ export function ReleaseDetail() {
           ))}
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={validate}>Validate</Button>
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={assessRisk}>Risk</Button>
-          {release.presentationUrl && (
-            <a href={release.presentationUrl} target="_blank" rel="noopener noreferrer">
+          {/* Presentation button — shows link if ready, generate button if not */}
+          {release.presentationUrl || (task && task.status === 'completed' && task.output?.gammaUrl) ? (
+            <a href={release.presentationUrl || task?.output?.gammaUrl} target="_blank" rel="noopener noreferrer">
               <Button variant="outline" size="sm" className="text-xs h-7">Presentation</Button>
             </a>
+          ) : task && (task.status === 'pending' || task.status === 'in-progress') ? (
+            <Button variant="outline" size="sm" className="text-xs h-7" disabled>
+              <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1.5" />
+              {task.status === 'pending' ? 'Queued...' : 'Generating...'}
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-7"
+              onClick={generatePresentation}
+              disabled={taskLoading}
+            >
+              {taskLoading ? 'Creating...' : 'Generate Presentation'}
+            </Button>
           )}
         </div>
       </div>
+
+      {/* Task error/status banner */}
+      {taskError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 mb-3 text-xs text-destructive">
+          {taskError}
+        </div>
+      )}
+      {task && task.status === 'failed' && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 mb-3 flex items-center justify-between">
+          <span className="text-xs text-destructive">
+            Presentation generation failed: {task.error || 'Unknown error'}
+          </span>
+          <Button variant="outline" size="sm" className="text-xs h-6" onClick={generatePresentation}>
+            Retry
+          </Button>
+        </div>
+      )}
 
       {/* Release timeline */}
       <div className="rounded-lg border bg-card p-4 mb-4">

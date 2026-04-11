@@ -10,7 +10,7 @@ const { aggregateFeatureFlags, aggregateIntegrations } = require('../core/featur
  *
  * Mounted on the existing Express app at /mcp.
  */
-function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
+function createNectarMcpServer({ customerStore, releases, releaseTruth, taskQueue }) {
   const server = new McpServer({
     name: 'nectar',
     version: '1.0.0',
@@ -359,7 +359,84 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
     }
   );
 
-  log.info('MCP server initialized with 12 tools');
+  // ── Tool: get_pending_tasks ─────────────────────────────
+  if (taskQueue) {
+    server.tool(
+      'get_pending_tasks',
+      'Get pending tasks from the Nectar task queue. Hive NectarPM polls this to discover work.',
+      {
+        type: z.string().optional().describe('Filter by task type (release-notes, release-presentation)'),
+      },
+      async ({ type }) => {
+        const tasks = taskQueue.getPending(type || undefined);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ count: tasks.length, tasks }, null, 2),
+          }],
+        };
+      }
+    );
+
+    // ── Tool: claim_task ──────────────────────────────────
+    server.tool(
+      'claim_task',
+      'Claim a pending task — marks it as in-progress so no other worker picks it up.',
+      {
+        taskId: z.string().describe('Task ID to claim'),
+      },
+      async ({ taskId }) => {
+        try {
+          const task = taskQueue.claim(taskId);
+          return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] };
+        } catch (err) {
+          return { content: [{ type: 'text', text: `Error: ${err.message}` }] };
+        }
+      }
+    );
+
+    // ── Tool: complete_task ───────────────────────────────
+    server.tool(
+      'complete_task',
+      'Complete a task — deposit results (gammaUrl, notes, perTicketSummaries). Triggers completion callback (stores on release, notifies via Slack).',
+      {
+        taskId: z.string().describe('Task ID to complete'),
+        gammaUrl: z.string().optional().describe('URL to the generated Gamma presentation'),
+        notes: z.string().optional().describe('Generated release notes markdown'),
+        perTicketSummaries: z.record(z.string(), z.string()).optional().describe('Per-ticket summaries keyed by JIRA key'),
+      },
+      async ({ taskId, gammaUrl, notes, perTicketSummaries }) => {
+        try {
+          const output = {};
+          if (gammaUrl) output.gammaUrl = gammaUrl;
+          if (notes) output.notes = notes;
+          if (perTicketSummaries) output.perTicketSummaries = perTicketSummaries;
+
+          const task = taskQueue.complete(taskId, output);
+
+          // Store output on release if applicable
+          if (task.input && task.input.version) {
+            const release = releases.get(task.input.version);
+            if (release) {
+              const updates = {};
+              if (output.gammaUrl) updates.presentationUrl = output.gammaUrl;
+              if (output.notes) updates.notes = output.notes;
+              if (Object.keys(updates).length > 0) {
+                releases.update(task.input.version, updates, 'task-queue');
+              }
+            }
+          }
+
+          return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] };
+        } catch (err) {
+          return { content: [{ type: 'text', text: `Error: ${err.message}` }] };
+        }
+      }
+    );
+  }
+
+  const toolCount = taskQueue ? 15 : 12;
+  log.info(`MCP server initialized with ${toolCount} tools`);
   return server;
 }
 
@@ -368,9 +445,49 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth }) {
  */
 async function mountMcp(app, path, deps) {
   const server = createNectarMcpServer(deps);
+  const { apiKeys } = deps;
+
+  // MCP auth check — validates API key or WEB_TOKEN in the Authorization header.
+  // When SSO is disabled and no WEB_TOKEN is set, MCP is open (dev mode).
+  const mcpAuth = (req, res, next) => {
+    const ssoEnabled = process.env.ENABLE_GOOGLE_SSO === 'true';
+    const webToken = process.env.WEB_TOKEN;
+
+    // If already authenticated upstream (e.g., by auth middleware)
+    if (req.authenticated) return next();
+
+    const auth = req.headers.authorization;
+    if (auth && auth.startsWith('Bearer ')) {
+      const token = auth.slice(7);
+
+      // Check API key
+      if (apiKeys && token.startsWith('nectar_')) {
+        const result = apiKeys.validate(token);
+        if (result.valid) {
+          req.apiKey = { keyId: result.keyId, label: result.label };
+          req.authenticated = true;
+          return next();
+        }
+      }
+
+      // Check WEB_TOKEN
+      if (webToken && token === webToken) {
+        req.authenticated = true;
+        return next();
+      }
+    }
+
+    // Dev mode: no auth required when SSO is off and no WEB_TOKEN
+    if (!ssoEnabled && !webToken) {
+      return next();
+    }
+
+    // Auth required but not provided
+    res.status(401).json({ error: 'MCP authentication required' });
+  };
 
   // Stateless Streamable HTTP — each request gets its own transport
-  app.post(path, async (req, res) => {
+  app.post(path, mcpAuth, async (req, res) => {
     try {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined, // stateless
