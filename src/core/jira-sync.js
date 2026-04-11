@@ -258,6 +258,8 @@ class JiraSync extends EventEmitter {
         targetFixVersions: normalized.targetFixVersions,
         component: normalized.component,
         customerTags: normalized.customerTags,
+        qaAssignee: normalized.qaAssignee,
+        deployedEnvironments: normalized.deployedEnvironments,
         zohoRef: normalized.zohoRef,
         source: 'jira',
         jiraSyncedAt: new Date().toISOString(),

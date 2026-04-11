@@ -35,7 +35,9 @@ interface Ticket {
   state: string
   type: string | null
   assignee: string | null
+  qaAssignee: string | null
   zohoRef: ZohoRef | null
+  deployedEnvironments: string[]
   fixVersions: string[]
   targetFixVersions: string[]
   releases: ReleaseMembership[]
@@ -56,7 +58,7 @@ interface TicketsResponse {
 // ── Filter types ───────────────────────────────────────
 
 type GapFilter = 'any' | 'missing' | 'unplanned' | 'matched'
-type SortKey = 'key' | 'summary' | 'status' | 'assignee' | 'releases'
+type SortKey = 'key' | 'summary' | 'status' | 'assignee' | 'qaAssignee' | 'releases'
 type SortDir = 'asc' | 'desc'
 
 // ── Page ───────────────────────────────────────────────
@@ -141,6 +143,7 @@ export function TicketsPage() {
         if (t.key.toLowerCase().includes(q)) return true
         if (t.summary.toLowerCase().includes(q)) return true
         if (t.assignee?.toLowerCase().includes(q)) return true
+        if (t.qaAssignee?.toLowerCase().includes(q)) return true
         if (t.jiraStatus.toLowerCase().includes(q)) return true
         if (t.releases.some(r => r.version.toLowerCase().includes(q))) return true
         return false
@@ -154,6 +157,7 @@ export function TicketsPage() {
         case 'summary':  cmp = a.summary.localeCompare(b.summary); break
         case 'status':   cmp = a.jiraStatus.localeCompare(b.jiraStatus); break
         case 'assignee': cmp = (a.assignee || 'zzz').localeCompare(b.assignee || 'zzz'); break
+        case 'qaAssignee': cmp = (a.qaAssignee || 'zzz').localeCompare(b.qaAssignee || 'zzz'); break
         case 'releases': cmp = a.releases.length - b.releases.length; break
       }
       return sortDir === 'asc' ? cmp : -cmp
@@ -291,6 +295,7 @@ export function TicketsPage() {
                   <col />{/* summary */}
                   <col className="w-40" />
                   <col className="w-32" />
+                  <col className="w-28" />
                   <col />{/* releases */}
                 </colgroup>
                 <thead>
@@ -299,6 +304,8 @@ export function TicketsPage() {
                     <SortHeader label="Summary"   active={sortKey === 'summary'}   dir={sortDir} onClick={() => setSort('summary')} />
                     <SortHeader label="Status"    active={sortKey === 'status'}    dir={sortDir} onClick={() => setSort('status')} />
                     <SortHeader label="Assignee"  active={sortKey === 'assignee'}  dir={sortDir} onClick={() => setSort('assignee')} />
+                    <SortHeader label="QA"        active={sortKey === 'qaAssignee'} dir={sortDir} onClick={() => setSort('qaAssignee')} />
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Deployed</th>
                     <SortHeader label="Releases"  active={sortKey === 'releases'}  dir={sortDir} onClick={() => setSort('releases')} />
                   </tr>
                 </thead>
@@ -442,6 +449,12 @@ function TicketRow({ ticket: t, onReleaseClick }: {
         </span>
       </td>
       <td className="px-3 py-2 align-top">
+        <span className="text-xs text-muted-foreground">{t.qaAssignee || '—'}</span>
+      </td>
+      <td className="px-3 py-2 align-top">
+        <TicketDeployedCell envs={t.deployedEnvironments} jiraStatus={t.jiraStatus} />
+      </td>
+      <td className="px-3 py-2 align-top">
         <div className="flex flex-wrap gap-1">
           {t.releases.map(r => (
             <ReleaseBadge key={`${r.repo}:${r.version}`} release={r} onClick={() => onReleaseClick(r.version)} />
@@ -449,6 +462,46 @@ function TicketRow({ ticket: t, onReleaseClick }: {
         </div>
       </td>
     </tr>
+  )
+}
+
+function TicketDeployedCell({ envs, jiraStatus }: { envs: string[]; jiraStatus: string }) {
+  const needsTesting = ['ready for testing', 'testing in branch', 'in qa'].includes(jiraStatus.toLowerCase())
+
+  if (envs.length === 0) {
+    if (needsTesting) {
+      return (
+        <span
+          className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-500/15 text-red-400 border border-red-500/30"
+          title="Needs testing but not deployed anywhere"
+        >
+          Not deployed
+        </span>
+      )
+    }
+    return <span className="text-xs text-muted-foreground">—</span>
+  }
+
+  const hasProd = envs.some(e => /prod/i.test(e) && !/staging/i.test(e))
+  const hasStaging = envs.some(e => /staging|uat/i.test(e))
+  const hasQa = envs.some(e => /qa|dev|integration|sandbox/i.test(e))
+
+  const label = hasProd ? 'Prod' : hasStaging ? 'Staging' : hasQa ? 'QA' : 'Deployed'
+  const style = hasProd
+    ? 'bg-green-500/15 text-green-400 border-green-500/30'
+    : hasStaging
+    ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+    : hasQa
+    ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
+    : 'bg-muted/30 text-muted-foreground border-muted'
+
+  return (
+    <span
+      className={cn("inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border", style)}
+      title={`${envs.length} env${envs.length !== 1 ? 's' : ''}: ${envs.join(', ')}`}
+    >
+      {label}
+    </span>
   )
 }
 

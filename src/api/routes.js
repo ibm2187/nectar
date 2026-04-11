@@ -569,6 +569,8 @@ module.exports = function createRoutes(services, config) {
             assignee: ticket.assignee || null,
             component: ticket.component || null,
             customerTags: Array.isArray(ticket.customerTags) ? ticket.customerTags : [],
+            qaAssignee: ticket.qaAssignee || null,
+            deployedEnvironments: Array.isArray(ticket.deployedEnvironments) ? ticket.deployedEnvironments : [],
             zohoRef: ticket.zohoRef || null,
             fixVersions,
             targetFixVersions: targetVersions,

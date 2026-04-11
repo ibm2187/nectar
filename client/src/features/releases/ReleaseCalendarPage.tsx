@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { apiFetch } from '../../api/client'
 import type { Release, EffectiveReleaseStatus } from '../../api/client'
 import { Card, CardContent } from '../../components/ui/card'
@@ -10,8 +10,8 @@ import { cn } from '../../lib/utils'
 
 /**
  * Release Calendar — shows overdue, recently shipped, and upcoming releases
- * grouped by week. Uses the effective status from the backend which considers
- * prod environment deployments, not just JIRA's (often stale) released flag.
+ * grouped by day or week. Uses the effective status from the backend which
+ * considers prod environment deployments, not just JIRA's released flag.
  */
 
 const STATUS_STYLE: Record<EffectiveReleaseStatus, { bg: string; text: string; dot: string; label: string }> = {
@@ -21,6 +21,8 @@ const STATUS_STYLE: Record<EffectiveReleaseStatus, { bg: string; text: string; d
   overdue:    { bg: 'bg-red-500/10 border-red-500/40',      text: 'text-red-400',    dot: '🔴', label: 'Overdue' },
   unknown:    { bg: 'bg-muted border-border',               text: 'text-muted-foreground', dot: '⚫', label: 'Unknown' },
 }
+
+type ViewMode = 'day' | 'week'
 
 function formatDateShort(iso: string) {
   const d = new Date(iso)
@@ -52,30 +54,60 @@ function weekLabel(weekStartIso: string, now: Date): string {
   today.setHours(0, 0, 0, 0)
   const diffDays = Math.round((start.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
 
-  if (diffDays <= 0 && diffDays > -7) return `This Week · ${startStr} - ${endStr}`
-  if (diffDays >= 0 && diffDays < 7) return `This Week · ${startStr} - ${endStr}`
-  if (diffDays >= 7 && diffDays < 14) return `Next Week · ${startStr} - ${endStr}`
-  return `Week of ${startStr}`
+  if (diffDays <= 0 && diffDays > -7) return `This Week · ${startStr} – ${endStr}`
+  if (diffDays >= 0 && diffDays < 7) return `This Week · ${startStr} – ${endStr}`
+  if (diffDays >= 7 && diffDays < 14) return `Next Week · ${startStr} – ${endStr}`
+  return `${startStr} – ${endStr}`
 }
+
+function dayLabel(iso: string, now: Date): string {
+  const d = new Date(iso)
+  const today = new Date(now)
+  today.setHours(0, 0, 0, 0)
+  const diff = Math.round((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+
+  const dateStr = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+  if (diff === 0) return `Today · ${dateStr}`
+  if (diff === 1) return `Tomorrow · ${dateStr}`
+  if (diff === -1) return `Yesterday · ${dateStr}`
+  return dateStr
+}
+
+// Navigation offset in days per view mode
+const NAV_STEP: Record<ViewMode, number> = { day: 14, week: 28 }
+const VISIBLE_GROUPS: Record<ViewMode, number> = { day: 14, week: 8 }
 
 export function ReleaseCalendarPage() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  const viewMode = (searchParams.get('view') as ViewMode) || 'week'
+  const offsetDays = parseInt(searchParams.get('offset') || '0', 10)
+
   const [releases, setReleases] = useState<Release[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [repoFilter, setRepoFilter] = useState<string>('all')
-  const [showAllShipped, setShowAllShipped] = useState(false)
-  const [showAllUpcoming, setShowAllUpcoming] = useState(false)
 
   const now = useMemo(() => new Date(), [])
+
+  function updateParams(updates: Record<string, string | null>) {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      for (const [k, v] of Object.entries(updates)) {
+        if (v === null || v === '' || v === '0') next.delete(k)
+        else next.set(k, v)
+      }
+      return next
+    }, { replace: true })
+  }
 
   async function load() {
     setLoading(true)
     setError(null)
     try {
-      // Fetch 60 days back and 180 days forward
       const from = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-      const to = new Date(now.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+      const to = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
       const data = await apiFetch<Release[]>(`/releases/calendar?from=${from}&to=${to}`)
       setReleases(data)
     } catch (err) {
@@ -109,29 +141,50 @@ export function ReleaseCalendarPage() {
       else if (status === 'shipped') shipped.push(r)
       else if (status === 'upcoming') upcoming.push(r)
     }
-    // Sort overdue by how long overdue (most recent first)
     overdue.sort((a, b) => (b.jiraReleaseDate || '').localeCompare(a.jiraReleaseDate || ''))
-    // Sort shipped by releaseDate desc (most recent first)
     shipped.sort((a, b) => (b.jiraReleaseDate || '').localeCompare(a.jiraReleaseDate || ''))
-    // Sort upcoming + in-flight by releaseDate asc
     upcoming.sort((a, b) => (a.jiraReleaseDate || '').localeCompare(b.jiraReleaseDate || ''))
     inFlight.sort((a, b) => (a.jiraReleaseDate || '').localeCompare(b.jiraReleaseDate || ''))
     return { overdue, inFlight, shipped, upcoming }
   }, [filtered])
 
-  // Group upcoming + in-flight by week
-  const upcomingByWeek = useMemo(() => {
+  // Group upcoming + in-flight by day or week
+  const upcomingGrouped = useMemo(() => {
     const combined = [...buckets.inFlight, ...buckets.upcoming]
       .sort((a, b) => (a.jiraReleaseDate || '').localeCompare(b.jiraReleaseDate || ''))
     const groups = new Map<string, Release[]>()
     for (const r of combined) {
       if (!r.jiraReleaseDate) continue
-      const wk = weekStart(r.jiraReleaseDate)
-      if (!groups.has(wk)) groups.set(wk, [])
-      groups.get(wk)!.push(r)
+      const key = viewMode === 'day' ? r.jiraReleaseDate.slice(0, 10) : weekStart(r.jiraReleaseDate)
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key)!.push(r)
     }
     return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-  }, [buckets])
+  }, [buckets, viewMode])
+
+  // Apply offset for navigation
+  const visibleGroups = useMemo(() => {
+    // Find the index of the first group at or after the offset point
+    const offsetDate = new Date(now.getTime() + offsetDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    let startIdx = upcomingGrouped.findIndex(([key]) => key >= offsetDate)
+    if (startIdx < 0) startIdx = 0
+    return upcomingGrouped.slice(startIdx, startIdx + VISIBLE_GROUPS[viewMode])
+  }, [upcomingGrouped, offsetDays, viewMode, now])
+
+  const canGoBack = offsetDays > 0
+  const canGoForward = visibleGroups.length > 0 &&
+    upcomingGrouped.indexOf(visibleGroups[visibleGroups.length - 1]) < upcomingGrouped.length - 1
+
+  function goBack() {
+    const next = Math.max(0, offsetDays - NAV_STEP[viewMode])
+    updateParams({ offset: next === 0 ? null : String(next) })
+  }
+  function goForward() {
+    updateParams({ offset: String(offsetDays + NAV_STEP[viewMode]) })
+  }
+  function goToday() {
+    updateParams({ offset: null })
+  }
 
   function openRelease(r: Release) {
     const key = r.repo ? `${r.repo}:${r.version}` : r.version
@@ -153,15 +206,34 @@ export function ReleaseCalendarPage() {
     )
   }
 
-  const shippedToShow = showAllShipped ? buckets.shipped : buckets.shipped.slice(0, 10)
+  function groupLabel(key: string) {
+    return viewMode === 'day' ? dayLabel(key, now) : weekLabel(key, now)
+  }
 
   return (
     <div className="w-full space-y-6">
-      {/* Header with filters + counts */}
+      {/* Header */}
       <div>
         <div className="flex items-center justify-between mb-3 flex-wrap gap-3">
           <h2 className="text-2xl font-bold">Release Calendar</h2>
           <div className="flex items-center gap-2">
+            {/* View toggle */}
+            <div className="flex rounded-md border text-xs">
+              <button
+                type="button"
+                onClick={() => updateParams({ view: 'day', offset: null })}
+                className={cn("px-3 py-1.5 rounded-l-md transition-colors", viewMode === 'day' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+              >
+                Day
+              </button>
+              <button
+                type="button"
+                onClick={() => updateParams({ view: null, offset: null })}
+                className={cn("px-3 py-1.5 rounded-r-md border-l transition-colors", viewMode === 'week' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+              >
+                Week
+              </button>
+            </div>
             <select
               value={repoFilter}
               onChange={e => setRepoFilter(e.target.value)}
@@ -188,32 +260,23 @@ export function ReleaseCalendarPage() {
           </span>
           <span className="text-muted-foreground">·</span>
           <span className="text-muted-foreground">
-            <span className="text-green-400 font-semibold">{buckets.shipped.length}</span> shipped (last 60d)
+            <span className="text-green-400 font-semibold">{buckets.shipped.length}</span> shipped
           </span>
         </div>
       </div>
 
-      {/* Overdue section */}
+      {/* Overdue — always shown first */}
       {buckets.overdue.length > 0 && (
         <Section title="Overdue" count={buckets.overdue.length} accent="red">
           {buckets.overdue.map(r => <ReleaseRow key={r.id} release={r} now={now} onClick={() => openRelease(r)} />)}
         </Section>
       )}
 
-      {/* Recently shipped */}
+      {/* Recently shipped (collapsed by default) */}
       {buckets.shipped.length > 0 && (
-        <Section title="Recently Shipped" count={buckets.shipped.length} accent="green">
-          {shippedToShow.map(r => <ReleaseRow key={r.id} release={r} now={now} onClick={() => openRelease(r)} />)}
-          {buckets.shipped.length > 10 && (
-            <button
-              type="button"
-              onClick={() => setShowAllShipped(!showAllShipped)}
-              className="w-full text-left py-2 px-3 text-sm text-muted-foreground hover:text-foreground rounded hover:bg-accent/30"
-            >
-              {showAllShipped ? '▲ Show fewer' : `▾ Show ${buckets.shipped.length - 10} more shipped`}
-            </button>
-          )}
-        </Section>
+        <CollapsibleSection title="Recently Shipped" count={buckets.shipped.length} accent="green">
+          {buckets.shipped.slice(0, 10).map(r => <ReleaseRow key={r.id} release={r} now={now} onClick={() => openRelease(r)} />)}
+        </CollapsibleSection>
       )}
 
       {/* Today divider */}
@@ -225,31 +288,51 @@ export function ReleaseCalendarPage() {
         <div className="flex-1 h-px bg-border"></div>
       </div>
 
-      {/* Upcoming grouped by week */}
-      {upcomingByWeek.length === 0 ? (
+      {/* Navigation bar */}
+      <div className="flex items-center justify-between">
+        <Button variant="ghost" size="sm" onClick={goBack} disabled={!canGoBack} className="text-xs">
+          &larr; Back
+        </Button>
+        {offsetDays > 0 && (
+          <Button variant="ghost" size="sm" onClick={goToday} className="text-xs">
+            Today
+          </Button>
+        )}
+        <Button variant="ghost" size="sm" onClick={goForward} disabled={!canGoForward} className="text-xs">
+          Forward &rarr;
+        </Button>
+      </div>
+
+      {/* Upcoming grouped by day or week */}
+      {visibleGroups.length === 0 ? (
         <Card>
           <CardContent className="p-8 text-center text-sm text-muted-foreground italic">
-            No upcoming releases scheduled
+            No upcoming releases scheduled in this range
           </CardContent>
         </Card>
       ) : (
-        upcomingByWeek
-          .slice(0, showAllUpcoming ? undefined : 6)
-          .map(([week, rels]) => (
-            <Section key={week} title={weekLabel(week, now)} count={rels.length} accent="default">
-              {rels.map(r => <ReleaseRow key={r.id} release={r} now={now} onClick={() => openRelease(r)} />)}
-            </Section>
-          ))
+        visibleGroups.map(([key, rels]) => (
+          <Section key={key} title={groupLabel(key)} count={rels.length} accent="default">
+            {rels.map(r => <ReleaseRow key={r.id} release={r} now={now} onClick={() => openRelease(r)} />)}
+          </Section>
+        ))
       )}
 
-      {upcomingByWeek.length > 6 && (
-        <button
-          type="button"
-          onClick={() => setShowAllUpcoming(!showAllUpcoming)}
-          className="w-full text-left py-2 px-3 text-sm text-muted-foreground hover:text-foreground rounded hover:bg-accent/30"
-        >
-          {showAllUpcoming ? '▲ Show fewer weeks' : `▾ Show ${upcomingByWeek.length - 6} more weeks`}
-        </button>
+      {/* Bottom navigation */}
+      {upcomingGrouped.length > VISIBLE_GROUPS[viewMode] && (
+        <div className="flex items-center justify-between pt-2">
+          <Button variant="ghost" size="sm" onClick={goBack} disabled={!canGoBack} className="text-xs">
+            &larr; Back
+          </Button>
+          {offsetDays > 0 && (
+            <Button variant="ghost" size="sm" onClick={goToday} className="text-xs">
+              Today
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={goForward} disabled={!canGoForward} className="text-xs">
+            Forward &rarr;
+          </Button>
+        </div>
       )}
     </div>
   )
@@ -281,6 +364,36 @@ function Section({ title, count, accent, children }: {
   )
 }
 
+function CollapsibleSection({ title, count, accent, children }: {
+  title: string
+  count: number
+  accent: 'red' | 'green' | 'default'
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const titleColor = {
+    red: 'text-red-400',
+    green: 'text-green-400',
+    default: 'text-foreground',
+  }[accent]
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-2 mb-2 w-full text-left group"
+      >
+        <span className="text-xs text-muted-foreground group-hover:text-foreground">{open ? '▾' : '▸'}</span>
+        <h3 className={cn("text-sm font-semibold uppercase tracking-wider", titleColor)}>{title}</h3>
+        <span className="text-xs text-muted-foreground">{count}</span>
+        <div className="flex-1 h-px bg-border ml-2"></div>
+      </button>
+      {open && <div className="space-y-2">{children}</div>}
+    </div>
+  )
+}
+
 function ReleaseRow({ release, now, onClick }: {
   release: Release
   now: Date
@@ -292,11 +405,11 @@ function ReleaseRow({ release, now, onClick }: {
 
   let timingText = ''
   if (status === 'overdue' && release.effectiveStatus?.daysOverdue) {
-    timingText = `Target was ${release.effectiveStatus.daysOverdue} day${release.effectiveStatus.daysOverdue === 1 ? '' : 's'} ago · no prod deployment detected`
+    timingText = `${release.effectiveStatus.daysOverdue}d overdue · no prod deployment detected`
   } else if (status === 'in-flight' && days !== null) {
-    timingText = days <= 0 ? 'today' : `in ${days} day${days === 1 ? '' : 's'}`
+    timingText = days <= 0 ? 'today' : `in ${days}d`
   } else if (status === 'upcoming' && days !== null) {
-    timingText = `in ${days} days`
+    timingText = `in ${days}d`
   }
 
   const proof = release.effectiveStatus?.shippedSignals?.[0]?.detail
@@ -311,13 +424,10 @@ function ReleaseRow({ release, now, onClick }: {
       )}
     >
       <div className="flex items-center gap-3">
-        {/* Date badge */}
         <div className="text-xs font-mono text-muted-foreground w-16 shrink-0">
           {release.jiraReleaseDate ? formatDateShort(release.jiraReleaseDate) : '—'}
         </div>
-        {/* Status dot */}
         <span className="text-lg shrink-0">{style.dot}</span>
-        {/* Version + repo */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-mono font-semibold truncate">{release.version}</span>

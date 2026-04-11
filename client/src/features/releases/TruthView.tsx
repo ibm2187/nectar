@@ -47,7 +47,7 @@ const PILL_FILTERS: { key: 'all' | HealthCategory; label: string; color: string 
   { key: 'attention',    label: 'Attention',   color: 'bg-red-500/15 text-red-400' },
 ]
 
-type SortKey = 'health' | 'key' | 'jiraStatus' | 'assignee'
+type SortKey = 'health' | 'key' | 'jiraStatus' | 'assignee' | 'qaAssignee'
 type SortDir = 'asc' | 'desc'
 
 type ViewMode = 'impact' | 'full'
@@ -190,7 +190,8 @@ export function TruthView({ repo, version }: Props) {
       rows = rows.filter(t =>
         t.key.toLowerCase().includes(q) ||
         (t.summary || '').toLowerCase().includes(q) ||
-        (t.assignee || '').toLowerCase().includes(q)
+        (t.assignee || '').toLowerCase().includes(q) ||
+        (t.qaAssignee || '').toLowerCase().includes(q)
       )
     }
 
@@ -208,6 +209,9 @@ export function TruthView({ repo, version }: Props) {
           break
         case 'assignee':
           cmp = (a.assignee || 'zzz').localeCompare(b.assignee || 'zzz')
+          break
+        case 'qaAssignee':
+          cmp = (a.qaAssignee || 'zzz').localeCompare(b.qaAssignee || 'zzz')
           break
       }
       return sortDir === 'asc' ? cmp : -cmp
@@ -408,25 +412,29 @@ export function TruthView({ repo, version }: Props) {
               <colgroup>
                 <col className="w-28" />
                 <col />{/* title takes remaining */}
-                <col className="w-40" />
-                <col className="w-32" />
-                <col className="w-20" />
-                <col className="w-64" />
+                <col className="w-36" />
+                <col className="w-28" />
+                <col className="w-28" />
+                <col className="w-16" />
+                <col className="w-24" />
+                <col className="w-56" />
               </colgroup>
               <thead>
                 <tr className="border-b text-left">
                   <SortHeader label="Key"        active={sortKey === 'key'}        dir={sortDir} onClick={() => setSort('key')} />
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Title</th>
                   <SortHeader label="JIRA Status" active={sortKey === 'jiraStatus'} dir={sortDir} onClick={() => setSort('jiraStatus')} />
+                  <SortHeader label="QA"          active={sortKey === 'qaAssignee'} dir={sortDir} onClick={() => setSort('qaAssignee')} />
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cherry-Pick</th>
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center">Branch</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Deployed</th>
                   <SortHeader label="Health"     active={sortKey === 'health'}     dir={sortDir} onClick={() => setSort('health')} />
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-3 py-8 text-center text-sm text-muted-foreground italic">
+                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground italic">
                       No tickets match the current filter
                     </td>
                   </tr>
@@ -612,6 +620,11 @@ function TicketRow({ ticket: t }: { ticket: VerifiedTicket }) {
         <span className="text-xs">{t.jiraStatus}</span>
       </td>
 
+      {/* QA Assignee */}
+      <td className="px-3 py-2 align-top">
+        <span className="text-xs text-muted-foreground">{t.qaAssignee || '—'}</span>
+      </td>
+
       {/* Cherry-pick PR */}
       <td className="px-3 py-2 align-top">
         {t.pr ? (
@@ -639,6 +652,11 @@ function TicketRow({ ticket: t }: { ticket: VerifiedTicket }) {
         )}
       </td>
 
+      {/* Deployed */}
+      <td className="px-3 py-2 align-top">
+        <DeployedCell ticket={t} />
+      </td>
+
       {/* Health */}
       <td className="px-3 py-2 align-top">
         <div
@@ -653,6 +671,46 @@ function TicketRow({ ticket: t }: { ticket: VerifiedTicket }) {
       </td>
     </tr>
   )
+}
+
+function DeployedCell({ ticket: t }: { ticket: VerifiedTicket }) {
+  const envs = t.deployedEnvironments || []
+  const needsTesting = ['in-qa', 'awaiting-cp'].includes(t.healthCategory) ||
+    ['ready for testing', 'testing in branch', 'in qa'].includes(t.jiraStatus.toLowerCase())
+
+  if (envs.length === 0) {
+    if (needsTesting) {
+      return (
+        <span
+          className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-500/15 text-red-400 border border-red-500/30"
+          title="Needs testing but not deployed anywhere"
+        >
+          Not deployed
+        </span>
+      )
+    }
+    return <span className="text-xs text-muted-foreground">—</span>
+  }
+
+  const { label, style } = getDeployTier(envs)
+  return (
+    <span
+      className={cn("inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border", style)}
+      title={`${envs.length} env${envs.length !== 1 ? 's' : ''}: ${envs.join(', ')}`}
+    >
+      {label}
+    </span>
+  )
+}
+
+function getDeployTier(envs: string[]): { label: string; style: string } {
+  const hasProd = envs.some(e => /prod/i.test(e) && !/staging/i.test(e))
+  if (hasProd) return { label: 'Prod', style: 'bg-green-500/15 text-green-400 border-green-500/30' }
+  const hasStaging = envs.some(e => /staging|uat/i.test(e))
+  if (hasStaging) return { label: 'Staging', style: 'bg-blue-500/15 text-blue-400 border-blue-500/30' }
+  const hasQa = envs.some(e => /qa|dev|integration|sandbox/i.test(e))
+  if (hasQa) return { label: 'QA', style: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' }
+  return { label: 'Deployed', style: 'bg-muted/30 text-muted-foreground border-muted' }
 }
 
 function ZohoBadge({ refData }: { refData: ZohoRef }) {

@@ -315,6 +315,8 @@ export interface VerifiedTicket {
   /** True if this release is in the ticket's canonical fixVersions */
   inFixVersion?: boolean
   component?: string | null
+  qaAssignee?: string | null
+  deployedEnvironments?: string[]
   zohoRef?: ZohoRef | null
 }
 

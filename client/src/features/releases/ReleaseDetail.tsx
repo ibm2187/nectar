@@ -88,63 +88,177 @@ export function ReleaseDetail() {
     await apiFetch(`/releases/${version}/risk?refresh=true`)
   }
 
+  // ── Date helpers (consistent ISO format) ──────────────
+  const fmtDate = (d: string | null | undefined) => d ? d.slice(0, 10) : null
+
+  const cutDate = fmtDate(release.cutAt) || fmtDate(release.createdAt)
+  const releaseDate = fmtDate(release.jiraReleaseDate)
+  const today = new Date().toISOString().slice(0, 10)
+  const isOverdue = releaseDate && !release.jiraReleased && releaseDate < today
+  const isReleased = !!release.jiraReleased
+
+  // Timeline progress: how far between cut → release date are we?
+  const timelineProgress = (() => {
+    if (!cutDate || !releaseDate) return null
+    const start = new Date(cutDate).getTime()
+    const end = new Date(releaseDate).getTime()
+    const now = Date.now()
+    if (end <= start) return 100
+    return Math.min(100, Math.max(0, Math.round(((now - start) / (end - start)) * 100)))
+  })()
+
+  // Ticket health distribution for the timeline bar
+  const ticketCounts = release.tickets.reduce(
+    (acc, t) => {
+      const s = (t.state || '').toLowerCase()
+      if (s === 'done' || s === 'cherry-picked' || s === 'ready-for-testing') acc.done++
+      else if (s === 'in-progress') acc.inProgress++
+      else acc.pending++
+      return acc
+    },
+    { done: 0, inProgress: 0, pending: 0 }
+  )
+  const totalTickets = release.tickets.length
+
   return (
     <div className="w-full">
-      <Button variant="link" className="mb-4 px-0" onClick={() => navigate(backPath)}>
+      <Button variant="link" className="mb-2 px-0 text-xs" onClick={() => navigate(backPath)}>
         &larr; {backLabel}
       </Button>
 
-      {/* Header */}
-      <div className="flex items-center gap-4 mb-6 flex-wrap">
-        {release.repo && (
-          <Badge variant="secondary" className="text-sm">{release.repo}</Badge>
-        )}
-        <h2 className="text-3xl font-bold font-mono">{release.version}</h2>
-        <Badge className={cn(stateColors[release.state], "text-sm px-3 py-1")} variant="outline">
-          {release.state}
-        </Badge>
-        {jiraBaseUrl && release.jiraVersionId && (
-          <a
-            href={`${jiraBaseUrl}/projects/${jiraProject}/versions/${release.jiraVersionId}/tab/release-report-all-issues`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 hover:underline"
-            title="Open this release in JIRA to edit release date, description, or mark as released"
-          >
-            Open in JIRA
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-              <polyline points="15 3 21 3 21 9"/>
-              <line x1="10" y1="14" x2="21" y2="3"/>
-            </svg>
-          </a>
-        )}
+      {/* Compact header: version + state + meta + actions all in one block */}
+      <div className="flex items-start justify-between gap-4 mb-4 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
+          {release.repo && (
+            <Badge variant="secondary" className="text-xs">{release.repo}</Badge>
+          )}
+          <h2 className="text-2xl font-bold font-mono">{release.version}</h2>
+          <Badge className={cn(stateColors[release.state], "text-xs px-2 py-0.5")} variant="outline">
+            {release.state}
+          </Badge>
+          {release.risk.numericScore !== null && (
+            <span className={cn("text-xs font-medium", release.risk.score === 'low' ? 'text-green-400' : release.risk.score === 'medium' ? 'text-yellow-400' : 'text-red-400')}>
+              Risk: {release.risk.score?.toUpperCase()}
+            </span>
+          )}
+          {jiraBaseUrl && release.jiraVersionId && (
+            <a
+              href={`${jiraBaseUrl}/projects/${jiraProject}/versions/${release.jiraVersionId}/tab/release-report-all-issues`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 hover:underline"
+            >
+              JIRA
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+              </svg>
+            </a>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {nextStates.map(s => (
+            <Button key={s} variant="outline" size="sm" className="text-xs h-7" onClick={() => transition(s)}>
+              {s}
+            </Button>
+          ))}
+          <Button variant="outline" size="sm" className="text-xs h-7" onClick={validate}>Validate</Button>
+          <Button variant="outline" size="sm" className="text-xs h-7" onClick={assessRisk}>Risk</Button>
+        </div>
       </div>
 
-      {/* Actions */}
-      <div className="flex flex-wrap gap-2 mb-6">
-        {nextStates.map(s => (
-          <Button key={s} variant="outline" size="sm" onClick={() => transition(s)}>
-            Move to {s}
-          </Button>
-        ))}
-        <Button variant="outline" size="sm" onClick={validate}>Validate</Button>
-        <Button variant="outline" size="sm" onClick={assessRisk}>Assess Risk</Button>
+      {/* Release timeline */}
+      <div className="rounded-lg border bg-card p-4 mb-4">
+        {/* Timeline bar */}
+        <div className="flex items-center gap-3 mb-3">
+          {/* Cut date anchor */}
+          <div className="text-xs text-muted-foreground shrink-0 w-20 text-center">
+            <div className="font-medium text-foreground">{cutDate}</div>
+            <div className="text-[10px]">{release.cutAt ? 'cut' : 'created'}</div>
+          </div>
+
+          {/* Bar */}
+          <div className="flex-1 relative">
+            <div className="h-2 rounded-full bg-muted/30 overflow-hidden">
+              {totalTickets > 0 ? (
+                <div className="h-full flex">
+                  <div
+                    className="h-full bg-green-500/70 transition-all"
+                    style={{ width: `${(ticketCounts.done / totalTickets) * 100}%` }}
+                  />
+                  <div
+                    className="h-full bg-yellow-500/70 transition-all"
+                    style={{ width: `${(ticketCounts.inProgress / totalTickets) * 100}%` }}
+                  />
+                  <div
+                    className="h-full bg-muted-foreground/20 transition-all"
+                    style={{ width: `${(ticketCounts.pending / totalTickets) * 100}%` }}
+                  />
+                </div>
+              ) : (
+                <div className="h-full bg-muted/50" />
+              )}
+            </div>
+            {/* Today marker */}
+            {timelineProgress !== null && !isReleased && (
+              <div
+                className="absolute top-0 w-0.5 h-4 -mt-1 bg-foreground/60"
+                style={{ left: `${timelineProgress}%` }}
+                title={`Today: ${today}`}
+              >
+                <div className="absolute -top-4 left-1/2 -translate-x-1/2 text-[9px] text-muted-foreground whitespace-nowrap">
+                  today
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Release date anchor */}
+          <div className="text-xs shrink-0 w-20 text-center">
+            <div className={cn("font-medium", isReleased ? 'text-green-400' : isOverdue ? 'text-yellow-400' : 'text-foreground')}>
+              {releaseDate || '—'}
+            </div>
+            <div className={cn("text-[10px]", isReleased ? 'text-green-400' : isOverdue ? 'text-yellow-400' : 'text-muted-foreground')}>
+              {isReleased ? 'released' : isOverdue ? 'overdue' : 'target'}
+            </div>
+          </div>
+        </div>
+
+        {/* Stats row */}
+        <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
+          <span><span className="font-mono text-foreground">{release.branch}</span></span>
+          {release.cutFrom && (
+            <span>from <span className="font-mono">{release.cutFrom.substring(0, 7)}</span></span>
+          )}
+          {release.cutBy && <span>by {release.cutBy}</span>}
+          {release.cherryPicks.length > 0 && (
+            <span>{release.cherryPicks.length} cherry-picks</span>
+          )}
+          {totalTickets > 0 && (
+            <span className="ml-auto flex items-center gap-2">
+              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500/70" />{ticketCounts.done} done</span>
+              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-500/70" />{ticketCounts.inProgress} in progress</span>
+              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-muted-foreground/30" />{ticketCounts.pending} pending</span>
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* Validation report */}
+      {/* Validation report (collapsible, only shown when triggered) */}
       {validation && (
-        <Card className="mb-6">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Validation Report</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 gap-4 text-sm">
+        <Card className="mb-4">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-3 mb-2">
+              <Badge variant={validation.ready ? 'success' : 'warning'}>
+                {validation.ready ? 'Ready for release' : 'Not ready'}
+              </Badge>
+              <span className="text-xs text-muted-foreground">Validation Report</span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
               {(['jira', 'git', 'ci', 'approvals'] as const).map(section => (
                 <div key={section}>
                   <div className="flex items-center gap-2 mb-1">
                     <span className={cn("w-2 h-2 rounded-full", validation[section].ok ? "bg-green-400" : "bg-red-400")} />
-                    <span className="font-medium capitalize">{section}</span>
+                    <span className="font-medium capitalize text-xs">{section}</span>
                   </div>
                   {validation[section].issues.length > 0 ? (
                     <ul className="text-muted-foreground text-xs space-y-0.5">
@@ -158,45 +272,9 @@ export function ReleaseDetail() {
                 </div>
               ))}
             </div>
-            <div className="mt-3 pt-3 border-t">
-              <Badge variant={validation.ready ? 'success' : 'warning'}>
-                {validation.ready ? 'Ready for release' : 'Not ready'}
-              </Badge>
-            </div>
           </CardContent>
         </Card>
       )}
-
-      {/* Info */}
-      <Card className="mb-4">
-        <CardHeader className="pb-3"><CardTitle className="text-base">Info</CardTitle></CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <div><span className="text-muted-foreground">Branch:</span> <span className="font-mono">{release.branch}</span></div>
-            {release.cutFrom && <div><span className="text-muted-foreground">Cut from:</span> <span className="font-mono">{release.cutFrom.substring(0, 7)}</span></div>}
-            {release.cutBy && <div><span className="text-muted-foreground">Cut by:</span> {release.cutBy}</div>}
-            {release.cutAt && <div><span className="text-muted-foreground">Cut at:</span> {new Date(release.cutAt).toLocaleDateString()}</div>}
-            {release.risk.numericScore !== null && (
-              <div>
-                <span className="text-muted-foreground">Risk:</span>{' '}
-                <span className={release.risk.score === 'low' ? 'text-green-400' : release.risk.score === 'medium' ? 'text-yellow-400' : 'text-red-400'}>
-                  {release.risk.score?.toUpperCase()} ({release.risk.numericScore})
-                </span>
-              </div>
-            )}
-          </div>
-          {release.risk.factors.length > 0 && (
-            <div className="mt-3 pt-3 border-t">
-              <p className="text-xs text-muted-foreground mb-1">Risk factors:</p>
-              <ul className="text-xs space-y-0.5">
-                {release.risk.factors.map((f, i) => (
-                  <li key={i} className="text-muted-foreground">+{f.points} {f.reason}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
       {/* Truth view — JIRA + Git + PR reconciliation */}
       {release.repo && (

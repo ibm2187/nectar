@@ -130,6 +130,8 @@ class ReleaseTruth {
               ticket.targetFixVersions = fresh.targetFixVersions;
               ticket.component = fresh.component;
               ticket.customerTags = fresh.customerTags;
+              ticket.qaAssignee = fresh.qaAssignee;
+              ticket.deployedEnvironments = fresh.deployedEnvironments;
               ticket.zohoRef = fresh.zohoRef;
               ticket.jiraRefreshedAt = new Date().toISOString();
             }
@@ -386,6 +388,8 @@ class ReleaseTruth {
       inFixVersion,
       component: ticket.component || null,
       customerTags: Array.isArray(ticket.customerTags) ? ticket.customerTags : [],
+      qaAssignee: ticket.qaAssignee || null,
+      deployedEnvironments: Array.isArray(ticket.deployedEnvironments) ? ticket.deployedEnvironments : [],
       zohoRef: ticket.zohoRef || null,
     };
 

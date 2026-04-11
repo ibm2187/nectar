@@ -61,7 +61,8 @@ export function RoadmapPage() {
 
   const search = searchParams.get('q') || ''
   const customerFilter = searchParams.get('customer') || ''
-  const zoom = (searchParams.get('zoom') as 'week' | 'month' | 'quarter') || 'month'
+  const zoom = (searchParams.get('zoom') as 'day' | 'week' | 'month' | 'quarter') || 'month'
+  const offsetParam = parseInt(searchParams.get('offset') || '0', 10)
 
   const [data, setData] = useState<RoadmapResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -110,17 +111,46 @@ export function RoadmapPage() {
     })
   }, [data, search])
 
+  // ── Navigation ─────────────────────────────────────────
+  const NAV_STEP: Record<string, number> = { day: 14, week: 4, month: 3, quarter: 3 }
+  const VISIBLE_COUNT: Record<string, number> = { day: 14, week: 8, month: 6, quarter: 4 }
+
+  function goBack() {
+    const next = Math.max(0, offsetParam - NAV_STEP[zoom])
+    updateParams({ offset: next === 0 ? null : String(next) })
+  }
+  function goForward() {
+    updateParams({ offset: String(offsetParam + NAV_STEP[zoom]) })
+  }
+  function goToday() {
+    updateParams({ offset: null })
+  }
+
+  // ── Generate day columns ──────────────────────────────
+  const dayColumns = useMemo((): MonthColumn[] => {
+    const now = new Date()
+    now.setHours(0, 0, 0, 0)
+    const days: MonthColumn[] = []
+    for (let i = 0; i < 60; i++) { // generate plenty, slice later
+      const d = new Date(now)
+      d.setDate(now.getDate() + i)
+      const iso = d.toISOString().slice(0, 10)
+      const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      days.push({ key: `d-${iso}`, label, start: iso, end: iso })
+    }
+    return days
+  }, [])
+
   // ── Generate week columns ──────────────────────────────
   const weekColumns = useMemo((): MonthColumn[] => {
-    // 12 weeks forward from Monday of the current week
     const now = new Date()
     const day = now.getDay()
     const monday = new Date(now)
-    monday.setDate(now.getDate() - ((day + 6) % 7)) // Roll back to Monday
+    monday.setDate(now.getDate() - ((day + 6) % 7))
     monday.setHours(0, 0, 0, 0)
 
     const weeks: MonthColumn[] = []
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 52; i++) { // generate plenty, slice later
       const start = new Date(monday)
       start.setDate(monday.getDate() + i * 7)
       const end = new Date(start)
@@ -128,7 +158,6 @@ export function RoadmapPage() {
 
       const startStr = start.toISOString().slice(0, 10)
       const endStr = end.toISOString().slice(0, 10)
-
       const label = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
       weeks.push({ key: `w-${startStr}`, label, start: startStr, end: endStr })
     }
@@ -138,7 +167,10 @@ export function RoadmapPage() {
   // ── Determine visible time columns ───────────────────
   const visibleColumns = useMemo(() => {
     if (!data) return []
-    if (zoom === 'week') return weekColumns
+    const count = VISIBLE_COUNT[zoom]
+
+    if (zoom === 'day') return dayColumns.slice(offsetParam, offsetParam + count)
+    if (zoom === 'week') return weekColumns.slice(offsetParam, offsetParam + count)
     if (zoom === 'quarter') {
       const quarters: MonthColumn[] = []
       for (let i = 0; i < data.months.length; i += 3) {
@@ -151,11 +183,30 @@ export function RoadmapPage() {
           end: batch[batch.length - 1].end,
         })
       }
-      return quarters
+      return quarters.slice(offsetParam, offsetParam + count)
     }
-    // Month view: show 6 months
-    return data.months.slice(0, 6)
-  }, [data, zoom, weekColumns])
+    // Month view
+    return data.months.slice(offsetParam, offsetParam + count)
+  }, [data, zoom, weekColumns, dayColumns, offsetParam])
+
+  // ── Check if any theme has overdue or unscheduled cards ─
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
+
+  const { hasOverdue, hasUnscheduled } = useMemo(() => {
+    if (!filteredThemes.length) return { hasOverdue: false, hasUnscheduled: false }
+    let overdue = false
+    let unscheduled = false
+    for (const theme of filteredThemes) {
+      if (theme.months['unscheduled']?.length) unscheduled = true
+      for (const [, cards] of Object.entries(theme.months)) {
+        for (const card of cards) {
+          if (card.jiraReleaseDate && card.jiraReleaseDate < today && card.progress < 100) overdue = true
+        }
+      }
+      if (overdue && unscheduled) break
+    }
+    return { hasOverdue: overdue, hasUnscheduled: unscheduled }
+  }, [filteredThemes, today])
 
   function toggleTheme(name: string) {
     setCollapsedThemes(prev => {
@@ -196,24 +247,44 @@ export function RoadmapPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Navigation */}
+          <Button variant="ghost" size="sm" onClick={goBack} disabled={offsetParam <= 0} className="text-xs h-7 px-2">
+            &larr;
+          </Button>
+          {offsetParam > 0 && (
+            <Button variant="ghost" size="sm" onClick={goToday} className="text-xs h-7 px-2">
+              Today
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={goForward} className="text-xs h-7 px-2">
+            &rarr;
+          </Button>
+          {/* Zoom toggle */}
           <div className="flex rounded-md border text-xs">
             <button
               type="button"
-              onClick={() => updateParams({ zoom: 'week' })}
-              className={cn("px-3 py-1.5 rounded-l-md transition-colors", zoom === 'week' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+              onClick={() => updateParams({ zoom: 'day', offset: null })}
+              className={cn("px-3 py-1.5 rounded-l-md transition-colors", zoom === 'day' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+            >
+              Day
+            </button>
+            <button
+              type="button"
+              onClick={() => updateParams({ zoom: 'week', offset: null })}
+              className={cn("px-3 py-1.5 border-l transition-colors", zoom === 'week' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
             >
               Week
             </button>
             <button
               type="button"
-              onClick={() => updateParams({ zoom: null })}
+              onClick={() => updateParams({ zoom: null, offset: null })}
               className={cn("px-3 py-1.5 border-l transition-colors", zoom === 'month' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
             >
               Month
             </button>
             <button
               type="button"
-              onClick={() => updateParams({ zoom: 'quarter' })}
+              onClick={() => updateParams({ zoom: 'quarter', offset: null })}
               className={cn("px-3 py-1.5 rounded-r-md border-l transition-colors", zoom === 'quarter' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
             >
               Quarter
@@ -270,26 +341,32 @@ export function RoadmapPage() {
       {/* Grid */}
       <div className="overflow-x-auto">
         <div className="min-w-[800px]">
-          {/* Month header row */}
+          {/* Header row */}
           <div className="flex border-b sticky top-0 bg-background z-10">
-            <div className="w-52 shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <div className="w-48 shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Theme
             </div>
+            {hasOverdue && (
+              <div className="w-36 shrink-0 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-red-400/70 text-center border-l bg-red-500/[0.03]">
+                Overdue
+              </div>
+            )}
+            {hasUnscheduled && (
+              <div className="w-36 shrink-0 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground/50 text-center border-l">
+                Unscheduled
+              </div>
+            )}
             {visibleColumns.map(m => (
               <div
                 key={m.key}
                 className={cn(
                   "flex-1 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center border-l",
-                  zoom === 'week' ? "min-w-[110px]" : "min-w-[140px]"
+                  zoom === 'day' ? "min-w-[90px]" : zoom === 'week' ? "min-w-[110px]" : "min-w-[140px]"
                 )}
               >
                 {m.label}
               </div>
             ))}
-            {/* Unscheduled column */}
-            <div className="w-36 shrink-0 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground/50 text-center border-l">
-              Unscheduled
-            </div>
           </div>
 
           {/* Theme rows */}
@@ -305,8 +382,12 @@ export function RoadmapPage() {
                 months={visibleColumns}
                 collapsed={collapsedThemes.has(theme.name)}
                 onToggle={() => toggleTheme(theme.name)}
-                isWeekView={zoom === 'week'}
+                isDayView={zoom === 'day'}
+                isWeekView={zoom === 'day' || zoom === 'week'}
                 onCardClick={(version, repo) => setDrawer({ theme: theme.name, version, repo })}
+                showOverdue={hasOverdue}
+                showUnscheduled={hasUnscheduled}
+                today={today}
               />
             ))
           )}
@@ -338,41 +419,73 @@ export function RoadmapPage() {
 
 // ── Theme row ──────────────────────────────────────────
 
-function ThemeRow({ theme, months, collapsed, onToggle, isWeekView, onCardClick }: {
+function ThemeRow({ theme, months, collapsed, onToggle, isDayView, isWeekView, onCardClick, showOverdue, showUnscheduled, today }: {
   theme: Theme
   months: MonthColumn[]
   collapsed: boolean
   onToggle: () => void
+  isDayView?: boolean
   isWeekView?: boolean
   onCardClick: (version: string, repo: string) => void
+  showOverdue: boolean
+  showUnscheduled: boolean
+  today: string
 }) {
+  // Collect ALL cards across month buckets for date-range matching
+  const allCards = useMemo(() => {
+    const cards: ReleaseCard[] = []
+    for (const [key, monthCards] of Object.entries(theme.months)) {
+      if (key === 'unscheduled') continue
+      cards.push(...monthCards)
+    }
+    return cards
+  }, [theme.months])
+
   // Get cards that fall within a time column's date range
   function getCardsForColumn(col: MonthColumn): ReleaseCard[] {
     if (!theme.months) return []
 
     if (isWeekView) {
-      // For week view: scan ALL month buckets and match by jiraReleaseDate range
-      const cards: ReleaseCard[] = []
-      for (const [, monthCards] of Object.entries(theme.months)) {
-        for (const card of monthCards) {
-          if (card.jiraReleaseDate && card.jiraReleaseDate >= col.start && card.jiraReleaseDate <= col.end) {
-            cards.push(card)
-          }
-        }
-      }
-      return cards
+      return allCards.filter(card =>
+        card.jiraReleaseDate && card.jiraReleaseDate >= col.start && card.jiraReleaseDate <= col.end &&
+        (card.progress >= 100 || card.jiraReleaseDate >= today) // exclude overdue from time columns
+      )
     }
 
-    // For month/quarter view: lookup by month key(s)
+    // For month/quarter view: lookup by month key(s), exclude overdue
     const keys = col.key.split(',')
     const cards: ReleaseCard[] = []
     for (const k of keys) {
-      cards.push(...(theme.months[k] || []))
+      for (const card of (theme.months[k] || [])) {
+        if (card.jiraReleaseDate && card.jiraReleaseDate < today && card.progress < 100) continue
+        cards.push(card)
+      }
     }
     return cards
   }
 
+  // Overdue cards: have a release date in the past and are not complete
+  const overdueCards = useMemo(() =>
+    allCards.filter(c => c.jiraReleaseDate && c.jiraReleaseDate < today && c.progress < 100),
+    [allCards, today]
+  )
+
   const unscheduledCards = theme.months['unscheduled'] || []
+
+  function renderCell(cards: ReleaseCard[]) {
+    return (
+      <>
+        {!collapsed && cards.map(card => (
+          <ReleaseCardView key={`${card.repo}:${card.version}`} card={card} onClick={() => onCardClick(card.version, card.repo)} />
+        ))}
+        {collapsed && cards.length > 0 && (
+          <div className="text-[10px] text-muted-foreground text-center py-1">
+            {cards.reduce((s, c) => s + c.tickets, 0)} tickets
+          </div>
+        )}
+      </>
+    )
+  }
 
   return (
     <div className="flex border-b hover:bg-accent/10 transition-colors">
@@ -380,7 +493,7 @@ function ThemeRow({ theme, months, collapsed, onToggle, isWeekView, onCardClick 
       <button
         type="button"
         onClick={onToggle}
-        className="w-52 shrink-0 px-3 py-3 text-left"
+        className="w-48 shrink-0 px-3 py-3 text-left"
       >
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">{collapsed ? '▸' : '▾'}</span>
@@ -394,46 +507,37 @@ function ThemeRow({ theme, months, collapsed, onToggle, isWeekView, onCardClick 
             </div>
           </div>
         </div>
-        {/* Mini progress bar */}
         <div className="mt-1.5 h-1 rounded-full bg-muted/30 overflow-hidden">
-          <div
-            className="h-full rounded-full bg-green-500/60 transition-all"
-            style={{ width: `${theme.progress}%` }}
-          />
+          <div className="h-full rounded-full bg-green-500/60 transition-all" style={{ width: `${theme.progress}%` }} />
         </div>
       </button>
 
-      {/* Month cells */}
+      {/* Overdue cell */}
+      {showOverdue && (
+        <div className="w-36 shrink-0 px-1.5 py-2 border-l bg-red-500/[0.02]">
+          {renderCell(overdueCards)}
+        </div>
+      )}
+
+      {/* Unscheduled cell */}
+      {showUnscheduled && (
+        <div className="w-36 shrink-0 px-1.5 py-2 border-l">
+          {renderCell(unscheduledCards)}
+        </div>
+      )}
+
+      {/* Time cells */}
       {months.map(m => {
         const cards = getCardsForColumn(m)
         return (
           <div
             key={m.key}
-            className={cn("flex-1 px-1.5 py-2 border-l", isWeekView ? "min-w-[110px]" : "min-w-[140px]")}
+            className={cn("flex-1 px-1.5 py-2 border-l", isDayView ? "min-w-[90px]" : isWeekView ? "min-w-[110px]" : "min-w-[140px]")}
           >
-            {!collapsed && cards.map(card => (
-              <ReleaseCardView key={`${card.repo}:${card.version}`} card={card} onClick={() => onCardClick(card.version, card.repo)} />
-            ))}
-            {collapsed && cards.length > 0 && (
-              <div className="text-[10px] text-muted-foreground text-center py-1">
-                {cards.reduce((s, c) => s + c.tickets, 0)} tickets
-              </div>
-            )}
+            {renderCell(cards)}
           </div>
         )
       })}
-
-      {/* Unscheduled cell */}
-      <div className="w-36 shrink-0 px-1.5 py-2 border-l">
-        {!collapsed && unscheduledCards.map(card => (
-          <ReleaseCardView key={`${card.repo}:${card.version}`} card={card} onClick={() => onCardClick(card.version, card.repo)} />
-        ))}
-        {collapsed && unscheduledCards.length > 0 && (
-          <div className="text-[10px] text-muted-foreground text-center py-1">
-            {unscheduledCards.reduce((s, c) => s + c.tickets, 0)} tickets
-          </div>
-        )}
-      </div>
     </div>
   )
 }
