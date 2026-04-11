@@ -51,6 +51,7 @@ export interface Release {
   jiraReleased?: boolean
   jiraReleaseDate?: string | null
   jiraArchived?: boolean
+  presentationUrl?: string | null
   // Set by backend when releases are returned via /api/releases or /api/releases/calendar
   effectiveStatus?: EffectiveStatus
 }
