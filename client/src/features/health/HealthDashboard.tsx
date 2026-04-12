@@ -247,7 +247,7 @@ export function HealthDashboard() {
                     <Badge variant={severity} className="text-[10px] px-1.5 py-0 shrink-0">
                       {alert.alertType || 'info'}
                     </Badge>
-                    <a href={alert.url} target="_blank" rel="noopener noreferrer" className="truncate text-foreground hover:text-primary hover:underline">{alert.title}</a>
+                    <a href={`https://app.datadoghq.com${alert.url}`} target="_blank" rel="noopener noreferrer" className="truncate text-foreground hover:text-primary hover:underline">{alert.title}</a>
                     {envName && (
                       <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0">
                         {envName}

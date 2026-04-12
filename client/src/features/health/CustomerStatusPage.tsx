@@ -256,7 +256,7 @@ export function CustomerStatusPage() {
                     <Badge variant={severity} className="text-[10px] px-1.5 py-0 shrink-0">
                       {alert.alertType || 'info'}
                     </Badge>
-                    <a href={alert.url} target="_blank" rel="noopener noreferrer" className="truncate hover:text-primary hover:underline">{alert.title}</a>
+                    <a href={`https://app.datadoghq.com${alert.url}`} target="_blank" rel="noopener noreferrer" className="truncate hover:text-primary hover:underline">{alert.title}</a>
                     <span className="text-xs text-muted-foreground shrink-0 ml-auto">
                       {timeAgo(new Date(alert.dateHappened * 1000).toISOString())}
                     </span>
