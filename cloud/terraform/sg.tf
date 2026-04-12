@@ -1,4 +1,4 @@
-# Security group for ALB — restricts HTTPS to office IPs only.
+# Security group for ALB — open to the world (dashboard has its own auth).
 # EC2 SSH (port 22) is granted via the existing shared office SSH SG
 # (toronto-office-jenkins-ssh) attached in ec2.tf — not defined here.
 
@@ -15,25 +15,21 @@ resource "aws_security_group" "nectar_alb" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "alb_https" {
-  for_each = toset(var.office_cidrs)
-
   security_group_id = aws_security_group.nectar_alb.id
-  description       = "HTTPS from office"
+  description       = "HTTPS from anywhere"
   from_port         = 443
   to_port           = 443
   ip_protocol       = "tcp"
-  cidr_ipv4         = each.value
+  cidr_ipv4         = "0.0.0.0/0"
 }
 
 resource "aws_vpc_security_group_ingress_rule" "alb_http" {
-  for_each = toset(var.office_cidrs)
-
   security_group_id = aws_security_group.nectar_alb.id
-  description       = "HTTP from office (redirects to HTTPS)"
+  description       = "HTTP from anywhere (redirects to HTTPS)"
   from_port         = 80
   to_port           = 80
   ip_protocol       = "tcp"
-  cidr_ipv4         = each.value
+  cidr_ipv4         = "0.0.0.0/0"
 }
 
 resource "aws_vpc_security_group_egress_rule" "alb_to_ec2" {
