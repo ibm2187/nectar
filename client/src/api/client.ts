@@ -244,7 +244,6 @@ export interface HealthData {
   checks: {
     criticalFunctionality?: { status?: string; services?: Record<string, { status: string; responseTimeMs?: number; details?: string }> }
     externalServices?: { status?: string; services?: Record<string, { status: string; responseTimeMs?: number; details?: string }> }
-    integrations?: { status?: string; services?: Record<string, { status: string; responseTimeMs?: number; details?: string }> }
   }
   summary: {
     totalChecks: number

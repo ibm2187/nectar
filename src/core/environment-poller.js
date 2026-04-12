@@ -182,15 +182,15 @@ class EnvironmentPoller extends EventEmitter {
     const sections = [
       checks.criticalFunctionality,
       checks.externalServices,
-      checks.integrations,
     ].filter(Boolean);
 
+    // Only check critical + external services — integrations are tracked
+    // separately via the dedicated /api/status/integrations endpoint.
     const CRITICAL_SERVICES = ['mongodb', 'redis'];
 
     for (const section of sections) {
       const services = section.services || {};
       for (const [name, svc] of Object.entries(services)) {
-        // Any critical service down → unhealthy
         if (CRITICAL_SERVICES.includes(name) && svc.status !== 'healthy' && svc.status !== 'skipped') {
           return 'unhealthy';
         }
@@ -286,7 +286,6 @@ class EnvironmentPoller extends EventEmitter {
           checks: {
             criticalFunctionality: checks.criticalFunctionality || {},
             externalServices: checks.externalServices || {},
-            integrations: checks.integrations || {},
           },
           summary: {
             totalChecks: summary.totalChecks || 0,

@@ -79,7 +79,6 @@ const getAllChecks = (env: HealthEnvironment): HealthCheck[] => {
   const sections = [
     env.health.checks.criticalFunctionality,
     env.health.checks.externalServices,
-    env.health.checks.integrations,
   ]
   for (const section of sections) {
     if (!section?.services) continue
