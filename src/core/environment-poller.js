@@ -209,18 +209,13 @@ class EnvironmentPoller extends EventEmitter {
     if (!env.url) return { versionChanged: false };
     const previousVersion = env.currentVersion;
 
-    // Kick off requests in parallel. /upgrades is paginated — _fetchAllUpgrades
-    // walks every page and returns a merged { environment, totalInPool, items }.
-    // /status (health) only polled for production + staging to limit request volume.
-    const pollHealth = env.tier === 'production' || env.tier === 'staging';
-    const promises = [
+    // Kick off all four original endpoints in parallel (unchanged from before health feature).
+    const [versionResult, featuresResult, integrationsResult, upgradesResult] = await Promise.allSettled([
       this._fetchEndpoint(env.url, '/api/status/version'),
       this._fetchEndpoint(env.url, '/api/status/features'),
       this._fetchEndpoint(env.url, '/api/status/integrations'),
       this._fetchAllUpgrades(env.url),
-      pollHealth ? this._fetchHealthEndpoint(env.url) : Promise.reject(new Error('skipped')),
-    ];
-    const [versionResult, featuresResult, integrationsResult, upgradesResult, healthResult] = await Promise.allSettled(promises);
+    ]);
 
     // /version → updates currentVersion + reachable + lastChecked
     if (versionResult.status === 'fulfilled') {
@@ -271,38 +266,37 @@ class EnvironmentPoller extends EventEmitter {
       this.customerStore.updateUpgrades(env.id, upgradesResult.value);
     }
 
-    // /status (health) → derive overall status and store structured health data
-    if (healthResult.status === 'rejected' && pollHealth) {
-      log.warn(`Health poll failed for ${env.id}: ${healthResult.reason?.message || 'unknown'}`);
+    // /status (health) — separate from main poll, only for production + staging
+    if (env.tier === 'production' || env.tier === 'staging') {
+      try {
+        const { data: healthData, responseTimeMs } = await this._fetchHealthEndpoint(env.url);
+        const status = this._deriveHealthStatus(healthData);
+        const checks = healthData.checks || {};
+        const summary = healthData.summary || {};
+        this.customerStore.updateHealth(env.id, {
+          status,
+          checks: {
+            criticalFunctionality: checks.criticalFunctionality || {},
+            externalServices: checks.externalServices || {},
+            integrations: checks.integrations || {},
+          },
+          summary: {
+            totalChecks: summary.totalChecks || 0,
+            passed: summary.passed || 0,
+            failed: summary.failed || 0,
+            degraded: summary.degraded || 0,
+            skipped: summary.skipped || 0,
+          },
+          responseTimeMs,
+          checkedAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        log.warn(`Health poll failed for ${env.id}: ${err.message}`);
+      }
     }
-    if (healthResult.status === 'fulfilled') {
-      const { data: healthData, responseTimeMs } = healthResult.value;
-      const status = this._deriveHealthStatus(healthData);
-      const checks = healthData.checks || {};
-      const summary = healthData.summary || {};
-      this.customerStore.updateHealth(env.id, {
-        status,
-        checks: {
-          criticalFunctionality: checks.criticalFunctionality || [],
-          externalServices: checks.externalServices || [],
-          integrations: checks.integrations || [],
-        },
-        summary: {
-          totalChecks: summary.totalChecks || 0,
-          passed: summary.passed || 0,
-          failed: summary.failed || 0,
-          degraded: summary.degraded || 0,
-          skipped: summary.skipped || 0,
-        },
-        responseTimeMs,
-        checkedAt: new Date().toISOString(),
-      });
-    }
-    // If health endpoint fails, don't overwrite — the environment may still
-    // be reachable via /version but just not have /api/status yet.
 
     // Track per-env reachability for rollup (consider reachable if at least version succeeded)
-    const anySucceeded = [versionResult, featuresResult, integrationsResult, upgradesResult, healthResult]
+    const anySucceeded = [versionResult, featuresResult, integrationsResult, upgradesResult]
       .some(r => r.status === 'fulfilled');
     if (!anySucceeded) {
       throw new Error('All endpoints failed');
