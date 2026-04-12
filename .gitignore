@@ -30,3 +30,4 @@ Thumbs.db
 .idea/
 *.swp
 .nectar-users.json
+.nectar-state.json.tmp
