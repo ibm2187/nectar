@@ -292,16 +292,9 @@ class EnvironmentPoller extends EventEmitter {
         responseTimeMs,
         checkedAt: new Date().toISOString(),
       });
-    } else {
-      // Health endpoint not available — mark as unreachable
-      this.customerStore.updateHealth(env.id, {
-        status: 'unreachable',
-        checks: {},
-        summary: { totalChecks: 0, passed: 0, failed: 0, degraded: 0, skipped: 0 },
-        responseTimeMs: null,
-        checkedAt: new Date().toISOString(),
-      });
     }
+    // If health endpoint fails, don't overwrite — the environment may still
+    // be reachable via /version but just not have /api/status yet.
 
     // Track per-env reachability for rollup (consider reachable if at least version succeeded)
     const anySucceeded = [versionResult, featuresResult, integrationsResult, upgradesResult, healthResult]

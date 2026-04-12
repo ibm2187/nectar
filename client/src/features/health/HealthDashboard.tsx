@@ -60,7 +60,7 @@ const flattenToCards = (customers: HealthCustomer[], tab: Tab): EnvCard[] => {
         customerId: customer.id,
         customerName: customer.name,
         env,
-        status: env.health?.status ?? 'unreachable',
+        status: env.health?.status ?? (env.reachable ? 'healthy' : 'unreachable'),
       })
     }
   }
