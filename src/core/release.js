@@ -161,7 +161,7 @@ class ReleaseManager extends EventEmitter {
     const release = this._getOrThrow(version);
 
     // Only allow updating safe fields
-    const allowed = ['branch', 'cutFrom', 'cutBy', 'ci', 'risk', 'notes'];
+    const allowed = ['branch', 'cutFrom', 'cutBy', 'ci', 'risk', 'notes', 'presentationUrl'];
     const applied = {};
     for (const key of allowed) {
       if (key in changes) {

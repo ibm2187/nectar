@@ -162,6 +162,7 @@ function createAuthMiddleware(apiKeys) {
     if (req.path.startsWith('/api/auth/') ||
         req.path.startsWith('/api/webhooks/') ||
         req.path === '/health' ||
+        req.path === '/mcp' ||
         req.path === '/login' ||
         req.path.startsWith('/assets/') ||
         req.path.endsWith('.js') ||

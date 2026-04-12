@@ -1007,6 +1007,14 @@ module.exports = function createRoutes(services, config) {
         return res.status(400).json({ error: 'Either version or input is required' });
       }
 
+      // Cancel any existing pending/in-progress task for the same release+type
+      if (input.version) {
+        const existing = taskQueue.findByRelease(type, input.version);
+        if (existing && (existing.status === 'pending' || existing.status === 'in-progress')) {
+          taskQueue.fail(existing.id, 'Superseded by new task');
+        }
+      }
+
       const requestedBy = req.user ? req.user.email : null;
       const task = taskQueue.createTask(type, input, requestedBy, { slackUserId });
       res.status(201).json(task);

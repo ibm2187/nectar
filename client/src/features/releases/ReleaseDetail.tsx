@@ -128,6 +128,7 @@ export function ReleaseDetail() {
     if (!version) return
     setTaskLoading(true)
     setTaskError(null)
+    setTask(null) // Clear old task so UI resets
     try {
       const newTask = await apiFetch<TaskInfo>('/tasks', {
         method: 'POST',
@@ -240,15 +241,34 @@ export function ReleaseDetail() {
           ))}
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={validate}>Validate</Button>
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={assessRisk}>Risk</Button>
-          {/* Presentation button — shows link if ready, generate button if not */}
-          {release.presentationUrl || (task && task.status === 'completed' && task.output?.gammaUrl) ? (
-            <a href={release.presentationUrl || task?.output?.gammaUrl} target="_blank" rel="noopener noreferrer">
-              <Button variant="outline" size="sm" className="text-xs h-7">Presentation</Button>
-            </a>
-          ) : task && (task.status === 'pending' || task.status === 'in-progress') ? (
+          {/* Presentation button */}
+          {taskLoading || (task && (task.status === 'pending' || task.status === 'in-progress')) ? (
             <Button variant="outline" size="sm" className="text-xs h-7" disabled>
               <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1.5" />
-              {task.status === 'pending' ? 'Queued...' : 'Generating...'}
+              {taskLoading ? 'Creating...' : task?.status === 'pending' ? 'Queued...' : 'Generating...'}
+            </Button>
+          ) : release.presentationUrl || (task && task.status === 'completed' && task.output?.gammaUrl) ? (
+            <>
+              <a href={release.presentationUrl || task?.output?.gammaUrl} target="_blank" rel="noopener noreferrer">
+                <Button variant="outline" size="sm" className="text-xs h-7">Presentation</Button>
+              </a>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs h-7 text-muted-foreground"
+                onClick={generatePresentation}
+              >
+                Regenerate
+              </Button>
+            </>
+          ) : task && task.status === 'failed' ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-7"
+              onClick={generatePresentation}
+            >
+              Retry Presentation
             </Button>
           ) : (
             <Button
@@ -256,9 +276,8 @@ export function ReleaseDetail() {
               size="sm"
               className="text-xs h-7"
               onClick={generatePresentation}
-              disabled={taskLoading}
             >
-              {taskLoading ? 'Creating...' : 'Generate Presentation'}
+              Generate Presentation
             </Button>
           )}
         </div>

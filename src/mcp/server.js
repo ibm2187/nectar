@@ -459,7 +459,6 @@ async function mountMcp(app, path, deps) {
     const auth = req.headers.authorization;
     if (auth && auth.startsWith('Bearer ')) {
       const token = auth.slice(7);
-
       // Check API key
       if (apiKeys && token.startsWith('nectar_')) {
         const result = apiKeys.validate(token);

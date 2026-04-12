@@ -102,7 +102,7 @@ function createWebServer(services, config) {
 
   // SPA fallback — serve index.html for client-side routes
   app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api/') || req.path.startsWith('/ws')) return next();
+    if (req.path.startsWith('/api/') || req.path.startsWith('/ws') || req.path.startsWith('/mcp')) return next();
     const indexPath = path.join(staticDir, 'index.html');
     if (fs.existsSync(indexPath)) {
       res.sendFile(indexPath);

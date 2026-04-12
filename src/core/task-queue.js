@@ -96,7 +96,7 @@ class TaskQueue extends EventEmitter {
     task.startedAt = new Date().toISOString();
     this._save();
     this.emit('task:claimed', task);
-    log.info(`Task claimed: ${taskId}`);
+    log.info(`Task claimed: ${taskId} (caller: ${new Error().stack.split('\n')[2].trim()})`);
     return { ...task };
   }
 
@@ -133,8 +133,8 @@ class TaskQueue extends EventEmitter {
   fail(taskId, error) {
     const task = this.tasks.get(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
-    if (task.status !== 'in-progress') {
-      throw new Error(`Task ${taskId} is ${task.status}, cannot fail (must be in-progress)`);
+    if (task.status !== 'in-progress' && task.status !== 'pending') {
+      throw new Error(`Task ${taskId} is ${task.status}, cannot fail`);
     }
 
     task.status = 'failed';
