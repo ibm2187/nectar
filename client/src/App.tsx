@@ -12,6 +12,8 @@ import { IssuesPage } from './features/issues/IssuesPage'
 import { TicketsPage } from './features/tickets/TicketsPage'
 import { RoadmapPage } from './features/roadmap/RoadmapPage'
 import { ConfigPage } from './features/config/ConfigPage'
+import { IntegrationsConfigPage } from './features/integrations-config/IntegrationsConfigPage'
+import { UpdatePage } from './features/admin/UpdatePage'
 import { TasksPage } from './features/tasks/TasksPage'
 import { LoginPage } from './features/auth/LoginPage'
 import { connectWebSocket, disconnectWebSocket, useWsStore } from './stores/wsStore'
@@ -82,7 +84,10 @@ export default function App() {
             <Route path="/tickets" element={<TicketsPage />} />
             <Route path="/roadmap" element={<RoadmapPage />} />
             <Route path="/tasks-queue" element={<TasksPage />} />
+            <Route path="/settings" element={<ConfigPage />} />
             <Route path="/config" element={<ConfigPage />} />
+            <Route path="/integrations-config" element={<IntegrationsConfigPage />} />
+            <Route path="/admin/update" element={<UpdatePage />} />
           </Route>
         </Routes>
       </BrowserRouter>

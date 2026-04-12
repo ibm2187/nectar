@@ -6,6 +6,17 @@ import { Input } from '../../components/ui/input'
 import { NectarLoader } from '../../components/NectarLoader'
 import { cn } from '../../lib/utils'
 
+// ── Tab types ─────────────────────────────────────────
+
+type Tab = 'themes' | 'api-keys'
+
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'themes', label: 'Themes' },
+  { key: 'api-keys', label: 'API Keys' },
+]
+
+// ── Theme types ───────────────────────────────────────
+
 interface ThemeEntry {
   name: string
   components: string[]
@@ -19,6 +30,41 @@ interface ThemeConfig {
 }
 
 export function ConfigPage() {
+  const [activeTab, setActiveTab] = useState<Tab>('themes')
+
+  return (
+    <div className="w-full space-y-6 max-w-4xl">
+      {/* Tab bar */}
+      <div>
+        <h2 className="text-2xl font-bold">Settings</h2>
+        <div className="flex items-center gap-1 mt-3">
+          {TABS.map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={cn(
+                "px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
+                activeTab === tab.key
+                  ? "bg-accent text-accent-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tab content */}
+      {activeTab === 'themes' && <ThemesTab />}
+      {activeTab === 'api-keys' && <ApiKeysSection />}
+    </div>
+  )
+}
+
+// ── Themes Tab ────────────────────────────────────────
+
+function ThemesTab() {
   const [config, setConfig] = useState<ThemeConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -127,32 +173,32 @@ export function ConfigPage() {
         return
       }
       // Merge suggestions into existing themes
-      const merged = [...config.themes]
+      const mergedThemes = [...config.themes]
       for (const suggestion of result.suggestions) {
         // Check if a theme with this name already exists
-        const existingIdx = merged.findIndex(t =>
+        const existingIdx = mergedThemes.findIndex(t =>
           t.name.toLowerCase() === suggestion.name.toLowerCase()
         )
         if (existingIdx >= 0) {
           // Add new components to existing theme
-          const existing = new Set(merged[existingIdx].components.map(c => c.toLowerCase()))
+          const existing = new Set(mergedThemes[existingIdx].components.map(c => c.toLowerCase()))
           const newComps = suggestion.components.filter(c => !existing.has(c.toLowerCase()))
           if (newComps.length > 0) {
-            merged[existingIdx] = {
-              ...merged[existingIdx],
-              components: [...merged[existingIdx].components, ...newComps],
+            mergedThemes[existingIdx] = {
+              ...mergedThemes[existingIdx],
+              components: [...mergedThemes[existingIdx].components, ...newComps],
             }
           }
         } else {
-          merged.push(suggestion)
+          mergedThemes.push(suggestion)
         }
       }
-      merged.sort((a, b) => a.name.localeCompare(b.name))
-      setConfig({ ...config, themes: merged })
+      mergedThemes.sort((a, b) => a.name.localeCompare(b.name))
+      setConfig({ ...config, themes: mergedThemes })
       setDirty(true)
       // Re-compute unmapped after merge
       const mappedSet = new Set<string>()
-      for (const t of merged) for (const c of t.components) mappedSet.add(c)
+      for (const t of mergedThemes) for (const c of t.components) mappedSet.add(c)
       setObservedComponents(prev => prev.filter(c => !mappedSet.has(c)))
       setSaveMsg(`Added ${result.suggestions.length} theme groups. Review and save.`)
       setTimeout(() => setSaveMsg(null), 5000)
@@ -186,21 +232,11 @@ export function ConfigPage() {
     )
   }
 
-  // Compute all mapped components for the "unmapped" indicator
-  const mappedComponents = new Set<string>()
-  for (const theme of config.themes) {
-    for (const c of theme.components) mappedComponents.add(c)
-  }
-
   return (
-    <div className="w-full space-y-6 max-w-4xl">
-      {/* API Keys section */}
-      <ApiKeysSection />
-
+    <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-2xl font-bold">Configuration</h2>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="text-sm text-muted-foreground">
             Map JIRA components to display themes on the roadmap.
             {config.updatedAt && (
               <> · Last saved {new Date(config.updatedAt).toLocaleDateString()}</>

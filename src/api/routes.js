@@ -1,4 +1,7 @@
 const { Router } = require('express');
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
 const log = require('../core/log');
 const ReleaseManager = require('../core/release');
 const { annotateReleases } = require('../core/release-status');
@@ -1122,6 +1125,336 @@ module.exports = function createRoutes(services, config) {
       }
     });
   }
+
+  // ── Integrations Config ────────────────────────────────
+  // Manage external service connections via .env file
+
+  const ENV_PATH = path.join(__dirname, '..', '..', '.env');
+  const NECTAR_ROOT = path.join(__dirname, '..', '..');
+
+  /**
+   * Integration definitions — maps integration name to its env vars
+   * and metadata for the frontend.
+   */
+  const INTEGRATIONS = {
+    jira: {
+      label: 'JIRA',
+      vars: [
+        { key: 'JIRA_URL', label: 'Base URL', secret: false },
+        { key: 'JIRA_USERNAME', label: 'Email / Username', secret: false },
+        { key: 'JIRA_API_TOKEN', label: 'API Token', secret: true },
+      ],
+    },
+    github: {
+      label: 'GitHub',
+      vars: [
+        { key: 'GITHUB_TOKEN', label: 'Token', secret: true },
+      ],
+    },
+    jenkins: {
+      label: 'Jenkins',
+      vars: [
+        { key: 'JENKINS_BASE_URL', label: 'Base URL', secret: false },
+        { key: 'JENKINS_USER', label: 'User', secret: false },
+        { key: 'JENKINS_TOKEN', label: 'Token', secret: true },
+      ],
+    },
+    slack: {
+      label: 'Slack',
+      vars: [
+        { key: 'SLACK_BOT_TOKEN', label: 'Bot Token', secret: true },
+        { key: 'SLACK_APP_TOKEN', label: 'App Token', secret: true },
+      ],
+    },
+    google_sso: {
+      label: 'Google SSO',
+      vars: [
+        { key: 'ENABLE_GOOGLE_SSO', label: 'Enabled', secret: false, type: 'boolean' },
+        { key: 'GOOGLE_CLIENT_ID', label: 'Client ID', secret: false },
+        { key: 'GOOGLE_CLIENT_SECRET', label: 'Client Secret', secret: true },
+        { key: 'GOOGLE_ALLOWED_DOMAIN', label: 'Allowed Domain', secret: false },
+        { key: 'GOOGLE_REDIRECT_URI', label: 'Redirect URI', secret: false },
+      ],
+    },
+    gamma: {
+      label: 'Gamma',
+      vars: [
+        { key: 'GAMMA_API_KEY', label: 'API Key', secret: true },
+      ],
+    },
+  };
+
+  /** Read .env file into a Map of key → value */
+  function readEnvFile() {
+    try {
+      const content = fs.readFileSync(ENV_PATH, 'utf8');
+      const entries = new Map();
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx < 0) continue;
+        const key = trimmed.slice(0, eqIdx).trim();
+        let val = trimmed.slice(eqIdx + 1).trim();
+        // Strip surrounding quotes
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        entries.set(key, val);
+      }
+      return entries;
+    } catch {
+      return new Map();
+    }
+  }
+
+  /** Write an updated Map back to .env, preserving comments and ordering */
+  function writeEnvFile(updates) {
+    let content = '';
+    try {
+      content = fs.readFileSync(ENV_PATH, 'utf8');
+    } catch { /* file doesn't exist yet */ }
+
+    const lines = content.split('\n');
+    const written = new Set();
+    const result = [];
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) {
+        result.push(line);
+        continue;
+      }
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx < 0) {
+        result.push(line);
+        continue;
+      }
+      const key = trimmed.slice(0, eqIdx).trim();
+      if (updates.has(key)) {
+        result.push(`${key}=${updates.get(key)}`);
+        written.add(key);
+      } else {
+        result.push(line);
+      }
+    }
+
+    // Append any new keys not already in the file
+    for (const [key, val] of updates) {
+      if (!written.has(key)) {
+        result.push(`${key}=${val}`);
+      }
+    }
+
+    fs.writeFileSync(ENV_PATH, result.join('\n'));
+  }
+
+  /** Mask a secret value: show last 3 chars, mask the rest */
+  function maskSecret(val) {
+    if (!val) return '';
+    if (val.length <= 3) return '***';
+    return '****' + val.slice(-3);
+  }
+
+  // GET /api/config/integrations — returns status of all integrations
+  router.get('/config/integrations', (req, res) => {
+    const env = readEnvFile();
+    const result = {};
+
+    for (const [name, def] of Object.entries(INTEGRATIONS)) {
+      const vars = {};
+      let configured = true;
+
+      for (const v of def.vars) {
+        const raw = env.get(v.key) || '';
+        const hasValue = !!raw;
+        if (v.type !== 'boolean' && !hasValue) configured = false;
+        vars[v.key] = {
+          label: v.label,
+          secret: v.secret,
+          type: v.type || 'string',
+          value: v.secret ? maskSecret(raw) : raw,
+          hasValue,
+        };
+      }
+
+      result[name] = {
+        name,
+        label: def.label,
+        configured,
+        vars,
+      };
+    }
+
+    res.json(result);
+  });
+
+  // POST /api/config/integrations/:name — save env vars for an integration
+  router.post('/config/integrations/:name', (req, res) => {
+    const def = INTEGRATIONS[req.params.name];
+    if (!def) return res.status(404).json({ error: 'Unknown integration' });
+
+    const updates = new Map();
+    const body = req.body || {};
+
+    for (const v of def.vars) {
+      if (body[v.key] !== undefined) {
+        // Don't overwrite with masked value — only update if it's a real new value
+        const val = body[v.key];
+        if (v.secret && typeof val === 'string' && val.startsWith('****')) {
+          continue; // Skip masked values — user didn't change it
+        }
+        updates.set(v.key, String(val));
+      }
+    }
+
+    if (updates.size === 0) {
+      return res.status(400).json({ error: 'No values to update' });
+    }
+
+    try {
+      writeEnvFile(updates);
+      // Reload env vars into process.env so they take effect
+      for (const [key, val] of updates) {
+        process.env[key] = val;
+      }
+      log.info(`Integration config updated: ${req.params.name} (${Array.from(updates.keys()).join(', ')})`);
+      res.json({ ok: true, updated: Array.from(updates.keys()) });
+    } catch (err) {
+      res.status(500).json({ error: `Failed to write .env: ${err.message}` });
+    }
+  });
+
+  // POST /api/config/integrations/:name/test — test an integration connection
+  router.post('/config/integrations/:name/test', asyncHandler(async (req, res) => {
+    const name = req.params.name;
+    const def = INTEGRATIONS[name];
+    if (!def) return res.status(404).json({ error: 'Unknown integration' });
+
+    try {
+      let result;
+
+      switch (name) {
+        case 'jira': {
+          const url = process.env.JIRA_URL || process.env.JIRA_BASE_URL;
+          const user = process.env.JIRA_USERNAME;
+          const token = process.env.JIRA_API_TOKEN;
+          if (!url || !user || !token) throw new Error('JIRA is not fully configured');
+          const resp = await fetch(`${url.replace(/\/$/, '')}/rest/api/3/myself`, {
+            headers: {
+              'Authorization': `Basic ${Buffer.from(`${user}:${token}`).toString('base64')}`,
+              'Accept': 'application/json',
+            },
+          });
+          if (!resp.ok) throw new Error(`JIRA API returned ${resp.status}`);
+          const data = await resp.json();
+          result = { ok: true, detail: `Connected as ${data.displayName || data.emailAddress || 'unknown'}` };
+          break;
+        }
+        case 'github': {
+          const token = process.env.GITHUB_TOKEN;
+          if (!token) throw new Error('GitHub token not configured');
+          const resp = await fetch('https://api.github.com/user', {
+            headers: {
+              'Authorization': `token ${token}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'User-Agent': 'nectar',
+            },
+          });
+          if (!resp.ok) throw new Error(`GitHub API returned ${resp.status}`);
+          const data = await resp.json();
+          result = { ok: true, detail: `Connected as ${data.login}` };
+          break;
+        }
+        case 'jenkins': {
+          const baseUrl = process.env.JENKINS_BASE_URL;
+          const user = process.env.JENKINS_USER;
+          const token = process.env.JENKINS_TOKEN;
+          if (!baseUrl || !user || !token) throw new Error('Jenkins is not fully configured');
+          const resp = await fetch(`${baseUrl.replace(/\/$/, '')}/api/json`, {
+            headers: {
+              'Authorization': `Basic ${Buffer.from(`${user}:${token}`).toString('base64')}`,
+              'Accept': 'application/json',
+            },
+          });
+          if (!resp.ok) throw new Error(`Jenkins API returned ${resp.status}`);
+          result = { ok: true, detail: 'Connected to Jenkins' };
+          break;
+        }
+        case 'slack': {
+          const botToken = process.env.SLACK_BOT_TOKEN;
+          if (!botToken) throw new Error('Slack bot token not configured');
+          const resp = await fetch('https://slack.com/api/auth.test', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${botToken}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          const data = await resp.json();
+          if (!data.ok) throw new Error(`Slack API error: ${data.error}`);
+          result = { ok: true, detail: `Connected as ${data.user} in ${data.team}` };
+          break;
+        }
+        case 'google_sso': {
+          const enabled = process.env.ENABLE_GOOGLE_SSO;
+          const clientId = process.env.GOOGLE_CLIENT_ID;
+          if (enabled === 'true' && !clientId) throw new Error('SSO enabled but no Client ID set');
+          result = { ok: true, detail: enabled === 'true' ? `SSO enabled (Client ID: ${clientId.slice(0, 20)}...)` : 'SSO is disabled' };
+          break;
+        }
+        case 'gamma': {
+          const apiKey = process.env.GAMMA_API_KEY;
+          if (!apiKey) throw new Error('Gamma API key not configured');
+          result = { ok: true, detail: 'API key is set (no test endpoint available)' };
+          break;
+        }
+        default:
+          return res.status(400).json({ error: `No test available for ${name}` });
+      }
+
+      res.json(result);
+    } catch (err) {
+      res.json({ ok: false, detail: err.message });
+    }
+  }));
+
+  // ── Admin — Version & Update ──────────────────────────
+
+  router.get('/admin/version', (req, res) => {
+    try {
+      const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: NECTAR_ROOT, encoding: 'utf8' }).trim();
+      const commit = execSync('git rev-parse --short HEAD', { cwd: NECTAR_ROOT, encoding: 'utf8' }).trim();
+      const commitMessage = execSync('git log -1 --format=%s', { cwd: NECTAR_ROOT, encoding: 'utf8' }).trim();
+      const commitDate = execSync('git log -1 --format=%aI', { cwd: NECTAR_ROOT, encoding: 'utf8' }).trim();
+      res.json({ branch, commit, commitMessage, commitDate });
+    } catch (err) {
+      res.status(500).json({ error: `Failed to read git info: ${err.message}` });
+    }
+  });
+
+  router.post('/admin/pull', asyncHandler(async (req, res) => {
+    try {
+      const output = execSync('git pull 2>&1', {
+        cwd: NECTAR_ROOT,
+        encoding: 'utf8',
+        timeout: 30000,
+      });
+      log.info(`Admin pull: ${output.trim()}`);
+      res.json({ ok: true, output: output.trim() });
+    } catch (err) {
+      res.status(500).json({ error: err.message, output: err.stdout || '' });
+    }
+  }));
+
+  router.post('/admin/restart', (req, res) => {
+    log.info('Admin restart requested — exiting process');
+    res.json({ ok: true, message: 'Restarting...' });
+    // Give the response time to flush before exiting
+    setTimeout(() => {
+      process.exit(0);
+    }, 500);
+  });
 
   // ── Meta ──────────────────────────────────────────────
 
