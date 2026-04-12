@@ -60,11 +60,11 @@ If you need to recreate or modify these subnets, do it in the owning tool/state
 
 ### Access
 
-- **HTTPS** (dashboard): via ALB at `https://nectar.vivtechnologies.com`, office
-  IPs only (beanfield + rogers).
+- **HTTPS** (dashboard): via ALB at `https://nectar.vivtechnologies.com` — open
+  to the internet (no IP restriction). Authentication is handled by **Google SSO**
+  at the application level (login required, restricted to `@vivtechnologies.com`).
 - **SSH** (break-glass): via the shared `toronto-office-jenkins-ssh` SG
-  (`sg-043c84f65239ea620`) using the `jenkins` EC2 key pair. Also office IPs
-  only.
+  (`sg-043c84f65239ea620`) using the `jenkins` EC2 key pair. Office IPs only.
 - **Shell without SSH**: `aws ssm start-session --target <instance-id>` — works
   from anywhere the IAM user has SSM permissions, no key needed.
 
@@ -86,6 +86,11 @@ Viv root account (140947722076), us-east-1. Store as JSON:
   "JENKINS_TOKEN": "<jenkins-api-token>",
   "SLACK_BOT_TOKEN": "<slack-bot-token>",
   "SLACK_APP_TOKEN": "<slack-app-token>",
+  "GOOGLE_CLIENT_ID": "<google-oauth-client-id>",
+  "GOOGLE_CLIENT_SECRET": "<google-oauth-client-secret>",
+  "GOOGLE_ALLOWED_DOMAIN": "vivtechnologies.com",
+  "GOOGLE_REDIRECT_URI": "https://nectar.vivtechnologies.com/api/auth/google/callback",
+  "JWT_SECRET": "<random-string-for-session-tokens>",
   "GITHUB_WEBHOOK_SECRET": "<optional-webhook-secret>"
 }
 ```
@@ -97,10 +102,14 @@ aws secretsmanager create-secret \
   --region us-east-1
 ```
 
+**Google SSO**: create an OAuth 2.0 client in Google Cloud Console with the
+authorized redirect URI set to
+`https://nectar.vivtechnologies.com/api/auth/google/callback`. Only emails
+matching `GOOGLE_ALLOWED_DOMAIN` are allowed to log in.
+
 **Do NOT set `WEB_TOKEN`.** The server would require every WebSocket client to
 authenticate with that token, but the React client doesn't send one — the
-dashboard would hang on the loading screen forever. Access control is already
-handled by the ALB security group (office IPs only).
+dashboard would hang on the loading screen forever.
 
 ### 2. Provision AWS resources (Terraform)
 
@@ -221,10 +230,43 @@ sudo -u ubuntu bash -c 'cd ~/nectar && git pull && npm install'
 sudo systemctl restart nectar
 ```
 
-## Updating Nectar (secrets)
+## Updating Nectar (environment variables)
 
-1. Update the `nectar/env` secret in Secrets Manager.
-2. `sudo systemctl restart nectar` via SSM — `boot.sh` re-merges secrets on every start.
+**Always add env vars to the `nectar/env` Secrets Manager secret — never edit
+`.env` on the instance directly.** `boot.sh` runs on every service start and
+merges the secret into `.env`, so anything only in `.env` survives restarts but
+is lost if the instance is ever re-provisioned. The secret is the durable
+source of truth.
+
+### Adding or changing a variable
+
+```bash
+# 1. Read current secret, add/update keys, write back
+aws secretsmanager get-secret-value --secret-id nectar/env \
+  --query SecretString --output text --region us-east-1 | \
+  jq '. + {"NEW_KEY": "new-value"}' | \
+  aws secretsmanager put-secret-value --secret-id nectar/env \
+  --secret-string file:///dev/stdin --region us-east-1
+
+# 2. Restart so boot.sh merges the new key into .env
+aws ssm send-command --instance-ids <instance-id> \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["sudo systemctl restart nectar"]' \
+  --region us-east-1
+```
+
+### Removing a variable
+
+```bash
+aws secretsmanager get-secret-value --secret-id nectar/env \
+  --query SecretString --output text --region us-east-1 | \
+  jq 'del(.OLD_KEY)' | \
+  aws secretsmanager put-secret-value --secret-id nectar/env \
+  --secret-string file:///dev/stdin --region us-east-1
+```
+
+Then SSH or SSM in and also remove it from the live `.env` (boot.sh upserts but
+doesn't delete), then restart.
 
 ## MCP access from Hive
 
@@ -280,10 +322,11 @@ sudo tail -100 /home/ubuntu/nectar.log
 - Check `ec2:DescribeTags` is present (for reading the `nectar-secret-name` tag).
 
 ### Dashboard stuck on the loading screen
-The WebSocket is failing auth. The most common cause: `WEB_TOKEN` is set in the
-`nectar/env` secret. The React client doesn't send an auth message, so the
-server closes the connection after 5 seconds and the client loops forever.
-Remove `WEB_TOKEN` from the secret and restart the service.
+The WebSocket is failing auth. Most common cause: `WEB_TOKEN` is set in the
+`nectar/env` secret. The React client doesn't send a WEB_TOKEN auth message, so
+the server closes the connection after 5 seconds and the client loops forever.
+Remove `WEB_TOKEN` from the secret and restart the service. (Dashboard
+authentication is handled by Google SSO, not WEB_TOKEN.)
 
 ### Auto-updates stopped working
 ```bash
