@@ -21,7 +21,7 @@ export function DialogContent({ className, children, ...props }: React.HTMLAttri
   return (
     <div
       className={cn(
-        "fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-lg border bg-background p-6 shadow-lg",
+        "fixed left-1/2 top-1/2 z-50 w-[95vw] md:max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-lg border bg-background p-6 shadow-lg",
         className
       )}
       {...props}

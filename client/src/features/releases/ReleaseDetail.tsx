@@ -245,7 +245,7 @@ export function ReleaseDetail() {
             </a>
           )}
         </div>
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1 md:gap-1.5 overflow-x-auto">
           {nextStates.map(s => (
             <Button key={s} variant="outline" size="sm" className="text-xs h-7" onClick={() => transition(s)}>
               {s}

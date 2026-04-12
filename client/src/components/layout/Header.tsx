@@ -2,7 +2,11 @@ import { useWsStore } from '../../stores/wsStore'
 import { useAuthStore } from '../../stores/authStore'
 import { cn } from '../../lib/utils'
 
-export function Header() {
+interface HeaderProps {
+  onToggleSidebar: () => void
+}
+
+export function Header({ onToggleSidebar }: HeaderProps) {
   const connected = useWsStore(s => s.connected)
   const releases = useWsStore(s => s.releases)
   const active = releases.filter(r => r.state !== 'done').length
@@ -12,8 +16,19 @@ export function Header() {
   return (
     <header className="h-12 border-b bg-card flex items-center justify-between px-4">
       <div className="flex items-center gap-4">
+        {/* Hamburger menu — mobile only */}
+        <button
+          type="button"
+          onClick={onToggleSidebar}
+          className="md:hidden p-1 -ml-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          aria-label="Toggle sidebar"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
         {active > 0 && (
-          <span className="text-sm text-muted-foreground">
+          <span className="text-sm text-muted-foreground hidden md:inline">
             {active} active release{active !== 1 ? 's' : ''}
           </span>
         )}

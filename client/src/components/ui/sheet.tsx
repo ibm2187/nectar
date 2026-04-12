@@ -21,7 +21,7 @@ export function SheetContent({ className, children, ...props }: React.HTMLAttrib
   return (
     <div
       className={cn(
-        "fixed right-0 top-0 bottom-0 z-50 w-full max-w-lg border-l bg-background shadow-lg overflow-y-auto",
+        "fixed right-0 top-0 bottom-0 z-50 w-full md:max-w-lg border-l bg-background shadow-lg overflow-y-auto",
         className
       )}
       {...props}

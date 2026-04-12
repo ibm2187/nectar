@@ -103,7 +103,8 @@ export function ReleasesPage() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   const viewMode = (searchParams.get('view') as ViewMode) || 'calendar'
-  const zoom = (searchParams.get('zoom') as ZoomLevel) || 'week'
+  const defaultZoom = typeof window !== 'undefined' && window.innerWidth < 768 ? 'day' : 'week'
+  const zoom = (searchParams.get('zoom') as ZoomLevel) || defaultZoom
   const offsetParam = parseInt(searchParams.get('offset') || '0', 10)
 
   const [releases, setReleases] = useState<Release[]>([])
@@ -499,7 +500,7 @@ function CalendarView({ releases, zoom, offsetParam, now, onOpenRelease }: {
       <div className="min-w-[800px]">
         {/* Header row */}
         <div className="flex border-b sticky top-0 bg-background z-10">
-          <div className="w-48 shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="w-28 md:w-48 shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Repo
           </div>
           {hasOverdue && (
@@ -517,7 +518,7 @@ function CalendarView({ releases, zoom, offsetParam, now, onOpenRelease }: {
               key={col.key}
               className={cn(
                 "flex-1 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center border-l",
-                zoom === 'day' ? "min-w-[90px]" : zoom === 'week' ? "min-w-[110px]" : "min-w-[140px]"
+                zoom === 'day' ? "min-w-[70px] md:min-w-[90px]" : zoom === 'week' ? "min-w-[90px] md:min-w-[110px]" : "min-w-[110px] md:min-w-[140px]"
               )}
             >
               {col.label}
@@ -590,7 +591,7 @@ function RepoRow({ repo, columns, zoom, showOverdue, showUnscheduled, overdueRel
       <button
         type="button"
         onClick={() => setCollapsed(!collapsed)}
-        className="w-48 shrink-0 px-3 py-3 text-left"
+        className="w-28 md:w-48 shrink-0 px-3 py-3 text-left"
       >
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">{collapsed ? '▸' : '▾'}</span>
@@ -623,7 +624,7 @@ function RepoRow({ repo, columns, zoom, showOverdue, showUnscheduled, overdueRel
         return (
           <div
             key={col.key}
-            className={cn("flex-1 px-1.5 py-2 border-l", zoom === 'day' ? "min-w-[90px]" : zoom === 'week' ? "min-w-[110px]" : "min-w-[140px]")}
+            className={cn("flex-1 px-1.5 py-2 border-l", zoom === 'day' ? "min-w-[70px] md:min-w-[90px]" : zoom === 'week' ? "min-w-[90px] md:min-w-[110px]" : "min-w-[110px] md:min-w-[140px]")}
           >
             {renderCell(cellReleases)}
           </div>

@@ -424,10 +424,10 @@ export function TruthView({ repo, version }: Props) {
                   <SortHeader label="Key"        active={sortKey === 'key'}        dir={sortDir} onClick={() => setSort('key')} />
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Title</th>
                   <SortHeader label="JIRA Status" active={sortKey === 'jiraStatus'} dir={sortDir} onClick={() => setSort('jiraStatus')} />
-                  <SortHeader label="QA"          active={sortKey === 'qaAssignee'} dir={sortDir} onClick={() => setSort('qaAssignee')} />
-                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cherry-Pick</th>
-                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center">Branch</th>
-                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Deployed</th>
+                  <SortHeader label="QA"          active={sortKey === 'qaAssignee'} dir={sortDir} onClick={() => setSort('qaAssignee')} className="hidden md:table-cell" />
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Cherry-Pick</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">Branch</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Deployed</th>
                   <SortHeader label="Health"     active={sortKey === 'health'}     dir={sortDir} onClick={() => setSort('health')} />
                 </tr>
               </thead>
@@ -550,14 +550,14 @@ export function TruthView({ repo, version }: Props) {
 }
 
 function SortHeader({
-  label, active, dir, onClick,
+  label, active, dir, onClick, className,
 }: {
-  label: string; active: boolean; dir: SortDir; onClick: () => void
+  label: string; active: boolean; dir: SortDir; onClick: () => void; className?: string
 }) {
   return (
     <th
       onClick={onClick}
-      className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer hover:text-foreground select-none"
+      className={cn("px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer hover:text-foreground select-none", className)}
     >
       {label}
       {active && <span className="ml-1">{dir === 'asc' ? '↑' : '↓'}</span>}
@@ -621,12 +621,12 @@ function TicketRow({ ticket: t }: { ticket: VerifiedTicket }) {
       </td>
 
       {/* QA Assignee */}
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-2 align-top hidden md:table-cell">
         <span className="text-xs text-muted-foreground">{t.qaAssignee || '—'}</span>
       </td>
 
       {/* Cherry-pick PR */}
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-2 align-top hidden md:table-cell">
         {t.pr ? (
           <a
             href={t.pr.prUrl}
@@ -642,7 +642,7 @@ function TicketRow({ ticket: t }: { ticket: VerifiedTicket }) {
       </td>
 
       {/* On Branch */}
-      <td className="px-3 py-2 align-top text-center">
+      <td className="px-3 py-2 align-top text-center hidden md:table-cell">
         {!t.branchHasCommits ? (
           <span className="text-muted-foreground text-xs italic" title="Branch not cut yet">n/a</span>
         ) : t.onBranch ? (
@@ -653,7 +653,7 @@ function TicketRow({ ticket: t }: { ticket: VerifiedTicket }) {
       </td>
 
       {/* Deployed */}
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-2 align-top hidden md:table-cell">
         <DeployedCell ticket={t} />
       </td>
 

@@ -61,7 +61,8 @@ export function RoadmapPage() {
 
   const search = searchParams.get('q') || ''
   const customerFilter = searchParams.get('customer') || ''
-  const zoom = (searchParams.get('zoom') as 'day' | 'week' | 'month' | 'quarter') || 'month'
+  const defaultZoom = typeof window !== 'undefined' && window.innerWidth < 768 ? 'day' : 'month'
+  const zoom = (searchParams.get('zoom') as 'day' | 'week' | 'month' | 'quarter') || defaultZoom
   const offsetParam = parseInt(searchParams.get('offset') || '0', 10)
 
   const [data, setData] = useState<RoadmapResponse | null>(null)
@@ -343,7 +344,7 @@ export function RoadmapPage() {
         <div className="min-w-[800px]">
           {/* Header row */}
           <div className="flex border-b sticky top-0 bg-background z-10">
-            <div className="w-48 shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <div className="w-28 md:w-48 shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Theme
             </div>
             {hasOverdue && (
@@ -361,7 +362,7 @@ export function RoadmapPage() {
                 key={m.key}
                 className={cn(
                   "flex-1 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center border-l",
-                  zoom === 'day' ? "min-w-[90px]" : zoom === 'week' ? "min-w-[110px]" : "min-w-[140px]"
+                  zoom === 'day' ? "min-w-[70px] md:min-w-[90px]" : zoom === 'week' ? "min-w-[90px] md:min-w-[110px]" : "min-w-[110px] md:min-w-[140px]"
                 )}
               >
                 {m.label}
@@ -493,7 +494,7 @@ function ThemeRow({ theme, months, collapsed, onToggle, isDayView, isWeekView, o
       <button
         type="button"
         onClick={onToggle}
-        className="w-48 shrink-0 px-3 py-3 text-left"
+        className="w-28 md:w-48 shrink-0 px-3 py-3 text-left"
       >
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">{collapsed ? '▸' : '▾'}</span>
@@ -532,7 +533,7 @@ function ThemeRow({ theme, months, collapsed, onToggle, isDayView, isWeekView, o
         return (
           <div
             key={m.key}
-            className={cn("flex-1 px-1.5 py-2 border-l", isDayView ? "min-w-[90px]" : isWeekView ? "min-w-[110px]" : "min-w-[140px]")}
+            className={cn("flex-1 px-1.5 py-2 border-l", isDayView ? "min-w-[70px] md:min-w-[90px]" : isWeekView ? "min-w-[90px] md:min-w-[110px]" : "min-w-[110px] md:min-w-[140px]")}
           >
             {renderCell(cards)}
           </div>

@@ -304,8 +304,8 @@ export function TicketsPage() {
                     <SortHeader label="Summary"   active={sortKey === 'summary'}   dir={sortDir} onClick={() => setSort('summary')} />
                     <SortHeader label="Status"    active={sortKey === 'status'}    dir={sortDir} onClick={() => setSort('status')} />
                     <SortHeader label="Assignee"  active={sortKey === 'assignee'}  dir={sortDir} onClick={() => setSort('assignee')} />
-                    <SortHeader label="QA"        active={sortKey === 'qaAssignee'} dir={sortDir} onClick={() => setSort('qaAssignee')} />
-                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Deployed</th>
+                    <SortHeader label="QA"        active={sortKey === 'qaAssignee'} dir={sortDir} onClick={() => setSort('qaAssignee')} className="hidden md:table-cell" />
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Deployed</th>
                     <SortHeader label="Releases"  active={sortKey === 'releases'}  dir={sortDir} onClick={() => setSort('releases')} />
                   </tr>
                 </thead>
@@ -413,13 +413,13 @@ function ReleaseChips({ columns, selected, onToggle }: {
   )
 }
 
-function SortHeader({ label, active, dir, onClick }: {
-  label: string; active: boolean; dir: SortDir; onClick: () => void
+function SortHeader({ label, active, dir, onClick, className }: {
+  label: string; active: boolean; dir: SortDir; onClick: () => void; className?: string
 }) {
   return (
     <th
       onClick={onClick}
-      className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer hover:text-foreground select-none"
+      className={cn("px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer hover:text-foreground select-none", className)}
     >
       {label}
       {active && <span className="ml-1">{dir === 'asc' ? '↑' : '↓'}</span>}
@@ -448,10 +448,10 @@ function TicketRow({ ticket: t, onReleaseClick }: {
           {t.assignee || <span className="text-muted-foreground italic">—</span>}
         </span>
       </td>
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-2 align-top hidden md:table-cell">
         <span className="text-xs text-muted-foreground">{t.qaAssignee || '—'}</span>
       </td>
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-2 align-top hidden md:table-cell">
         <TicketDeployedCell envs={t.deployedEnvironments} jiraStatus={t.jiraStatus} />
       </td>
       <td className="px-3 py-2 align-top">
