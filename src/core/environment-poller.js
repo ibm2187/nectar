@@ -175,26 +175,34 @@ class EnvironmentPoller extends EventEmitter {
    *  - 'healthy'    — everything passing and fast
    */
   _deriveHealthStatus(data) {
+    // The /api/status response has: checks.criticalFunctionality.services,
+    // checks.externalServices.services, checks.integrations.services
+    // Each .services is an object: { mongodb: { status, responseTimeMs }, ... }
     const checks = data.checks || {};
-    const allChecks = [
-      ...(checks.criticalFunctionality || []),
-      ...(checks.externalServices || []),
-      ...(checks.integrations || []),
-    ];
+    const sections = [
+      checks.criticalFunctionality,
+      checks.externalServices,
+      checks.integrations,
+    ].filter(Boolean);
 
     const CRITICAL_SERVICES = ['mongodb', 'redis'];
 
-    // Any critical service down → unhealthy
-    for (const check of allChecks) {
-      if (CRITICAL_SERVICES.includes(check.name) && check.status === 'fail') {
-        return 'unhealthy';
+    for (const section of sections) {
+      const services = section.services || {};
+      for (const [name, svc] of Object.entries(services)) {
+        // Any critical service down → unhealthy
+        if (CRITICAL_SERVICES.includes(name) && svc.status !== 'healthy' && svc.status !== 'skipped') {
+          return 'unhealthy';
+        }
       }
     }
 
-    // Any non-critical failure or any response time > 500ms → degraded
-    for (const check of allChecks) {
-      if (check.status === 'fail' || check.status === 'degraded') return 'degraded';
-      if (check.responseTime && check.responseTime > 500) return 'degraded';
+    for (const section of sections) {
+      const services = section.services || {};
+      for (const [, svc] of Object.entries(services)) {
+        if (svc.status === 'unhealthy' || svc.status === 'fail') return 'degraded';
+        if (svc.responseTimeMs && svc.responseTimeMs > 500) return 'degraded';
+      }
     }
 
     return 'healthy';
