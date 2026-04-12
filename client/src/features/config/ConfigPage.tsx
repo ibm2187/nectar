@@ -11,13 +11,14 @@ import { UpdatePage } from '../admin/UpdatePage'
 
 // ── Tab types ─────────────────────────────────────────
 
-type Tab = 'themes' | 'api-keys' | 'users' | 'connections' | 'update'
+type Tab = 'themes' | 'api-keys' | 'users' | 'connections' | 'backfills' | 'update'
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'themes', label: 'Themes' },
   { key: 'api-keys', label: 'API Keys' },
   { key: 'users', label: 'Users' },
   { key: 'connections', label: 'Connections' },
+  { key: 'backfills', label: 'Backfills' },
   { key: 'update', label: 'Update' },
 ]
 
@@ -66,6 +67,7 @@ export function ConfigPage() {
       {activeTab === 'api-keys' && <ApiKeysSection />}
       {activeTab === 'users' && <UsersTab />}
       {activeTab === 'connections' && <IntegrationsConfigPage />}
+      {activeTab === 'backfills' && <BackfillsTab />}
       {activeTab === 'update' && <UpdatePage />}
     </div>
   )
@@ -931,5 +933,109 @@ function ApiKeysSection() {
         )}
       </CardContent>
     </Card>
+  )
+}
+
+// ── Backfills Tab ─────────────────────────────────────
+
+interface BackfillResult {
+  processed: number
+  captured: number
+  failed: number
+  skipped: number
+  errors: string[]
+}
+
+function BackfillsTab() {
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState<BackfillResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [log, setLog] = useState<string[]>([])
+
+  async function runBackfill(type: string, endpoint: string) {
+    setRunning(true)
+    setError(null)
+    setResult(null)
+    setLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] Starting ${type} backfill...`])
+    try {
+      const data = await apiFetch<BackfillResult>(endpoint, { method: 'POST' })
+      setResult(data)
+      setLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${type} complete: ${data.captured} captured, ${data.skipped} skipped, ${data.failed} failed`])
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed'
+      setError(msg)
+      setLog(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${type} failed: ${msg}`])
+    }
+    setRunning(false)
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Run backfill jobs to populate historical data. These query external APIs
+        for past deployments and store the results locally.
+      </p>
+
+      {/* Datadog Deployment Impact */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Datadog Deployment Impact</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Queries Datadog metrics (error rate, latency, throughput) for each historical deployment.
+            Compares 30 minutes before → 2 hours after each deploy. Processes up to 50 deployments per run.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Button
+            size="sm"
+            onClick={() => runBackfill('Datadog Impact', '/admin/datadog/backfill')}
+            disabled={running}
+          >
+            {running ? 'Running...' : 'Run Datadog Backfill'}
+          </Button>
+
+          {error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+              {error}
+            </div>
+          )}
+
+          {result && (
+            <div className="rounded-md border bg-muted/10 px-3 py-2 text-xs space-y-1">
+              <div className="flex gap-4">
+                <span>Processed: <span className="font-medium">{result.processed}</span></span>
+                <span className="text-green-400">Captured: <span className="font-medium">{result.captured}</span></span>
+                <span className="text-muted-foreground">Skipped: <span className="font-medium">{result.skipped}</span></span>
+                {result.failed > 0 && <span className="text-red-400">Failed: <span className="font-medium">{result.failed}</span></span>}
+              </div>
+              {result.errors && result.errors.length > 0 && (
+                <div className="text-red-400 mt-1">
+                  {result.errors.map((e, i) => <div key={i}>{e}</div>)}
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Log */}
+      {log.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Log</CardTitle>
+              <Button variant="ghost" size="sm" className="text-xs h-6" onClick={() => setLog([])}>Clear</Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="bg-background rounded-md border p-3 max-h-48 overflow-auto font-mono text-xs space-y-0.5">
+              {log.map((line, i) => (
+                <div key={i} className="text-muted-foreground">{line}</div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   )
 }
