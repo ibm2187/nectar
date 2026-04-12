@@ -79,7 +79,19 @@ export function CustomerStatusPage() {
   const fetchData = useCallback(async () => {
     if (!customerId) return
     try {
-      const result = await apiFetch<CustomerHealthResponse>(`/health/${customerId}`)
+      // Try customer-level first, fall back to environment-level
+      let result: CustomerHealthResponse
+      try {
+        result = await apiFetch<CustomerHealthResponse>(`/health/${customerId}`)
+      } catch {
+        // Not a customer — try as an environment ID
+        const envResult = await apiFetch<{ customer: { id: string; name: string } | null; environment: any; overallStatus: string }>(`/health/env/${customerId}`)
+        result = {
+          customer: envResult.customer || { id: customerId, name: customerId },
+          overallStatus: envResult.overallStatus as any,
+          environments: [envResult.environment],
+        }
+      }
       setData(result)
       setError(null)
       setLastRefreshed(new Date().toISOString())

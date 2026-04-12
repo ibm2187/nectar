@@ -260,7 +260,7 @@ export function HealthDashboard() {
             <EnvironmentCard
               key={card.env.id}
               card={card}
-              onClickCustomer={() => navigate(`/health/${card.customerId}`)}
+              onClick={() => navigate(`/health/${card.env.id}`)}
             />
           ))}
         </div>
@@ -271,7 +271,7 @@ export function HealthDashboard() {
 
 // ── EnvironmentCard ─────────────────────────────────────────
 
-function EnvironmentCard({ card, onClickCustomer }: { card: EnvCard; onClickCustomer: () => void }) {
+function EnvironmentCard({ card, onClick }: { card: EnvCard; onClick: () => void }) {
   const { env, customerName, status } = card
   const cfg = STATUS_CONFIG[status]
   const checks = getAllChecks(env)
@@ -288,7 +288,7 @@ function EnvironmentCard({ card, onClickCustomer }: { card: EnvCard; onClickCust
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <button
-              onClick={onClickCustomer}
+              onClick={onClick}
               className="text-sm font-semibold text-foreground hover:underline truncate block text-left"
               title={displayName}
             >

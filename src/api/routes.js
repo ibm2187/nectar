@@ -409,6 +409,33 @@ module.exports = function createRoutes(services, config) {
     });
   });
 
+  /**
+   * GET /api/health/env/:envId
+   * Returns a single environment's health data for a per-environment status page.
+   */
+  router.get('/health/env/:envId', (req, res) => {
+    const env = customerStore.listEnvironments().find(e => e.id === req.params.envId);
+    if (!env) return res.status(404).json({ error: 'Environment not found' });
+
+    const customer = customerStore.getCustomer(env.customerId);
+    res.json({
+      customer: customer ? { id: customer.id, name: customer.name } : null,
+      environment: {
+        id: env.id,
+        name: env.name || env.id,
+        tier: env.tier,
+        franchise: env.franchise || null,
+        franchiseDisplayName: env.franchiseDisplayName || null,
+        url: env.url,
+        currentVersion: env.currentVersion || null,
+        reachable: env.reachable,
+        lastChecked: env.lastChecked || null,
+        health: env.health || null,
+      },
+      overallStatus: env.health?.status || (env.reachable ? 'healthy' : 'unreachable'),
+    });
+  });
+
   // ── Feature flag aggregation — for the Features cleanup page ───
   router.get('/features/aggregated', (req, res) => {
     try {
