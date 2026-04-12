@@ -178,11 +178,22 @@ describe('TaskQueue', () => {
       expect(failed.completedAt).toBeTruthy();
     });
 
-    // TESTING: Failing a pending task
-    // EXPECTED: Throws — must be in-progress
-    it('throws when task is not in-progress', () => {
+    // TESTING: Failing a completed task
+    // EXPECTED: Throws — cannot fail a completed task
+    it('throws when task is already completed', () => {
       const created = queue.createTask('release-notes', { version: '1.0' });
+      queue.claim(created.id);
+      queue.complete(created.id, {});
       expect(() => queue.fail(created.id, 'error')).toThrow('cannot fail');
+    });
+
+    // TESTING: Failing a pending task (for supersede)
+    // EXPECTED: Allowed — pending tasks can be failed to supersede them
+    it('allows failing a pending task', () => {
+      const created = queue.createTask('release-notes', { version: '1.0' });
+      const failed = queue.fail(created.id, 'Superseded');
+      expect(failed.status).toBe('failed');
+      expect(failed.error).toBe('Superseded');
     });
   });
 
@@ -231,18 +242,18 @@ describe('TaskQueue', () => {
       queue.createTask('release-notes', { version: '2.0' });
       queue.claim(t1.id);
 
-      const inProgress = queue.listTasks({ status: 'in-progress' });
-      expect(inProgress).toHaveLength(1);
-      expect(inProgress[0].input.version).toBe('1.0');
+      const result = queue.listTasks({ status: 'in-progress' });
+      expect(result.tasks).toHaveLength(1);
+      expect(result.tasks[0].input.version).toBe('1.0');
     });
 
     it('filters by type', () => {
       queue.createTask('release-notes', { version: '1.0' });
       queue.createTask('release-presentation', { version: '2.0' });
 
-      const presentations = queue.listTasks({ type: 'release-presentation' });
-      expect(presentations).toHaveLength(1);
-      expect(presentations[0].type).toBe('release-presentation');
+      const result = queue.listTasks({ type: 'release-presentation' });
+      expect(result.tasks).toHaveLength(1);
+      expect(result.tasks[0].type).toBe('release-presentation');
     });
 
     // TESTING: List is sorted newest first
@@ -254,8 +265,8 @@ describe('TaskQueue', () => {
       const task2 = queue.tasks.get(t2.id);
       task2.createdAt = new Date(Date.now() + 1000).toISOString();
 
-      const all = queue.listTasks();
-      expect(all[0].input.version).toBe('2.0');
+      const result = queue.listTasks();
+      expect(result.tasks[0].input.version).toBe('2.0');
     });
 
     // TESTING: List limit
@@ -265,8 +276,10 @@ describe('TaskQueue', () => {
         queue.createTask('release-notes', { version: `${i}.0` });
       }
 
-      const limited = queue.listTasks({ limit: 3 });
-      expect(limited).toHaveLength(3);
+      const result = queue.listTasks({ limit: 3 });
+      expect(result.tasks).toHaveLength(3);
+      expect(result.total).toBe(5);
+      expect(result.hasMore).toBe(true);
     });
   });
 
@@ -351,7 +364,7 @@ describe('TaskQueue', () => {
 
       // Verify it shows up correctly in lists
       expect(queue.getPending()).toHaveLength(0);
-      expect(queue.listTasks({ status: 'completed' })).toHaveLength(1);
+      expect(queue.listTasks({ status: 'completed' }).tasks).toHaveLength(1);
     });
 
     // TESTING: Full lifecycle with failure: create → claim → fail
