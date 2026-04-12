@@ -11,12 +11,12 @@ export function AppShell() {
   const closeSidebar = useCallback(() => setSidebarOpen(false), [])
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen overflow-x-hidden">
       <Sidebar open={sidebarOpen} onClose={closeSidebar} />
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         <ConnectionBanner />
         <Header onToggleSidebar={toggleSidebar} />
-        <main className="flex-1 overflow-auto p-3 md:p-6">
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-3 md:p-6">
           <Outlet />
         </main>
       </div>
