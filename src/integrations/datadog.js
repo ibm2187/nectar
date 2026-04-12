@@ -127,10 +127,10 @@ class DatadogClient {
     const beforeStart = deployedAt - (30 * 60);  // 30 min before
     const afterEnd = deployedAt + (2 * 60 * 60); // 2h after
 
-    // Metric queries scoped to environment tag
-    const errorQuery = `sum:trace.web.request.errors{${envTag}}.as_rate()`;
-    const latencyQuery = `p90:trace.web.request.duration{${envTag}}`;
-    const throughputQuery = `sum:trace.web.request.hits{${envTag}}.as_rate()`;
+    // Metric queries scoped to environment tag + service:web
+    const errorQuery = `sum:trace.express.request.errors{${envTag},service:web}.as_count()`;
+    const latencyQuery = `p90:trace.express.request{${envTag},service:web}`;
+    const throughputQuery = `sum:trace.express.request.hits{${envTag},service:web}.as_count()`;
 
     // Query before and after windows in parallel
     const [
