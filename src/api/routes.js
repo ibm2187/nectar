@@ -436,6 +436,29 @@ module.exports = function createRoutes(services, config) {
     });
   });
 
+  /**
+   * GET /api/health/env/:envId/deployments
+   * Returns the last 5 deployments for an environment with their datadogImpact data.
+   * Used by the per-environment status page to show recent deployment impact.
+   */
+  router.get('/health/env/:envId/deployments', (req, res) => {
+    const env = customerStore.listEnvironments().find(e => e.id === req.params.envId);
+    if (!env) return res.status(404).json({ error: 'Environment not found' });
+
+    const deployments = customerStore.listDeployments({ environmentId: env.id });
+    const recent = deployments.slice(0, 5).map(d => ({
+      id: d.id,
+      environmentId: d.environmentId,
+      customerId: d.customerId,
+      version: d.version,
+      previousVersion: d.previousVersion || null,
+      detectedAt: d.detectedAt,
+      datadogImpact: d.datadogImpact || null,
+    }));
+
+    res.json({ environmentId: env.id, deployments: recent });
+  });
+
   // ── Feature flag aggregation — for the Features cleanup page ───
   router.get('/features/aggregated', (req, res) => {
     try {

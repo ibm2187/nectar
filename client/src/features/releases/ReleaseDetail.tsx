@@ -2,7 +2,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useWsStore } from '../../stores/wsStore'
 import { apiFetch } from '../../api/client'
-import type { AuditEntry, ValidationReport, DatadogImpactResponse, DatadogDeploymentImpact } from '../../api/client'
+import type { AuditEntry, ValidationReport, DatadogImpactResponse } from '../../api/client'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
@@ -438,38 +438,19 @@ export function ReleaseDetail() {
         </div>
       )}
 
-      {/* Deployment Impact (Datadog) */}
+      {/* Deployment Impact — summary only (full detail lives on per-environment status pages) */}
       {impactData && impactData.total > 0 && (
-        <Card className="mb-4">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Deployment Impact</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {impactData.withImpactData === 0 ? (
-              <p className="text-sm text-muted-foreground">No Datadog impact data available for this release's deployments.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border/50 text-xs text-muted-foreground">
-                      <th className="text-left py-2 pr-3 font-medium">Customer</th>
-                      <th className="text-left py-2 pr-3 font-medium">Environment</th>
-                      <th className="text-right py-2 pr-3 font-medium">Error Rate</th>
-                      <th className="text-right py-2 pr-3 font-medium">Latency P90</th>
-                      <th className="text-right py-2 pr-3 font-medium">Throughput</th>
-                      <th className="text-right py-2 font-medium">Alerts</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {impactData.deployments.map(dep => (
-                      <DeploymentImpactRow key={dep.deploymentId} deployment={dep} />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <div className="rounded-lg border bg-card px-4 py-3 mb-4 flex items-center gap-2 text-sm text-muted-foreground">
+          <span>Deployed to <span className="font-medium text-foreground">{impactData.total}</span> environment{impactData.total !== 1 ? 's' : ''}</span>
+          {impactData.withImpactData > 0 && (() => {
+            const totalAlerts = impactData.deployments.reduce((sum, d) => sum + (d.datadogImpact?.alertsTriggered ?? 0), 0)
+            return (
+              <span>
+                &middot; <span className={cn('font-medium', totalAlerts > 0 ? 'text-red-400' : 'text-green-400')}>{totalAlerts}</span> alert{totalAlerts !== 1 ? 's' : ''} triggered
+              </span>
+            )
+          })()}
+        </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -547,62 +528,3 @@ export function ReleaseDetail() {
   )
 }
 
-// ── DeploymentImpactRow ────────────────────────────────────
-
-function deltaColorClass(deltaPercent: number): string {
-  const abs = Math.abs(deltaPercent)
-  if (abs < 10) return 'text-green-400'
-  if (abs < 50) return 'text-yellow-400'
-  return 'text-red-400'
-}
-
-function formatDelta(deltaPercent: number | null | undefined): string {
-  if (deltaPercent === null || deltaPercent === undefined) return '--'
-  const sign = deltaPercent >= 0 ? '+' : ''
-  return `${sign}${deltaPercent.toFixed(1)}%`
-}
-
-function DeploymentImpactRow({ deployment }: { deployment: DatadogDeploymentImpact }) {
-  const impact = deployment.datadogImpact
-
-  if (!impact) {
-    return (
-      <tr className="border-b border-border/30">
-        <td className="py-2 pr-3 text-xs">{deployment.customerId}</td>
-        <td className="py-2 pr-3 text-xs font-mono">{deployment.environmentId}</td>
-        <td colSpan={4} className="py-2 text-xs text-muted-foreground text-center">No impact data</td>
-      </tr>
-    )
-  }
-
-  return (
-    <tr className="border-b border-border/30">
-      <td className="py-2 pr-3 text-xs">{deployment.customerId}</td>
-      <td className="py-2 pr-3 text-xs font-mono">{deployment.environmentId}</td>
-      <td className="py-2 pr-3 text-xs text-right">
-        <span className={deltaColorClass(impact.errorRate.deltaPercent)}>
-          {formatDelta(impact.errorRate.deltaPercent)}
-        </span>
-      </td>
-      <td className="py-2 pr-3 text-xs text-right">
-        <span className={deltaColorClass(impact.latencyP90.deltaPercent)}>
-          {formatDelta(impact.latencyP90.deltaPercent)}
-        </span>
-      </td>
-      <td className="py-2 pr-3 text-xs text-right">
-        <span className={deltaColorClass(impact.throughput.deltaPercent)}>
-          {formatDelta(impact.throughput.deltaPercent)}
-        </span>
-      </td>
-      <td className="py-2 text-xs text-right">
-        {impact.alertsTriggered > 0 ? (
-          <Badge variant="destructive" className="text-[10px] px-1.5 py-0">
-            {impact.alertsTriggered}
-          </Badge>
-        ) : (
-          <span className="text-green-400">0</span>
-        )}
-      </td>
-    </tr>
-  )
-}

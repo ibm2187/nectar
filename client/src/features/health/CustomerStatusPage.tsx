@@ -5,7 +5,7 @@ import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { cn, timeAgo } from '../../lib/utils'
 import { apiFetch } from '../../api/client'
-import type { CustomerHealthResponse, HealthEnvironment, HealthStatus, HealthCheck, DatadogAlert, DatadogAlertsResponse } from '../../api/client'
+import type { CustomerHealthResponse, HealthEnvironment, HealthStatus, HealthCheck, DatadogAlert, DatadogAlertsResponse, EnvironmentDeployment, EnvironmentDeploymentsResponse } from '../../api/client'
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -52,6 +52,19 @@ const checkDotClass = (status: string): string => {
   if (status === 'degraded') return 'bg-yellow-500'
   return 'bg-gray-400'
 }
+
+/** Return a colored indicator based on delta percentage */
+const deltaIndicator = (deltaPercent: number | null | undefined): { icon: string; className: string } => {
+  if (deltaPercent === null || deltaPercent === undefined) return { icon: '--', className: 'text-muted-foreground' }
+  const abs = Math.abs(deltaPercent)
+  if (abs < 10) return { icon: '\u2705', className: 'text-green-400' }
+  if (abs < 50) return { icon: '\u26A0\uFE0F', className: 'text-yellow-400' }
+  return { icon: '\uD83D\uDD34', className: 'text-red-400' }
+}
+
+const formatErrorRate = (val: number | null): string => val !== null ? `${val.toFixed(1)}%` : '--'
+const formatLatency = (val: number | null): string => val !== null ? `${Math.round(val)}ms` : '--'
+const formatThroughput = (val: number | null): string => val !== null ? `${Math.round(val)}/s` : '--'
 
 const overallBanner = (status: HealthStatus): { text: string; className: string } => {
   switch (status) {
@@ -204,7 +217,7 @@ export function CustomerStatusPage() {
 
       {/* Environment sections */}
       {sortedEnvs.map(env => (
-        <EnvironmentSection key={env.id} env={env} />
+        <EnvironmentSection key={env.id} env={env} showDeployments />
       ))}
 
       {/* Monitor Status */}
@@ -273,13 +286,22 @@ export function CustomerStatusPage() {
 
 // ── EnvironmentSection ──────────────────────────────────────
 
-function EnvironmentSection({ env }: { env: HealthEnvironment }) {
+function EnvironmentSection({ env, showDeployments = false }: { env: HealthEnvironment; showDeployments?: boolean }) {
   const checks = getAllChecks(env)
   const status = env.health?.status ?? 'unreachable'
   const tierLabel = env.tier.charAt(0).toUpperCase() + env.tier.slice(1)
   const sectionTitle = env.franchiseDisplayName
     ? `${tierLabel} - ${env.franchiseDisplayName}`
     : tierLabel
+
+  const [deployments, setDeployments] = useState<EnvironmentDeployment[]>([])
+
+  useEffect(() => {
+    if (!showDeployments) return
+    apiFetch<EnvironmentDeploymentsResponse>(`/health/env/${env.id}/deployments`)
+      .then(res => setDeployments(res.deployments))
+      .catch(() => {})
+  }, [env.id, showDeployments])
 
   const statusBadge = (): { label: string; variant: 'success' | 'warning' | 'destructive' | 'secondary' } => {
     switch (status) {
@@ -339,7 +361,106 @@ function EnvironmentSection({ env }: { env: HealthEnvironment }) {
         ) : (
           <p className="text-sm text-muted-foreground">No health data available for this environment.</p>
         )}
+
+        {/* Recent Deployments */}
+        {showDeployments && deployments.length > 0 && (
+          <RecentDeployments deployments={deployments} />
+        )}
       </CardContent>
     </Card>
+  )
+}
+
+// ── RecentDeployments ──────────────────────────────────────
+
+function RecentDeployments({ deployments }: { deployments: EnvironmentDeployment[] }) {
+  return (
+    <div className="mt-4 pt-4 border-t border-border/30">
+      <h4 className="text-sm font-medium mb-3">Recent Deployments</h4>
+      <div className="space-y-3">
+        {deployments.map(dep => (
+          <DeploymentCard key={dep.id} deployment={dep} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function DeploymentCard({ deployment }: { deployment: EnvironmentDeployment }) {
+  const impact = deployment.datadogImpact
+
+  return (
+    <div className="rounded-md border border-border/40 bg-muted/20 px-3 py-2.5">
+      {/* Top row: version transition + date */}
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center gap-1.5 text-sm">
+          <Link
+            to={`/releases/${deployment.version}`}
+            className="font-mono font-medium text-primary hover:underline"
+          >
+            v{deployment.version}
+          </Link>
+          {deployment.previousVersion && (
+            <>
+              <span className="text-muted-foreground">&larr;</span>
+              <span className="font-mono text-muted-foreground">v{deployment.previousVersion}</span>
+            </>
+          )}
+        </div>
+        <span className="text-xs text-muted-foreground">
+          deployed {timeAgo(deployment.detectedAt)}
+        </span>
+      </div>
+
+      {/* Metrics row */}
+      {impact ? (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          <MetricInline
+            label="Error Rate"
+            before={formatErrorRate(impact.errorRate.before)}
+            after={formatErrorRate(impact.errorRate.after)}
+            deltaPercent={impact.errorRate.deltaPercent}
+          />
+          <MetricInline
+            label="Latency"
+            before={formatLatency(impact.latencyP90.before)}
+            after={formatLatency(impact.latencyP90.after)}
+            deltaPercent={impact.latencyP90.deltaPercent}
+          />
+          <MetricInline
+            label="Throughput"
+            before={formatThroughput(impact.throughput.before)}
+            after={formatThroughput(impact.throughput.after)}
+            deltaPercent={impact.throughput.deltaPercent}
+          />
+          <span className={cn(
+            'font-medium',
+            impact.alertsTriggered > 0 ? 'text-red-400' : 'text-green-400',
+          )}>
+            {impact.alertsTriggered} alert{impact.alertsTriggered !== 1 ? 's' : ''}
+          </span>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">No impact data available</p>
+      )}
+    </div>
+  )
+}
+
+function MetricInline({ label, before, after, deltaPercent }: {
+  label: string
+  before: string
+  after: string
+  deltaPercent: number | null | undefined
+}) {
+  const { icon, className } = deltaIndicator(deltaPercent)
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="text-muted-foreground">{label}:</span>
+      <span>{before}</span>
+      <span className="text-muted-foreground">&rarr;</span>
+      <span>{after}</span>
+      <span className={className}>{icon}</span>
+    </span>
   )
 }

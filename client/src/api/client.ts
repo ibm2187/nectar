@@ -362,6 +362,21 @@ export interface DatadogImpactResponse {
   withImpactData: number
 }
 
+export interface EnvironmentDeployment {
+  id: string
+  environmentId: string
+  customerId: string
+  version: string
+  previousVersion: string | null
+  detectedAt: string
+  datadogImpact: DatadogImpactData | null
+}
+
+export interface EnvironmentDeploymentsResponse {
+  environmentId: string
+  deployments: EnvironmentDeployment[]
+}
+
 export interface AuditEntry {
   id: string
   version: string
