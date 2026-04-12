@@ -880,9 +880,12 @@ module.exports = function createRoutes(services, config) {
     const batch = eligible.slice(0, batchSize);
 
     for (const deployment of batch) {
+      // Use environmentId as the Datadog env tag — matches how DD monitors are tagged
+      const envTag = `env:${deployment.environmentId}`;
+      log.info(`Backfill [${processed + 1}/${batchSize}]: ${deployment.environmentId} v${deployment.version} (${deployment.detectedAt.slice(0,16)}) tag=${envTag}`);
       try {
-        const envTag = `env:${deployment.customerId}`;
         const impact = await datadog.getDeploymentImpact(envTag, deployment.detectedAt);
+        log.info(`  → error: ${impact.errorRate.before} → ${impact.errorRate.after}, latency: ${impact.latencyP90.before} → ${impact.latencyP90.after}, throughput: ${impact.throughput.before} → ${impact.throughput.after}, alerts: ${impact.alertsTriggered}`);
         deployment.datadogImpact = {
           capturedAt: new Date().toISOString(),
           window: impact.window,
@@ -893,7 +896,7 @@ module.exports = function createRoutes(services, config) {
         };
         succeeded++;
       } catch (err) {
-        log.warn(`Backfill failed for ${deployment.id}: ${err.message}`);
+        log.warn(`  → FAILED: ${err.message}`);
         failed++;
       }
       processed++;
