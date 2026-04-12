@@ -1,0 +1,94 @@
+{
+  "releases": [
+    {
+      "id": "rel-webplatform-4.2.0",
+      "repo": "webplatform",
+      "version": "4.2.0",
+      "state": "cutting",
+      "branch": "releases/4.2.0",
+      "cutFrom": null,
+      "cutAt": "2026-04-12T18:11:32.511Z",
+      "cutBy": null,
+      "tickets": [
+        {
+          "key": "DEV-100",
+          "summary": "Test ticket",
+          "state": "pending",
+          "pr": null
+        }
+      ],
+      "cherryPicks": [],
+      "ci": {
+        "status": null,
+        "buildUrl": null,
+        "lastRun": null
+      },
+      "risk": {
+        "score": null,
+        "numericScore": null,
+        "factors": []
+      },
+      "deployments": [
+        {
+          "customer": "CK",
+          "env": "staging",
+          "status": "success",
+          "at": "2026-04-12T18:11:32.511Z",
+          "triggeredBy": null
+        }
+      ],
+      "approvals": [],
+      "notes": null,
+      "createdAt": "2026-04-12T18:11:32.511Z",
+      "updatedAt": "2026-04-12T18:11:32.511Z"
+    }
+  ],
+  "audit": [
+    {
+      "id": "aud-1776017492511-1se7",
+      "version": "4.2.0",
+      "action": "release:created",
+      "detail": {
+        "branch": "releases/4.2.0"
+      },
+      "user": null,
+      "at": "2026-04-12T18:11:32.511Z"
+    },
+    {
+      "id": "aud-1776017492511-cmvw",
+      "version": "4.2.0",
+      "action": "ticket:added",
+      "detail": {
+        "key": "DEV-100"
+      },
+      "user": null,
+      "at": "2026-04-12T18:11:32.511Z"
+    },
+    {
+      "id": "aud-1776017492511-7xbk",
+      "version": "4.2.0",
+      "action": "deployment:added",
+      "detail": {
+        "customer": "CK",
+        "env": "staging",
+        "status": "success",
+        "at": "2026-04-12T18:11:32.511Z",
+        "triggeredBy": null
+      },
+      "user": null,
+      "at": "2026-04-12T18:11:32.511Z"
+    },
+    {
+      "id": "aud-1776017492511-d7fh",
+      "version": "4.2.0",
+      "action": "state:transition",
+      "detail": {
+        "from": "planning",
+        "to": "cutting"
+      },
+      "user": null,
+      "at": "2026-04-12T18:11:32.511Z"
+    }
+  ],
+  "savedAt": "2026-04-12T18:11:32.511Z"
+}

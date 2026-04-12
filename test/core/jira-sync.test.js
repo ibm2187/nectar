@@ -231,12 +231,197 @@ describe('JiraSync', () => {
       expect(path).toEqual(['cutting', 'stabilizing', 'approved', 'deploying', 'done']);
     });
 
+    it('returns path from stabilizing to done', () => {
+      const path = jiraSync._transitionPath('stabilizing', 'done');
+      expect(path).toEqual(['approved', 'deploying', 'done']);
+    });
+
+    it('returns single step for adjacent states', () => {
+      expect(jiraSync._transitionPath('planning', 'cutting')).toEqual(['cutting']);
+    });
+
     it('returns empty for same state', () => {
       expect(jiraSync._transitionPath('done', 'done')).toEqual([]);
     });
 
     it('returns empty for backward transition', () => {
       expect(jiraSync._transitionPath('done', 'planning')).toEqual([]);
+    });
+
+    it('returns empty for invalid states', () => {
+      expect(jiraSync._transitionPath('invalid', 'done')).toEqual([]);
+      expect(jiraSync._transitionPath('planning', 'invalid')).toEqual([]);
+    });
+  });
+
+  describe('_mapVersionState', () => {
+    it('returns done for archived versions', () => {
+      expect(jiraSync._mapVersionState({ archived: true, released: false })).toBe('done');
+    });
+
+    it('returns done for released versions', () => {
+      expect(jiraSync._mapVersionState({ archived: false, released: true })).toBe('done');
+    });
+
+    it('returns stabilizing for unreleased non-archived versions', () => {
+      expect(jiraSync._mapVersionState({ archived: false, released: false })).toBe('stabilizing');
+    });
+  });
+
+  describe('_syncVersionMeta state transition', () => {
+    it('transitions release to done when JIRA version is released', () => {
+      // Create a release at planning state
+      releases.create({ repo: 'webplatform', version: '4.0.0' });
+
+      jiraSync._syncVersionMeta({
+        id: '100',
+        name: '4.0.0',
+        released: true,
+        archived: false,
+        releaseDate: '2026-01-01',
+      });
+
+      const release = releases.get('4.0.0', 'webplatform');
+      expect(release.state).toBe('done');
+    });
+
+    it('does not regress a done release', () => {
+      releases.create({ repo: 'webplatform', version: '3.9.0' });
+      // Transition to done manually
+      releases.transition('3.9.0', 'cutting');
+      releases.transition('3.9.0', 'stabilizing');
+      releases.transition('3.9.0', 'approved');
+      releases.transition('3.9.0', 'deploying');
+      releases.transition('3.9.0', 'done');
+
+      jiraSync._syncVersionMeta({
+        id: '50',
+        name: '3.9.0',
+        released: false,
+        archived: false,
+      });
+
+      // Should still be done (mapVersionState returns stabilizing, but
+      // the code only updates if jiraState === 'done' and release.state !== 'done')
+      const release = releases.get('3.9.0', 'webplatform');
+      expect(release.state).toBe('done');
+    });
+  });
+
+  describe('candidate filtering', () => {
+    it('excludes archived versions from candidates', async () => {
+      mockJira.getVersionsSummary.mockResolvedValue([
+        { name: '4.2.0', released: false, archived: true, releaseDate: null },
+        { name: '4.3.0', released: false, archived: false, releaseDate: null },
+      ]);
+      mockJira.getIssuesForVersion.mockResolvedValue([]);
+
+      const results = await jiraSync.run();
+
+      // Only 4.3.0 should be synced (not archived 4.2.0)
+      // Both will have syncVersionMeta called but only non-archived candidates get ticket sync
+      expect(results.versions.synced).toBe(1);
+    });
+
+    it('excludes released versions older than 14 days', async () => {
+      const oldDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      mockJira.getVersionsSummary.mockResolvedValue([
+        { name: '4.1.0', released: true, archived: false, releaseDate: oldDate },
+        { name: '4.2.0', released: false, archived: false, releaseDate: null },
+      ]);
+      mockJira.getIssuesForVersion.mockResolvedValue([]);
+
+      const results = await jiraSync.run();
+      expect(results.versions.synced).toBe(1); // Only 4.2.0
+    });
+
+    it('includes recently released versions (within 14 days)', async () => {
+      const recentDate = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      mockJira.getVersionsSummary.mockResolvedValue([
+        { name: '4.1.0', released: true, archived: false, releaseDate: recentDate },
+      ]);
+      mockJira.getIssuesForVersion.mockResolvedValue([]);
+
+      const results = await jiraSync.run();
+      expect(results.versions.synced).toBe(1);
+    });
+  });
+
+  describe('full run()', () => {
+    it('creates releases and syncs tickets end-to-end', async () => {
+      mockJira.getVersionsSummary.mockResolvedValue([
+        { id: '100', name: '4.3.0', released: false, archived: false, releaseDate: null },
+      ]);
+      mockJira.getIssuesForVersion.mockResolvedValue([
+        {
+          key: 'DEV-500',
+          fields: {
+            summary: 'New feature',
+            status: { name: 'In Progress' },
+            issuetype: { name: 'Story' },
+            assignee: { displayName: 'Dev' },
+            fixVersions: [{ name: '4.3.0' }],
+            labels: [],
+          },
+        },
+      ]);
+
+      const results = await jiraSync.run();
+
+      expect(results.versions.total).toBe(1);
+      expect(results.versions.synced).toBe(1);
+      expect(results.tickets.total).toBe(1);
+
+      const release = releases.get('4.3.0', 'webplatform');
+      expect(release).not.toBeNull();
+      expect(release.tickets).toHaveLength(1);
+      expect(release.tickets[0].key).toBe('DEV-500');
+    });
+
+    it('skips concurrent runs', async () => {
+      mockJira.getVersionsSummary.mockImplementation(
+        () => new Promise(resolve => setTimeout(() => resolve([]), 50))
+      );
+
+      const run1 = jiraSync.run();
+      const run2 = jiraSync.run();
+
+      const [result1, result2] = await Promise.all([run1, run2]);
+
+      expect(result1).toBeDefined();
+      expect(result2).toBeNull(); // returns lastResults which was null
+    });
+
+    it('emits sync events', async () => {
+      const events = [];
+      jiraSync.on('sync:started', () => events.push('started'));
+      jiraSync.on('sync:completed', () => events.push('completed'));
+
+      mockJira.getVersionsSummary.mockResolvedValue([]);
+      await jiraSync.run();
+
+      expect(events).toEqual(['started', 'completed']);
+    });
+
+    it('updates lastRun and lastResults after run', async () => {
+      expect(jiraSync.lastRun).toBeNull();
+      expect(jiraSync.lastResults).toBeNull();
+
+      mockJira.getVersionsSummary.mockResolvedValue([]);
+      await jiraSync.run();
+
+      expect(jiraSync.lastRun).not.toBeNull();
+      expect(jiraSync.lastResults).not.toBeNull();
+      expect(jiraSync.lastResults.durationMs).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe('getStatus', () => {
+    it('returns sync status', () => {
+      const status = jiraSync.getStatus();
+      expect(status.running).toBe(false);
+      expect(status.lastRun).toBeNull();
+      expect(status.configured).toBe(true);
     });
   });
 });

@@ -335,6 +335,50 @@ describe('ReleaseManager', () => {
     });
   });
 
+  describe('persistence round-trip', () => {
+    it('_saveState/_loadState preserves releases and audit', () => {
+      const writeSpy = vi.spyOn(fs, 'writeFileSync');
+      const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {});
+
+      // Create releases with tickets and deployments
+      rm.create({ version: '4.2.0', repo: 'webplatform', branch: 'releases/4.2.0' });
+      rm.addTicket('4.2.0', { key: 'DEV-100', summary: 'Test ticket' });
+      rm.addDeployment('4.2.0', { customer: 'CK', env: 'staging', status: 'success' });
+      rm.transition('4.2.0', 'cutting');
+
+      // Capture what _saveState writes
+      writeSpy.mockClear();
+      rm._saveState();
+
+      // Extract the JSON that was written
+      expect(writeSpy).toHaveBeenCalled();
+      const writtenJson = writeSpy.mock.calls[0][1];
+      const data = JSON.parse(writtenJson);
+
+      // Verify structure
+      expect(data.releases).toHaveLength(1);
+      expect(data.releases[0].version).toBe('4.2.0');
+      expect(data.releases[0].tickets).toHaveLength(1);
+      expect(data.releases[0].deployments).toHaveLength(1);
+      expect(data.releases[0].state).toBe('cutting');
+      expect(data.audit).toBeDefined();
+      expect(data.savedAt).toBeTruthy();
+
+      // Now simulate loading that data into a fresh manager
+      const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(writtenJson);
+      const audit2 = new Audit();
+      const rm2 = new ReleaseManager(audit2);
+
+      expect(rm2.get('4.2.0')).not.toBeNull();
+      expect(rm2.get('4.2.0').state).toBe('cutting');
+      expect(rm2.get('4.2.0').tickets).toHaveLength(1);
+
+      writeSpy.mockRestore();
+      renameSpy.mockRestore();
+      readSpy.mockRestore();
+    });
+  });
+
   describe('STATES and TRANSITIONS exports', () => {
     it('exposes state machine constants', () => {
       expect(ReleaseManager.STATES).toContain('planning');
