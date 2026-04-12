@@ -243,14 +243,16 @@ function EnvironmentSection({ env }: { env: HealthEnvironment }) {
                     <span>{Math.round(check.responseTimeMs)}ms</span>
                   )}
                   <span className={cn(
-                    check.status === 'pass' && 'text-green-400',
-                    check.status === 'fail' && 'text-red-400',
+                    (check.status === 'healthy' || check.status === 'pass') && 'text-green-400',
+                    (check.status === 'unhealthy' || check.status === 'fail') && 'text-red-400',
                     check.status === 'degraded' && 'text-yellow-400',
+                    check.status === 'skipped' && 'text-muted-foreground',
                   )}>
-                    {check.status === 'pass' ? 'Operational' :
-                     check.status === 'fail' ? 'Down' :
+                    {(check.status === 'healthy' || check.status === 'pass') ? 'Operational' :
+                     (check.status === 'unhealthy' || check.status === 'fail') ? 'Down' :
                      check.status === 'degraded' ? 'Degraded' :
-                     'Skipped'}
+                     check.status === 'skipped' ? 'Skipped' :
+                     'Operational'}
                   </span>
                 </div>
               </div>

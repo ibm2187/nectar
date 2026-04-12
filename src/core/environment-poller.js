@@ -201,7 +201,7 @@ class EnvironmentPoller extends EventEmitter {
       const services = section.services || {};
       for (const [, svc] of Object.entries(services)) {
         if (svc.status === 'unhealthy' || svc.status === 'fail') return 'degraded';
-        if (svc.responseTimeMs && svc.responseTimeMs > 500) return 'degraded';
+        if (svc.responseTimeMs && svc.responseTimeMs > 1000) return 'degraded';
       }
     }
 
