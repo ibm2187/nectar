@@ -6,7 +6,7 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { cn, timeAgo } from '../../lib/utils'
 import { apiFetch } from '../../api/client'
-import type { HealthOverview, HealthCustomer, HealthEnvironment, HealthStatus, HealthCheck } from '../../api/client'
+import type { HealthOverview, HealthCustomer, HealthEnvironment, HealthStatus, HealthCheck, DatadogAlert, DatadogAlertsResponse } from '../../api/client'
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -113,6 +113,8 @@ export function HealthDashboard() {
   const [tab, setTab] = useState<Tab>('production')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [alerts, setAlerts] = useState<DatadogAlert[]>([])
+  const [alertsExpanded, setAlertsExpanded] = useState(false)
 
   const fetchData = useCallback(async () => {
     try {
@@ -126,12 +128,25 @@ export function HealthDashboard() {
     }
   }, [])
 
+  const fetchAlerts = useCallback(async () => {
+    try {
+      const result = await apiFetch<DatadogAlertsResponse>('/datadog/alerts')
+      if (result.configured && result.events) {
+        setAlerts(result.events)
+      }
+    } catch {
+      // Datadog alerts are optional — don't break if unavailable
+    }
+  }, [])
+
   // Initial fetch + auto-refresh
   useEffect(() => {
     fetchData()
+    fetchAlerts()
     const timer = setInterval(fetchData, REFRESH_INTERVAL_MS)
-    return () => clearInterval(timer)
-  }, [fetchData])
+    const alertTimer = setInterval(fetchAlerts, REFRESH_INTERVAL_MS)
+    return () => { clearInterval(timer); clearInterval(alertTimer) }
+  }, [fetchData, fetchAlerts])
 
   // Flatten, filter, and sort cards
   const cards = useMemo(() => {
@@ -199,6 +214,55 @@ export function HealthDashboard() {
           </Button>
         </div>
       </div>
+
+      {/* Datadog Alert Banner */}
+      {alerts.length > 0 && (
+        <Card className="border-yellow-500/30 bg-yellow-500/5">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
+                <span className="text-sm font-semibold text-yellow-400">
+                  {alerts.length} Active Datadog Alert{alerts.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+              {alerts.length > 5 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs h-6"
+                  onClick={() => setAlertsExpanded(!alertsExpanded)}
+                >
+                  {alertsExpanded ? 'Show less' : `Show all ${alerts.length}`}
+                </Button>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              {(alertsExpanded ? alerts : alerts.slice(0, 5)).map(alert => {
+                const envTag = (alert.tags || []).find(t => t.startsWith('env:'))
+                const envName = envTag ? envTag.replace('env:', '') : null
+                const severity = alert.alertType === 'error' ? 'destructive' : alert.alertType === 'warning' ? 'warning' : 'secondary'
+                return (
+                  <div key={alert.id} className="flex items-center gap-2 text-xs">
+                    <Badge variant={severity} className="text-[10px] px-1.5 py-0 shrink-0">
+                      {alert.alertType || 'info'}
+                    </Badge>
+                    <span className="truncate text-foreground">{alert.title}</span>
+                    {envName && (
+                      <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0">
+                        {envName}
+                      </Badge>
+                    )}
+                    <span className="text-muted-foreground shrink-0 ml-auto">
+                      {timeAgo(new Date(alert.dateHappened * 1000).toISOString())}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Tabs */}
       <div className="flex items-center gap-2 border-b pb-2">

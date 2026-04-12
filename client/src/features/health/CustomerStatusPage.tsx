@@ -5,7 +5,7 @@ import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { cn, timeAgo } from '../../lib/utils'
 import { apiFetch } from '../../api/client'
-import type { CustomerHealthResponse, HealthEnvironment, HealthStatus, HealthCheck } from '../../api/client'
+import type { CustomerHealthResponse, HealthEnvironment, HealthStatus, HealthCheck, DatadogAlert, DatadogAlertsResponse } from '../../api/client'
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -74,6 +74,8 @@ export function CustomerStatusPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastRefreshed, setLastRefreshed] = useState<string | null>(null)
+  const [alerts, setAlerts] = useState<DatadogAlert[]>([])
+  const [monitorStatuses, setMonitorStatuses] = useState<Array<{ name: string; status: string; id: number }>>([])
 
   const fetchData = useCallback(async () => {
     if (!customerId) return
@@ -101,11 +103,37 @@ export function CustomerStatusPage() {
     }
   }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const fetchAlerts = useCallback(async () => {
+    if (!customerId) return
+    try {
+      const result = await apiFetch<DatadogAlertsResponse>(`/datadog/alerts?env=${customerId}`)
+      if (result.configured && result.events) {
+        setAlerts(result.events)
+      }
+    } catch {
+      // Datadog alerts are optional
+    }
+    try {
+      const monResult = await apiFetch<{ monitors: Array<{ name: string; overall_state: string; id: number }> }>(`/datadog/monitors/${customerId}`)
+      if (monResult.monitors) {
+        setMonitorStatuses(monResult.monitors.map(m => ({
+          name: m.name,
+          status: m.overall_state || 'unknown',
+          id: m.id,
+        })))
+      }
+    } catch {
+      // Monitor data is optional
+    }
+  }, [customerId])
+
   useEffect(() => {
     fetchData()
+    fetchAlerts()
     const timer = setInterval(fetchData, REFRESH_INTERVAL_MS)
-    return () => clearInterval(timer)
-  }, [fetchData])
+    const alertTimer = setInterval(fetchAlerts, REFRESH_INTERVAL_MS)
+    return () => { clearInterval(timer); clearInterval(alertTimer) }
+  }, [fetchData, fetchAlerts])
 
   if (loading && !data) {
     return (
@@ -179,13 +207,64 @@ export function CustomerStatusPage() {
         <EnvironmentSection key={env.id} env={env} />
       ))}
 
-      {/* Past 24 hours placeholder */}
+      {/* Monitor Status */}
+      {monitorStatuses.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Datadog Monitors</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {monitorStatuses.map(m => {
+                const dotClass = m.status === 'OK' ? 'bg-green-500'
+                  : m.status === 'Alert' ? 'bg-red-500'
+                  : m.status === 'Warn' ? 'bg-yellow-500'
+                  : 'bg-gray-400'
+                return (
+                  <div key={m.id} className="flex items-center gap-2 text-sm">
+                    <div className={cn('w-2.5 h-2.5 rounded-full shrink-0', dotClass)} />
+                    <span className="truncate">{m.name}</span>
+                    <Badge
+                      variant={m.status === 'OK' ? 'success' : m.status === 'Alert' ? 'destructive' : 'warning'}
+                      className="text-[10px] px-1.5 py-0 shrink-0 ml-auto"
+                    >
+                      {m.status}
+                    </Badge>
+                  </div>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Past 24 Hours — Datadog Alert History */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Past 24 Hours</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">No incidents reported.</p>
+          {alerts.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No incidents reported.</p>
+          ) : (
+            <div className="space-y-2">
+              {alerts.map(alert => {
+                const severity = alert.alertType === 'error' ? 'destructive'
+                  : alert.alertType === 'warning' ? 'warning' : 'secondary'
+                return (
+                  <div key={alert.id} className="flex items-center gap-2 text-sm py-1.5 border-b border-border/30 last:border-0">
+                    <Badge variant={severity} className="text-[10px] px-1.5 py-0 shrink-0">
+                      {alert.alertType || 'info'}
+                    </Badge>
+                    <span className="truncate">{alert.title}</span>
+                    <span className="text-xs text-muted-foreground shrink-0 ml-auto">
+                      {timeAgo(new Date(alert.dateHappened * 1000).toISOString())}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

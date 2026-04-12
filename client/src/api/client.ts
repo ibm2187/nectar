@@ -305,6 +305,63 @@ export interface EnvDeployment {
   source: string
 }
 
+// ── Datadog types ─────────────────────────────────────────
+
+export interface DatadogAlert {
+  id: number
+  title: string
+  text: string
+  alertType: string
+  priority: string | null
+  source: string
+  dateHappened: number
+  tags: string[]
+  url: string
+}
+
+export interface DatadogAlertsResponse {
+  events: DatadogAlert[]
+  total: number
+  hours: number
+  configured: boolean
+}
+
+export interface DatadogImpactMetric {
+  before: number | null
+  after: number | null
+  deltaPercent: number
+}
+
+export interface DatadogImpactData {
+  capturedAt: string
+  window: {
+    beforeStart: string
+    deployedAt: string
+    afterEnd: string
+  }
+  errorRate: DatadogImpactMetric
+  latencyP90: DatadogImpactMetric
+  throughput: DatadogImpactMetric
+  alertsTriggered: number
+}
+
+export interface DatadogDeploymentImpact {
+  deploymentId: string
+  environmentId: string
+  customerId: string
+  version: string
+  previousVersion: string | null
+  detectedAt: string
+  datadogImpact: DatadogImpactData | null
+}
+
+export interface DatadogImpactResponse {
+  version: string
+  deployments: DatadogDeploymentImpact[]
+  total: number
+  withImpactData: number
+}
+
 export interface AuditEntry {
   id: string
   version: string
