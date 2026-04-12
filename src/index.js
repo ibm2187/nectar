@@ -65,9 +65,6 @@ const jenkins = new JenkinsClient(config);
 const SlackNotifier = require('./integrations/slack');
 const slack = new SlackNotifier(config);
 
-const GammaClient = require('./integrations/gamma');
-const gamma = new GammaClient();
-if (gamma.isConfigured()) log.info('Gamma client configured');
 
 // ── Initialize core feature engines ─────────────────────
 const RiskAssessor = require('./core/risk');
@@ -96,8 +93,6 @@ const jiraSync = new JiraSync(releases, jira, config);
 const ReleaseTruth = require('./core/release-truth');
 const releaseTruth = new ReleaseTruth(releases, repoManager, github, jira, config);
 
-const ReleaseNotesGenerator = require('./core/release-notes');
-const releaseNotes = new ReleaseNotesGenerator(releaseTruth, releases, repoManager, config);
 
 const CustomerStore = require('./core/customer-store');
 const customerStore = new CustomerStore();
@@ -110,6 +105,14 @@ const envPoller = new EnvironmentPoller(customerStore, config);
 
 const ThemeConfig = require('./core/theme-config');
 const themeConfig = new ThemeConfig();
+
+const ApiKeyManager = require('./core/api-keys');
+const apiKeys = new ApiKeyManager();
+log.info(`API key manager initialized (${apiKeys.keys.size} keys loaded)`);
+
+const TaskQueue = require('./core/task-queue');
+const taskQueue = new TaskQueue();
+log.info(`Task queue initialized (${taskQueue.tasks.size} tasks loaded)`);
 
 // ── Wire Slack lifecycle notifications ──────────────────
 // Skip notifications for automated actions (discovery, jira-sync)
@@ -149,9 +152,10 @@ cherryPickWatcher.on('cherry-pick:conflict', (release, parsed) => {
 // ── Start services ──────────────────────────────────────
 const { createWebServer } = require('./web/server');
 const services = {
-  releases, repoManager, jira, github, jenkins, slack, gamma,
+  releases, repoManager, jira, github, jenkins, slack,
   risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth,
-  releaseNotes, customerStore, webplatformScanner, envPoller, themeConfig,
+  customerStore, webplatformScanner, envPoller, themeConfig,
+  apiKeys, taskQueue,
 };
 const webServer = createWebServer(services, config);
 
@@ -202,6 +206,7 @@ function shutdown() {
   slack.stop().catch(() => {});
   releases.flush();
   customerStore.flush();
+  taskQueue.flush();
   if (webServer) webServer.close();
   process.exit(0);
 }

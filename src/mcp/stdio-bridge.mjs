@@ -14,13 +14,22 @@
  *
  * Optionally pass --url to override the default:
  *   "args": ["stdio-bridge.mjs", "--url", "https://nectar.example.com/mcp"]
+ *
+ * Pass --token to authenticate with the remote server:
+ *   "args": ["stdio-bridge.mjs", "--url", "https://nectar.example.com/mcp", "--token", "nectar__xxx"]
  */
 
 const NECTAR_URL = process.argv.includes('--url')
   ? process.argv[process.argv.indexOf('--url') + 1]
   : 'http://localhost:4000/mcp';
 
+const AUTH_TOKEN = process.argv.includes('--token')
+  ? process.argv[process.argv.indexOf('--token') + 1]
+  : null;
+
 let buffer = '';
+
+process.stderr.write(`[nectar-bridge] Started. URL=${NECTAR_URL} token=${AUTH_TOKEN ? 'yes' : 'no'}\n`);
 
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -35,6 +44,7 @@ process.stdin.on('data', (chunk) => {
 
     try {
       const msg = JSON.parse(line);
+      process.stderr.write(`[nectar-bridge] >> ${msg.method || msg.id || 'response'}\n`);
       forwardToHttp(msg);
     } catch {
       // Not valid JSON yet, skip
@@ -44,19 +54,23 @@ process.stdin.on('data', (chunk) => {
 
 async function forwardToHttp(msg) {
   try {
+    const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' };
+    if (AUTH_TOKEN) headers['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+
     const res = await fetch(NECTAR_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
+      headers,
       body: JSON.stringify(msg),
     });
 
+    const contentType = res.headers.get('content-type') || '';
+
     if (!res.ok) {
       const text = await res.text();
-      process.stderr.write(`Nectar HTTP ${res.status}: ${text.slice(0, 200)}\n`);
+      process.stderr.write(`[nectar-bridge] HTTP ${res.status}: ${text.slice(0, 200)}\n`);
       return;
     }
-
-    const contentType = res.headers.get('content-type') || '';
+    process.stderr.write(`[nectar-bridge] << HTTP ${res.status} (${contentType})\n`);
 
     if (contentType.includes('text/event-stream')) {
       // SSE response — parse events and forward as JSON lines

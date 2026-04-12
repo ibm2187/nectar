@@ -4,7 +4,6 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { AppShell } from './components/layout/AppShell'
 import { ReleasesPage } from './features/releases/ReleasesPage'
 import { ReleaseDetail } from './features/releases/ReleaseDetail'
-import { ReleaseCalendarPage } from './features/releases/ReleaseCalendarPage'
 import { FeaturesPage } from './features/features/FeaturesPage'
 import { IntegrationsPage } from './features/integrations/IntegrationsPage'
 import { CustomersPage } from './features/customers/CustomersPage'
@@ -13,7 +12,10 @@ import { IssuesPage } from './features/issues/IssuesPage'
 import { TicketsPage } from './features/tickets/TicketsPage'
 import { RoadmapPage } from './features/roadmap/RoadmapPage'
 import { ConfigPage } from './features/config/ConfigPage'
+import { TasksPage } from './features/tasks/TasksPage'
+import { LoginPage } from './features/auth/LoginPage'
 import { connectWebSocket, disconnectWebSocket, useWsStore } from './stores/wsStore'
+import { useAuthStore } from './stores/authStore'
 
 declare global {
   interface Window {
@@ -27,10 +29,19 @@ export default function App() {
   const hasCustomers = useWsStore(s => s.customers.length > 0)
   const dismissed = useRef(false)
 
+  const { loaded: authLoaded, authenticated, ssoEnabled, loadAuth } = useAuthStore()
+
   useEffect(() => {
+    loadAuth()
+  }, [loadAuth])
+
+  useEffect(() => {
+    // Only connect WebSocket after auth check passes
+    if (!authLoaded) return
+    if (ssoEnabled && !authenticated) return
     connectWebSocket()
     return () => disconnectWebSocket()
-  }, [])
+  }, [authLoaded, ssoEnabled, authenticated])
 
   // Dismiss the HTML loading screen once all initial data is loaded
   useEffect(() => {
@@ -40,13 +51,28 @@ export default function App() {
     }
   }, [connected, hasReleases, hasCustomers])
 
+  // Also dismiss loader when SSO login page should show
+  useEffect(() => {
+    if (authLoaded && ssoEnabled && !authenticated && !dismissed.current) {
+      dismissed.current = true
+      window.__nectarDismissLoader?.()
+    }
+  }, [authLoaded, ssoEnabled, authenticated])
+
   return (
     <ErrorBoundary>
       <BrowserRouter>
         <Routes>
-          <Route element={<AppShell />}>
+          {/* Login page is always accessible */}
+          <Route path="/login" element={<LoginPage />} />
+
+          {/* Protected routes — guarded by auth when SSO is enabled */}
+          <Route element={
+            <AuthGuard authLoaded={authLoaded} authenticated={authenticated} ssoEnabled={ssoEnabled}>
+              <AppShell />
+            </AuthGuard>
+          }>
             <Route path="/" element={<ReleasesPage />} />
-            <Route path="/calendar" element={<ReleaseCalendarPage />} />
             <Route path="/features" element={<FeaturesPage />} />
             <Route path="/integrations" element={<IntegrationsPage />} />
             <Route path="/releases/:key" element={<ReleaseDetail />} />
@@ -55,10 +81,34 @@ export default function App() {
             <Route path="/issues" element={<IssuesPage />} />
             <Route path="/tickets" element={<TicketsPage />} />
             <Route path="/roadmap" element={<RoadmapPage />} />
+            <Route path="/tasks-queue" element={<TasksPage />} />
             <Route path="/config" element={<ConfigPage />} />
           </Route>
         </Routes>
       </BrowserRouter>
     </ErrorBoundary>
   )
+}
+
+/**
+ * Auth guard — when SSO is enabled, redirects to login if not authenticated.
+ * When SSO is disabled, renders children directly (open access).
+ */
+function AuthGuard({ authLoaded, authenticated, ssoEnabled, children }: {
+  authLoaded: boolean
+  authenticated: boolean
+  ssoEnabled: boolean
+  children: React.ReactNode
+}) {
+  if (!authLoaded) {
+    return null // Still loading auth state
+  }
+
+  if (ssoEnabled && !authenticated) {
+    // Redirect to login page
+    window.location.href = '/login'
+    return null
+  }
+
+  return <>{children}</>
 }

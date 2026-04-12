@@ -1,5 +1,5 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useWsStore } from '../../stores/wsStore'
 import { apiFetch } from '../../api/client'
 import type { AuditEntry, ValidationReport } from '../../api/client'
@@ -9,6 +9,17 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/ca
 import { timeAgo, cn } from '../../lib/utils'
 import { TruthView } from './TruthView'
 import { NectarLoader } from '../../components/NectarLoader'
+import { CompareSelector } from './CompareSelector'
+import type { CompareTarget } from './CompareSelector'
+
+interface TaskInfo {
+  id: string
+  type: string
+  status: 'pending' | 'in-progress' | 'completed' | 'failed'
+  output: { gammaUrl?: string; notes?: string } | null
+  error: string | null
+  createdAt: string
+}
 
 const TRANSITIONS: Record<string, string[]> = {
   planning: ['cutting'],
@@ -36,7 +47,7 @@ export function ReleaseDetail() {
   // Determine where to go back based on navigation state
   const from = (location.state as { from?: string } | null)?.from
   const backPaths: Record<string, { path: string; label: string }> = {
-    calendar: { path: '/calendar', label: 'Back to calendar' },
+    releases: { path: '/',         label: 'Back to releases' },
     roadmap:  { path: '/roadmap',  label: 'Back to roadmap' },
     tickets:  { path: '/tickets',  label: 'Back to tickets' },
   }
@@ -60,13 +71,90 @@ export function ReleaseDetail() {
   const jiraProject = useWsStore(s => s.config.jiraProject || 'DEV')
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [validation, setValidation] = useState<ValidationReport | null>(null)
-  const [presentationUrl, setPresentationUrl] = useState<string | null>(release?.presentationUrl || null)
-  const [generatingPresentation, setGeneratingPresentation] = useState(false)
+  const [task, setTask] = useState<TaskInfo | null>(null)
+  const [taskLoading, setTaskLoading] = useState(false)
+  const [taskError, setTaskError] = useState<string | null>(null)
+  const [compareSelectorOpen, setCompareSelectorOpen] = useState(false)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
   useEffect(() => {
     if (version) {
       apiFetch<AuditEntry[]>(`/audit/${version}`).then(setAudit).catch(() => {})
     }
   }, [version, release?.updatedAt])
+
+  // Check for existing tasks for this release
+  useEffect(() => {
+    if (!version) return
+    apiFetch<TaskInfo[]>(`/tasks?type=release-presentation&limit=1`)
+      .then(tasks => {
+        // Find a task matching this release version
+        const match = tasks.find((t: any) => t.input?.version === version)
+        if (match) setTask(match)
+      })
+      .catch(() => {})
+  }, [version])
+
+  // Poll for task status when task is pending or in-progress
+  useEffect(() => {
+    if (!task || (task.status !== 'pending' && task.status !== 'in-progress')) {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+      return
+    }
+
+    pollRef.current = setInterval(() => {
+      apiFetch<TaskInfo>(`/tasks/${task.id}`)
+        .then(updated => {
+          setTask(updated)
+          if (updated.status === 'completed' || updated.status === 'failed') {
+            if (pollRef.current) {
+              clearInterval(pollRef.current)
+              pollRef.current = null
+            }
+          }
+        })
+        .catch(() => {})
+    }, 5000)
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+  }, [task?.id, task?.status])
+
+  const generatePresentation = useCallback(async (compareVersion?: string) => {
+    if (!version) return
+    setTaskLoading(true)
+    setTaskError(null)
+    setTask(null) // Clear old task so UI resets
+    try {
+      const body: Record<string, unknown> = {
+        type: 'release-presentation',
+        version,
+      }
+      if (compareVersion) {
+        body.compareVersion = compareVersion
+      }
+      const newTask = await apiFetch<TaskInfo>('/tasks', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      setTask(newTask)
+    } catch (err) {
+      setTaskError(err instanceof Error ? err.message : 'Failed to create task')
+    }
+    setTaskLoading(false)
+  }, [version])
+
+  const handleCompareSelect = useCallback((target: CompareTarget) => {
+    setCompareSelectorOpen(false)
+    generatePresentation(target.version)
+  }, [generatePresentation])
 
   if (!release) {
     return <NectarLoader message="Loading release..." className="mt-32" />
@@ -88,23 +176,6 @@ export function ReleaseDetail() {
 
   async function assessRisk() {
     await apiFetch(`/releases/${version}/risk?refresh=true`)
-  }
-
-  async function generatePresentation() {
-    setGeneratingPresentation(true)
-    try {
-      const result = await apiFetch<{ presentation?: { url: string } }>(`/releases/${version}/presentation`, {
-        method: 'POST',
-        body: JSON.stringify({}),
-      })
-      if (result.presentation?.url) {
-        setPresentationUrl(result.presentation.url)
-        window.open(result.presentation.url, '_blank')
-      }
-    } catch (err) {
-      // error handled by apiFetch
-    }
-    setGeneratingPresentation(false)
   }
 
   // ── Date helpers (consistent ISO format) ──────────────
@@ -182,23 +253,64 @@ export function ReleaseDetail() {
           ))}
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={validate}>Validate</Button>
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={assessRisk}>Risk</Button>
-          {presentationUrl ? (
-            <a href={presentationUrl} target="_blank" rel="noopener noreferrer">
-              <Button variant="outline" size="sm" className="text-xs h-7">Presentation</Button>
-            </a>
+          {/* Presentation button */}
+          {taskLoading || (task && (task.status === 'pending' || task.status === 'in-progress')) ? (
+            <Button variant="outline" size="sm" className="text-xs h-7" disabled>
+              <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1.5" />
+              {taskLoading ? 'Creating...' : task?.status === 'pending' ? 'Queued...' : 'Generating...'}
+            </Button>
+          ) : release.presentationUrl || (task && task.status === 'completed' && task.output?.gammaUrl) ? (
+            <>
+              <a href={release.presentationUrl || task?.output?.gammaUrl} target="_blank" rel="noopener noreferrer">
+                <Button variant="outline" size="sm" className="text-xs h-7">Presentation</Button>
+              </a>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs h-7 text-muted-foreground"
+                onClick={() => setCompareSelectorOpen(true)}
+              >
+                Regenerate
+              </Button>
+            </>
+          ) : task && task.status === 'failed' ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-7"
+              onClick={() => setCompareSelectorOpen(true)}
+            >
+              Retry Presentation
+            </Button>
           ) : (
             <Button
               variant="outline"
               size="sm"
               className="text-xs h-7"
-              onClick={generatePresentation}
-              disabled={generatingPresentation}
+              onClick={() => setCompareSelectorOpen(true)}
             >
-              {generatingPresentation ? 'Generating...' : 'Generate Presentation'}
+              Generate Presentation
             </Button>
           )}
         </div>
       </div>
+
+      {/* Task error/status banner */}
+      {taskError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 mb-3 text-xs text-destructive">
+          {taskError}
+        </div>
+      )}
+      {task && task.status === 'failed' && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 mb-3 flex items-center justify-between">
+          <span className="text-xs text-destructive">
+            Presentation generation failed: {task.error || 'Unknown error'}
+          </span>
+          <Button variant="outline" size="sm" className="text-xs h-6" onClick={() => setCompareSelectorOpen(true)}>
+            Retry
+          </Button>
+        </div>
+      )}
 
       {/* Release timeline */}
       <div className="rounded-lg border bg-card p-4 mb-4">
@@ -380,6 +492,14 @@ export function ReleaseDetail() {
           )}
         </CardContent>
       </Card>
+
+      {/* Compare selector for presentation generation */}
+      <CompareSelector
+        open={compareSelectorOpen}
+        onOpenChange={setCompareSelectorOpen}
+        onSelect={handleCompareSelect}
+        releaseVersion={release.version}
+      />
     </div>
   )
 }

@@ -5,6 +5,21 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { NectarLoader } from '../../components/NectarLoader'
 import { cn } from '../../lib/utils'
+import { IntegrationsConfigPage } from '../integrations-config/IntegrationsConfigPage'
+import { UpdatePage } from '../admin/UpdatePage'
+
+// ── Tab types ─────────────────────────────────────────
+
+type Tab = 'themes' | 'api-keys' | 'connections' | 'update'
+
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'themes', label: 'Themes' },
+  { key: 'api-keys', label: 'API Keys' },
+  { key: 'connections', label: 'Connections' },
+  { key: 'update', label: 'Update' },
+]
+
+// ── Theme types ───────────────────────────────────────
 
 interface ThemeEntry {
   name: string
@@ -19,6 +34,43 @@ interface ThemeConfig {
 }
 
 export function ConfigPage() {
+  const [activeTab, setActiveTab] = useState<Tab>('themes')
+
+  return (
+    <div className="w-full space-y-6 max-w-4xl">
+      {/* Tab bar */}
+      <div>
+        <h2 className="text-2xl font-bold">Config</h2>
+        <div className="flex items-center gap-1 mt-3">
+          {TABS.map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={cn(
+                "px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
+                activeTab === tab.key
+                  ? "bg-accent text-accent-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tab content */}
+      {activeTab === 'themes' && <ThemesTab />}
+      {activeTab === 'api-keys' && <ApiKeysSection />}
+      {activeTab === 'connections' && <IntegrationsConfigPage />}
+      {activeTab === 'update' && <UpdatePage />}
+    </div>
+  )
+}
+
+// ── Themes Tab ────────────────────────────────────────
+
+function ThemesTab() {
   const [config, setConfig] = useState<ThemeConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -127,32 +179,32 @@ export function ConfigPage() {
         return
       }
       // Merge suggestions into existing themes
-      const merged = [...config.themes]
+      const mergedThemes = [...config.themes]
       for (const suggestion of result.suggestions) {
         // Check if a theme with this name already exists
-        const existingIdx = merged.findIndex(t =>
+        const existingIdx = mergedThemes.findIndex(t =>
           t.name.toLowerCase() === suggestion.name.toLowerCase()
         )
         if (existingIdx >= 0) {
           // Add new components to existing theme
-          const existing = new Set(merged[existingIdx].components.map(c => c.toLowerCase()))
+          const existing = new Set(mergedThemes[existingIdx].components.map(c => c.toLowerCase()))
           const newComps = suggestion.components.filter(c => !existing.has(c.toLowerCase()))
           if (newComps.length > 0) {
-            merged[existingIdx] = {
-              ...merged[existingIdx],
-              components: [...merged[existingIdx].components, ...newComps],
+            mergedThemes[existingIdx] = {
+              ...mergedThemes[existingIdx],
+              components: [...mergedThemes[existingIdx].components, ...newComps],
             }
           }
         } else {
-          merged.push(suggestion)
+          mergedThemes.push(suggestion)
         }
       }
-      merged.sort((a, b) => a.name.localeCompare(b.name))
-      setConfig({ ...config, themes: merged })
+      mergedThemes.sort((a, b) => a.name.localeCompare(b.name))
+      setConfig({ ...config, themes: mergedThemes })
       setDirty(true)
       // Re-compute unmapped after merge
       const mappedSet = new Set<string>()
-      for (const t of merged) for (const c of t.components) mappedSet.add(c)
+      for (const t of mergedThemes) for (const c of t.components) mappedSet.add(c)
       setObservedComponents(prev => prev.filter(c => !mappedSet.has(c)))
       setSaveMsg(`Added ${result.suggestions.length} theme groups. Review and save.`)
       setTimeout(() => setSaveMsg(null), 5000)
@@ -186,18 +238,11 @@ export function ConfigPage() {
     )
   }
 
-  // Compute all mapped components for the "unmapped" indicator
-  const mappedComponents = new Set<string>()
-  for (const theme of config.themes) {
-    for (const c of theme.components) mappedComponents.add(c)
-  }
-
   return (
-    <div className="w-full space-y-6 max-w-4xl">
+    <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-2xl font-bold">Configuration</h2>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="text-sm text-muted-foreground">
             Map JIRA components to display themes on the roadmap.
             {config.updatedAt && (
               <> · Last saved {new Date(config.updatedAt).toLocaleDateString()}</>
@@ -420,5 +465,167 @@ function UnmappedChip({ component, themes, onAssign }: {
         </>
       )}
     </div>
+  )
+}
+
+// ── API Keys section ──────────────────────────────────
+
+interface ApiKey {
+  id: string
+  label: string
+  createdAt: string
+  createdBy: string | null
+  lastUsedAt: string | null
+}
+
+function ApiKeysSection() {
+  const [keys, setKeys] = useState<ApiKey[]>([])
+  const [loading, setLoading] = useState(true)
+  const [newLabel, setNewLabel] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [newRawKey, setNewRawKey] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function loadKeys() {
+    setLoading(true)
+    try {
+      const data = await apiFetch<ApiKey[]>('/keys')
+      setKeys(data)
+    } catch {
+      // API keys endpoint may not exist yet — silently handle
+      setKeys([])
+    }
+    setLoading(false)
+  }
+
+  useEffect(() => { loadKeys() }, [])
+
+  async function createKey() {
+    if (!newLabel.trim()) return
+    setCreating(true)
+    setError(null)
+    setNewRawKey(null)
+    try {
+      const result = await apiFetch<{ id: string; rawKey: string; label: string; createdAt: string }>('/keys', {
+        method: 'POST',
+        body: JSON.stringify({ label: newLabel.trim() }),
+      })
+      setNewRawKey(result.rawKey)
+      setNewLabel('')
+      loadKeys()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create key')
+    }
+    setCreating(false)
+  }
+
+  async function revokeKey(id: string) {
+    try {
+      await apiFetch(`/keys/${id}`, { method: 'DELETE' })
+      setKeys(prev => prev.filter(k => k.id !== id))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to revoke key')
+    }
+  }
+
+  function formatDate(d: string | null) {
+    if (!d) return 'Never'
+    return new Date(d).toLocaleDateString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    })
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">API Keys</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Create API keys for service-to-service authentication (Hive, MCP clients).
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Create new key */}
+        <div className="flex items-center gap-2">
+          <Input
+            placeholder="Key label (e.g., hive-production)"
+            value={newLabel}
+            onChange={e => setNewLabel(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && createKey()}
+            className="h-8 text-sm max-w-xs"
+          />
+          <Button size="sm" onClick={createKey} disabled={creating || !newLabel.trim()}>
+            {creating ? 'Creating...' : 'Create Key'}
+          </Button>
+        </div>
+
+        {error && <p className="text-xs text-destructive">{error}</p>}
+
+        {/* Show newly created key (one time) */}
+        {newRawKey && (
+          <div className="rounded-md border border-green-500/30 bg-green-500/5 p-3 space-y-2">
+            <p className="text-xs text-green-400 font-medium">
+              Key created! Copy it now — it will not be shown again.
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="text-xs font-mono bg-background px-2 py-1 rounded border flex-1 break-all select-all">
+                {newRawKey}
+              </code>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  navigator.clipboard.writeText(newRawKey)
+                }}
+              >
+                Copy
+              </Button>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => setNewRawKey(null)}>
+              Dismiss
+            </Button>
+          </div>
+        )}
+
+        {/* Existing keys */}
+        {loading ? (
+          <p className="text-xs text-muted-foreground">Loading...</p>
+        ) : keys.length === 0 ? (
+          <p className="text-xs text-muted-foreground italic">No API keys created yet.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-left">
+                <th className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Label</th>
+                <th className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Created</th>
+                <th className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Last Used</th>
+                <th className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-16"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {keys.map(key => (
+                <tr key={key.id} className="border-b border-border/30 hover:bg-accent/20">
+                  <td className="px-2 py-1.5">
+                    <span className="font-medium">{key.label}</span>
+                    {key.createdBy && (
+                      <span className="text-xs text-muted-foreground ml-2">by {key.createdBy}</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-1.5 text-xs text-muted-foreground">{formatDate(key.createdAt)}</td>
+                  <td className="px-2 py-1.5 text-xs text-muted-foreground">{formatDate(key.lastUsedAt)}</td>
+                  <td className="px-2 py-1.5">
+                    <button
+                      onClick={() => revokeKey(key.id)}
+                      className="text-xs text-destructive hover:text-destructive/80 transition-colors"
+                    >
+                      Revoke
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </CardContent>
+    </Card>
   )
 }
