@@ -1516,7 +1516,9 @@ module.exports = function createRoutes(services, config) {
       label: 'Datadog',
       vars: [
         { key: 'DATADOG_API_KEY', label: 'API Key', secret: true },
+        { key: 'DATADOG_API_KEY_ID', label: 'API Key ID' },
         { key: 'DATADOG_APP_KEY', label: 'App Key', secret: true },
+        { key: 'DATADOG_APP_KEY_ID', label: 'App Key ID' },
       ],
     },
   };
