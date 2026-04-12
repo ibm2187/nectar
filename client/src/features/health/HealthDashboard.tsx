@@ -75,15 +75,31 @@ const friendlyName = (name: string): string => SERVICE_NAMES[name] ?? name
 
 const getAllChecks = (env: HealthEnvironment): HealthCheck[] => {
   if (!env.health?.checks) return []
-  const { criticalFunctionality = [], externalServices = [], integrations = [] } = env.health.checks
-  return [...criticalFunctionality, ...externalServices, ...integrations]
+  const checks: HealthCheck[] = []
+  const sections = [
+    env.health.checks.criticalFunctionality,
+    env.health.checks.externalServices,
+    env.health.checks.integrations,
+  ]
+  for (const section of sections) {
+    if (!section?.services) continue
+    for (const [name, svc] of Object.entries(section.services)) {
+      checks.push({
+        name,
+        status: svc.status || 'unknown',
+        responseTimeMs: svc.responseTimeMs,
+        details: svc.details,
+      })
+    }
+  }
+  return checks
 }
 
 // ── Helper: check status dot color ──────────────────────────
 
 const checkDotClass = (status: string): string => {
-  if (status === 'pass') return 'bg-green-500'
-  if (status === 'fail') return 'bg-red-500'
+  if (status === 'healthy' || status === 'pass') return 'bg-green-500'
+  if (status === 'unhealthy' || status === 'fail') return 'bg-red-500'
   if (status === 'degraded') return 'bg-yellow-500'
   return 'bg-gray-400' // skipped or unknown
 }
@@ -296,9 +312,9 @@ function EnvironmentCard({ card, onClickCustomer }: { card: EnvCard; onClickCust
               <div key={check.name} className="flex items-center gap-2 text-xs">
                 <div className={cn('w-2 h-2 rounded-full shrink-0', checkDotClass(check.status))} />
                 <span className="text-muted-foreground truncate">{friendlyName(check.name)}</span>
-                {check.responseTime != null && (
+                {check.responseTimeMs != null && check.responseTimeMs > 0 && (
                   <span className="text-muted-foreground/60 ml-auto shrink-0">
-                    {Math.round(check.responseTime)}ms
+                    {Math.round(check.responseTimeMs)}ms
                   </span>
                 )}
               </div>

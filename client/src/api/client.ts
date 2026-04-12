@@ -234,17 +234,17 @@ export type HealthStatus = 'healthy' | 'degraded' | 'unhealthy' | 'unreachable'
 
 export interface HealthCheck {
   name: string
-  status: 'pass' | 'fail' | 'degraded' | 'skipped'
-  responseTime?: number
-  message?: string
+  status: string
+  responseTimeMs?: number
+  details?: string
 }
 
 export interface HealthData {
   status: HealthStatus
   checks: {
-    criticalFunctionality?: HealthCheck[]
-    externalServices?: HealthCheck[]
-    integrations?: HealthCheck[]
+    criticalFunctionality?: { status?: string; services?: Record<string, { status: string; responseTimeMs?: number; details?: string }> }
+    externalServices?: { status?: string; services?: Record<string, { status: string; responseTimeMs?: number; details?: string }> }
+    integrations?: { status?: string; services?: Record<string, { status: string; responseTimeMs?: number; details?: string }> }
   }
   summary: {
     totalChecks: number

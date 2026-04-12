@@ -32,13 +32,24 @@ const friendlyName = (name: string): string => SERVICE_NAMES[name] ?? name
 
 const getAllChecks = (env: HealthEnvironment): HealthCheck[] => {
   if (!env.health?.checks) return []
-  const { criticalFunctionality = [], externalServices = [], integrations = [] } = env.health.checks
-  return [...criticalFunctionality, ...externalServices, ...integrations]
+  const checks: HealthCheck[] = []
+  const sections = [
+    env.health.checks.criticalFunctionality,
+    env.health.checks.externalServices,
+    env.health.checks.integrations,
+  ]
+  for (const section of sections) {
+    if (!section?.services) continue
+    for (const [name, svc] of Object.entries(section.services)) {
+      checks.push({ name, status: svc.status || 'unknown', responseTimeMs: svc.responseTimeMs, details: svc.details })
+    }
+  }
+  return checks
 }
 
 const checkDotClass = (status: string): string => {
-  if (status === 'pass') return 'bg-green-500'
-  if (status === 'fail') return 'bg-red-500'
+  if (status === 'healthy' || status === 'pass') return 'bg-green-500'
+  if (status === 'unhealthy' || status === 'fail') return 'bg-red-500'
   if (status === 'degraded') return 'bg-yellow-500'
   return 'bg-gray-400'
 }
@@ -217,8 +228,8 @@ function EnvironmentSection({ env }: { env: HealthEnvironment }) {
                   <span className="text-sm">{friendlyName(check.name)}</span>
                 </div>
                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                  {check.responseTime != null && (
-                    <span>{Math.round(check.responseTime)}ms</span>
+                  {check.responseTimeMs != null && check.responseTimeMs > 0 && (
+                    <span>{Math.round(check.responseTimeMs)}ms</span>
                   )}
                   <span className={cn(
                     check.status === 'pass' && 'text-green-400',
