@@ -698,8 +698,7 @@ function UserRow({ user, isEditing, editRole, editPermissions, saving, onStartEd
           )}
         </td>
         <td className="px-3 py-2">
-          {/* Env admins cannot be edited from UI -- controlled by NECTAR_ADMINS */}
-          {!user.isEnvAdmin && !isEditing && (
+          {!isEditing && (
             <button
               onClick={onStartEdit}
               className="text-xs text-primary hover:text-primary/80 transition-colors"
