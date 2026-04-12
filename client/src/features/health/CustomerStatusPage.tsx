@@ -251,8 +251,7 @@ function EnvironmentSection({ env }: { env: HealthEnvironment }) {
                     {(check.status === 'healthy' || check.status === 'pass') ? 'Operational' :
                      (check.status === 'unhealthy' || check.status === 'fail') ? 'Down' :
                      check.status === 'degraded' ? 'Degraded' :
-                     check.status === 'skipped' ? 'Skipped' :
-                     'Operational'}
+                      'Operational'}
                   </span>
                 </div>
               </div>
