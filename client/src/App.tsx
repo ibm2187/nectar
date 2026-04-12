@@ -4,7 +4,6 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { AppShell } from './components/layout/AppShell'
 import { ReleasesPage } from './features/releases/ReleasesPage'
 import { ReleaseDetail } from './features/releases/ReleaseDetail'
-import { ReleaseCalendarPage } from './features/releases/ReleaseCalendarPage'
 import { FeaturesPage } from './features/features/FeaturesPage'
 import { IntegrationsPage } from './features/integrations/IntegrationsPage'
 import { CustomersPage } from './features/customers/CustomersPage'
@@ -74,7 +73,6 @@ export default function App() {
             </AuthGuard>
           }>
             <Route path="/" element={<ReleasesPage />} />
-            <Route path="/calendar" element={<ReleaseCalendarPage />} />
             <Route path="/features" element={<FeaturesPage />} />
             <Route path="/integrations" element={<IntegrationsPage />} />
             <Route path="/releases/:key" element={<ReleaseDetail />} />

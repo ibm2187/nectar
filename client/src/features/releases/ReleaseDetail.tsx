@@ -47,7 +47,7 @@ export function ReleaseDetail() {
   // Determine where to go back based on navigation state
   const from = (location.state as { from?: string } | null)?.from
   const backPaths: Record<string, { path: string; label: string }> = {
-    calendar: { path: '/calendar', label: 'Back to calendar' },
+    releases: { path: '/',         label: 'Back to releases' },
     roadmap:  { path: '/roadmap',  label: 'Back to roadmap' },
     tickets:  { path: '/tickets',  label: 'Back to tickets' },
   }
