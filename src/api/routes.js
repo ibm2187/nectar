@@ -38,16 +38,21 @@ module.exports = function createRoutes(services, config) {
     res.json(annotateReleases(list, environments));
   });
 
-  // Release calendar — all releases with jiraReleaseDate, annotated with
-  // effective status (shipped/in-flight/upcoming/overdue) using prod env data
+  // Release calendar — all releases annotated with effective status
+  // (shipped/in-flight/upcoming/overdue) using prod env data.
+  // Includes unscheduled releases (no jiraReleaseDate) for the unscheduled column.
   router.get('/releases/calendar', (req, res) => {
     const { repo, from, to } = req.query;
     let list = releases.list();
     if (repo) list = list.filter(r => r.repo === repo);
-    list = list.filter(r => r.jiraReleaseDate && !r.jiraArchived);
-    if (from) list = list.filter(r => r.jiraReleaseDate >= from);
-    if (to) list = list.filter(r => r.jiraReleaseDate <= to);
-    list.sort((a, b) => (a.jiraReleaseDate || '').localeCompare(b.jiraReleaseDate || ''));
+    list = list.filter(r => !r.jiraArchived);
+    list = list.filter(r => {
+      if (!r.jiraReleaseDate) return true; // unscheduled — always include
+      if (from && r.jiraReleaseDate < from) return false;
+      if (to && r.jiraReleaseDate > to) return false;
+      return true;
+    });
+    list.sort((a, b) => (a.jiraReleaseDate || 'zzzz').localeCompare(b.jiraReleaseDate || 'zzzz'));
     const environments = customerStore.listEnvironments();
     res.json(annotateReleases(list, environments));
   });
