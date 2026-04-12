@@ -17,11 +17,24 @@ function getAdminEmails() {
     .filter(Boolean);
 }
 
-function isAdmin(email) {
+/**
+ * Check if an email is admin. When a userStore is provided, also checks
+ * stored role (NECTAR_ADMINS env var is primary, stored role is secondary).
+ *
+ * @param {string} email
+ * @param {object} [userStore] - UserStore instance (optional)
+ */
+function isAdmin(email, userStore) {
   if (!email) return false;
   const admins = getAdminEmails();
   if (admins.length === 0) return true; // No admins configured = everyone is admin
-  return admins.includes(email.toLowerCase());
+  if (admins.includes(email.toLowerCase())) return true;
+  // Secondary: check stored user role
+  if (userStore) {
+    const user = userStore.getUser(email);
+    if (user && user.role === 'admin') return true;
+  }
+  return false;
 }
 
 /**
@@ -29,8 +42,12 @@ function isAdmin(email) {
  *
  * When ENABLE_GOOGLE_SSO is not set or false, all auth is bypassed
  * and the system behaves exactly as before (open access or WEB_TOKEN only).
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.userStore] - UserStore instance (optional)
  */
-function createAuthRoutes() {
+function createAuthRoutes(opts = {}) {
+  const { userStore } = opts;
   const router = Router();
   const ssoEnabled = process.env.ENABLE_GOOGLE_SSO === 'true';
   const jwtSecret = process.env.JWT_SECRET || 'nectar-default-jwt-secret';
@@ -97,8 +114,17 @@ function createAuthRoutes() {
         return res.redirect('/?auth_error=domain');
       }
 
+      // Record the login in the user store
+      if (userStore) {
+        userStore.upsertOnLogin(
+          payload.email,
+          payload.name || payload.email,
+          payload.picture || null,
+        );
+      }
+
       // Issue a Nectar JWT session cookie
-      const role = isAdmin(payload.email) ? 'admin' : 'user';
+      const role = isAdmin(payload.email, userStore) ? 'admin' : 'user';
       const sessionToken = jwt.sign(
         {
           email: payload.email,
@@ -137,7 +163,10 @@ function createAuthRoutes() {
     try {
       const user = jwt.verify(token, jwtSecret);
       // Re-evaluate role on each /me call (in case NECTAR_ADMINS changed)
-      const currentRole = isAdmin(user.email) ? 'admin' : 'user';
+      const currentRole = isAdmin(user.email, userStore) ? 'admin' : 'user';
+      const permissions = userStore
+        ? userStore.getPermissions(user.email)
+        : null;
       res.json({
         authenticated: true,
         ssoEnabled: true,
@@ -147,6 +176,7 @@ function createAuthRoutes() {
           picture: user.picture,
           domain: user.domain,
           role: currentRole,
+          permissions,
         },
       });
     } catch {
@@ -173,8 +203,9 @@ function createAuthRoutes() {
  *   4. No auth → allowed only if ENABLE_GOOGLE_SSO is not set
  *
  * @param {object} [apiKeys] - ApiKeyManager instance (optional)
+ * @param {object} [userStore] - UserStore instance (optional)
  */
-function createAuthMiddleware(apiKeys) {
+function createAuthMiddleware(apiKeys, userStore) {
   const ssoEnabled = process.env.ENABLE_GOOGLE_SSO === 'true';
   const jwtSecret = process.env.JWT_SECRET || 'nectar-default-jwt-secret';
   const webToken = process.env.WEB_TOKEN;
@@ -239,7 +270,7 @@ function createAuthMiddleware(apiKeys) {
           name: user.name,
           picture: user.picture,
           domain: user.domain,
-          role: isAdmin(user.email) ? 'admin' : 'user',
+          role: isAdmin(user.email, userStore) ? 'admin' : 'user',
         };
         req.authenticated = true;
         return next();

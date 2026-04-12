@@ -110,6 +110,10 @@ const ApiKeyManager = require('./core/api-keys');
 const apiKeys = new ApiKeyManager();
 log.info(`API key manager initialized (${apiKeys.keys.size} keys loaded)`);
 
+const UserStore = require('./core/user-store');
+const userStore = new UserStore();
+log.info(`User store initialized (${userStore.users.size} users loaded)`);
+
 const TaskQueue = require('./core/task-queue');
 const taskQueue = new TaskQueue();
 log.info(`Task queue initialized (${taskQueue.tasks.size} tasks loaded)`);
@@ -155,7 +159,7 @@ const services = {
   releases, repoManager, jira, github, jenkins, slack,
   risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth,
   customerStore, webplatformScanner, envPoller, themeConfig,
-  apiKeys, taskQueue,
+  apiKeys, taskQueue, userStore,
 };
 const webServer = createWebServer(services, config);
 
@@ -207,6 +211,7 @@ function shutdown() {
   releases.flush();
   customerStore.flush();
   taskQueue.flush();
+  userStore.flush();
   if (webServer) webServer.close();
   process.exit(0);
 }

@@ -15,7 +15,7 @@ import { ConfigPage } from './features/config/ConfigPage'
 import { TasksPage } from './features/tasks/TasksPage'
 import { LoginPage } from './features/auth/LoginPage'
 import { connectWebSocket, disconnectWebSocket, useWsStore } from './stores/wsStore'
-import { useAuthStore } from './stores/authStore'
+import { useAuthStore, type UserPermissions } from './stores/authStore'
 
 declare global {
   interface Window {
@@ -72,16 +72,16 @@ export default function App() {
               <AppShell />
             </AuthGuard>
           }>
-            <Route path="/" element={<ReleasesPage />} />
-            <Route path="/features" element={<FeaturesPage />} />
-            <Route path="/integrations" element={<IntegrationsPage />} />
-            <Route path="/releases/:key" element={<ReleaseDetail />} />
-            <Route path="/customers" element={<CustomersPage />} />
-            <Route path="/environments/:id" element={<EnvironmentDetailPage />} />
-            <Route path="/issues" element={<IssuesPage />} />
-            <Route path="/tickets" element={<TicketsPage />} />
-            <Route path="/roadmap" element={<RoadmapPage />} />
-            <Route path="/tasks-queue" element={<TasksPage />} />
+            <Route path="/" element={<PermissionGuard permKey="releases"><ReleasesPage /></PermissionGuard>} />
+            <Route path="/features" element={<PermissionGuard permKey="features"><FeaturesPage /></PermissionGuard>} />
+            <Route path="/integrations" element={<PermissionGuard permKey="integrations"><IntegrationsPage /></PermissionGuard>} />
+            <Route path="/releases/:key" element={<PermissionGuard permKey="releases"><ReleaseDetail /></PermissionGuard>} />
+            <Route path="/customers" element={<PermissionGuard permKey="environments"><CustomersPage /></PermissionGuard>} />
+            <Route path="/environments/:id" element={<PermissionGuard permKey="environments"><EnvironmentDetailPage /></PermissionGuard>} />
+            <Route path="/issues" element={<PermissionGuard permKey="issues"><IssuesPage /></PermissionGuard>} />
+            <Route path="/tickets" element={<PermissionGuard permKey="tickets"><TicketsPage /></PermissionGuard>} />
+            <Route path="/roadmap" element={<PermissionGuard permKey="roadmap"><RoadmapPage /></PermissionGuard>} />
+            <Route path="/tasks-queue" element={<PermissionGuard permKey="tasks"><TasksPage /></PermissionGuard>} />
             <Route path="/config" element={<ConfigPage />} />
           </Route>
         </Routes>
@@ -108,6 +108,37 @@ function AuthGuard({ authLoaded, authenticated, ssoEnabled, children }: {
     // Redirect to login page
     window.location.href = '/login'
     return null
+  }
+
+  return <>{children}</>
+}
+
+/**
+ * Permission guard — checks the user's per-page permissions.
+ * Admins always have access. When SSO is disabled, all pages are accessible.
+ * Denied users see a 403 message.
+ */
+function PermissionGuard({ permKey, children }: {
+  permKey: keyof UserPermissions
+  children: React.ReactNode
+}) {
+  const { user, ssoEnabled } = useAuthStore()
+
+  // SSO disabled or no user = open access
+  if (!ssoEnabled || !user) return <>{children}</>
+
+  // Admins always have access
+  if (user.role === 'admin') return <>{children}</>
+
+  // Check permission
+  if (user.permissions && !user.permissions[permKey]) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] text-center gap-3">
+        <p className="text-4xl font-bold text-muted-foreground">403</p>
+        <p className="text-sm text-muted-foreground">You don't have access to this page.</p>
+        <p className="text-xs text-muted-foreground">Contact an admin to request access.</p>
+      </div>
+    )
   }
 
   return <>{children}</>

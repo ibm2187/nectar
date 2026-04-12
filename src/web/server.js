@@ -14,7 +14,7 @@ const log = require('../core/log');
  * @returns {{ app, httpServer, wss, close }}
  */
 function createWebServer(services, config) {
-  const { releases, customers, discovery, jiraSync, customerStore, envPoller, apiKeys, taskQueue } = services;
+  const { releases, customers, discovery, jiraSync, customerStore, envPoller, apiKeys, taskQueue, userStore } = services;
   const port = parseInt(process.env.WEB_PORT) || 4000;
   const token = process.env.WEB_TOKEN;
 
@@ -23,10 +23,10 @@ function createWebServer(services, config) {
 
   // ── Auth routes (before auth middleware) ──────────────
   const { createAuthRoutes, createAuthMiddleware } = require('../api/auth');
-  app.use('/api/auth', createAuthRoutes());
+  app.use('/api/auth', createAuthRoutes({ userStore }));
 
   // ── Auth middleware (conditional on ENABLE_GOOGLE_SSO) ─
-  const authMiddleware = createAuthMiddleware(apiKeys);
+  const authMiddleware = createAuthMiddleware(apiKeys, userStore);
   app.use(authMiddleware);
 
   // ── Rate limiting ────────────────────────────────────

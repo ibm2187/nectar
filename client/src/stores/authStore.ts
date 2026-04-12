@@ -1,11 +1,23 @@
 import { create } from 'zustand'
 
-interface AuthUser {
+export interface UserPermissions {
+  releases: boolean
+  roadmap: boolean
+  tickets: boolean
+  environments: boolean
+  features: boolean
+  integrations: boolean
+  issues: boolean
+  tasks: boolean
+}
+
+export interface AuthUser {
   email: string
   name: string
   picture: string | null
   domain: string | null
   role: 'admin' | 'user'
+  permissions: UserPermissions | null
 }
 
 interface AuthState {

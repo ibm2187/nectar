@@ -19,7 +19,7 @@ const asyncHandler = (fn) => (req, res, next) => {
  * @param {object} config
  */
 module.exports = function createRoutes(services, config) {
-  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig, apiKeys, taskQueue } = services;
+  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig, apiKeys, taskQueue, userStore } = services;
 
   // Nectar's own repo — used by the Issues page so users can file bugs/feedback.
   const NECTAR_REPO = 'mavencare/nectar';
@@ -945,6 +945,41 @@ module.exports = function createRoutes(services, config) {
       const deleted = apiKeys.revoke(req.params.id);
       if (!deleted) return res.status(404).json({ error: 'Key not found' });
       res.json({ ok: true });
+    });
+  }
+
+  // ── Users — admin only ────────────────────────────────
+
+  if (userStore) {
+    router.get('/users', requireAdmin, (req, res) => {
+      const users = userStore.listUsers().map(u => ({
+        email: u.email,
+        name: u.name,
+        picture: u.picture,
+        role: userStore.getRole(u.email),
+        permissions: userStore.getPermissions(u.email),
+        isEnvAdmin: userStore.isEnvAdmin(u.email),
+        lastLoginAt: u.lastLoginAt,
+        createdAt: u.createdAt,
+      }));
+      res.json(users);
+    });
+
+    router.patch('/users/:email', requireAdmin, (req, res) => {
+      const email = decodeURIComponent(req.params.email);
+      const { role, permissions } = req.body || {};
+      const updated = userStore.updateUser(email, { role, permissions });
+      if (!updated) return res.status(404).json({ error: 'User not found' });
+      res.json({
+        email: updated.email,
+        name: updated.name,
+        picture: updated.picture,
+        role: userStore.getRole(updated.email),
+        permissions: userStore.getPermissions(updated.email),
+        isEnvAdmin: userStore.isEnvAdmin(updated.email),
+        lastLoginAt: updated.lastLoginAt,
+        createdAt: updated.createdAt,
+      });
     });
   }
 

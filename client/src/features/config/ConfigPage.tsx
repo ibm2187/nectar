@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { apiFetch } from '../../api/client'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
+import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { NectarLoader } from '../../components/NectarLoader'
@@ -10,11 +11,12 @@ import { UpdatePage } from '../admin/UpdatePage'
 
 // ── Tab types ─────────────────────────────────────────
 
-type Tab = 'themes' | 'api-keys' | 'connections' | 'update'
+type Tab = 'themes' | 'api-keys' | 'users' | 'connections' | 'update'
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'themes', label: 'Themes' },
   { key: 'api-keys', label: 'API Keys' },
+  { key: 'users', label: 'Users' },
   { key: 'connections', label: 'Connections' },
   { key: 'update', label: 'Update' },
 ]
@@ -62,6 +64,7 @@ export function ConfigPage() {
       {/* Tab content */}
       {activeTab === 'themes' && <ThemesTab />}
       {activeTab === 'api-keys' && <ApiKeysSection />}
+      {activeTab === 'users' && <UsersTab />}
       {activeTab === 'connections' && <IntegrationsConfigPage />}
       {activeTab === 'update' && <UpdatePage />}
     </div>
@@ -465,6 +468,308 @@ function UnmappedChip({ component, themes, onAssign }: {
         </>
       )}
     </div>
+  )
+}
+
+// ── Users Tab ────────────────────────────────────────
+
+const PERMISSION_KEYS = [
+  { key: 'releases', label: 'Releases' },
+  { key: 'roadmap', label: 'Roadmap' },
+  { key: 'tickets', label: 'Tickets' },
+  { key: 'environments', label: 'Environments' },
+  { key: 'features', label: 'Features' },
+  { key: 'integrations', label: 'Integrations' },
+  { key: 'issues', label: 'Issues' },
+  { key: 'tasks', label: 'Tasks' },
+] as const
+
+interface UserRecord {
+  email: string
+  name: string
+  picture: string | null
+  role: 'admin' | 'user'
+  permissions: Record<string, boolean>
+  isEnvAdmin: boolean
+  lastLoginAt: string | null
+  createdAt: string
+}
+
+function formatRelativeTime(dateStr: string | null): string {
+  if (!dateStr) return 'Never'
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 30) return `${days}d ago`
+  const months = Math.floor(days / 30)
+  return `${months}mo ago`
+}
+
+function countPermissions(perms: Record<string, boolean>): number {
+  return PERMISSION_KEYS.filter(p => perms[p.key]).length
+}
+
+function UsersTab() {
+  const [users, setUsers] = useState<UserRecord[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [editingEmail, setEditingEmail] = useState<string | null>(null)
+  const [editRole, setEditRole] = useState<'admin' | 'user'>('user')
+  const [editPermissions, setEditPermissions] = useState<Record<string, boolean>>({})
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState<string | null>(null)
+
+  async function loadUsers() {
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await apiFetch<UserRecord[]>('/users')
+      setUsers(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load users')
+      setUsers([])
+    }
+    setLoading(false)
+  }
+
+  useEffect(() => { loadUsers() }, [])
+
+  function startEdit(user: UserRecord) {
+    setEditingEmail(user.email)
+    setEditRole(user.role)
+    setEditPermissions({ ...user.permissions })
+    setSaveMsg(null)
+  }
+
+  function cancelEdit() {
+    setEditingEmail(null)
+    setSaveMsg(null)
+  }
+
+  async function saveUser() {
+    if (!editingEmail) return
+    setSaving(true)
+    setSaveMsg(null)
+    setError(null)
+    try {
+      const updated = await apiFetch<UserRecord>(`/users/${encodeURIComponent(editingEmail)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role: editRole, permissions: editPermissions }),
+      })
+      setUsers(prev => prev.map(u => u.email === updated.email ? updated : u))
+      setEditingEmail(null)
+      setSaveMsg('User updated')
+      setTimeout(() => setSaveMsg(null), 3000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update user')
+    }
+    setSaving(false)
+  }
+
+  function togglePermission(key: string) {
+    setEditPermissions(prev => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  if (loading) {
+    return <NectarLoader size="lg" message="Loading users..." className="mt-32" />
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          Manage user roles and per-page permissions. Users are recorded on login.
+        </p>
+        <div className="flex items-center gap-2">
+          {saveMsg && <span className="text-xs text-green-400">{saveMsg}</span>}
+          {error && <span className="text-xs text-destructive">{error}</span>}
+        </div>
+      </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Users ({users.length})</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left">
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">User</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-24">Role</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-28">Last Login</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-28">Permissions</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-16"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map(user => (
+                  <UserRow
+                    key={user.email}
+                    user={user}
+                    isEditing={editingEmail === user.email}
+                    editRole={editRole}
+                    editPermissions={editPermissions}
+                    saving={saving}
+                    onStartEdit={() => startEdit(user)}
+                    onCancelEdit={cancelEdit}
+                    onSave={saveUser}
+                    onRoleChange={setEditRole}
+                    onTogglePermission={togglePermission}
+                  />
+                ))}
+                {users.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-8 text-center text-muted-foreground text-xs italic">
+                      No users have logged in yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+function UserRow({ user, isEditing, editRole, editPermissions, saving, onStartEdit, onCancelEdit, onSave, onRoleChange, onTogglePermission }: {
+  user: UserRecord
+  isEditing: boolean
+  editRole: 'admin' | 'user'
+  editPermissions: Record<string, boolean>
+  saving: boolean
+  onStartEdit: () => void
+  onCancelEdit: () => void
+  onSave: () => void
+  onRoleChange: (role: 'admin' | 'user') => void
+  onTogglePermission: (key: string) => void
+}) {
+  const isAdmin = user.role === 'admin'
+  const permCount = countPermissions(user.permissions)
+  const totalPerms = PERMISSION_KEYS.length
+
+  return (
+    <>
+      <tr className={cn(
+        "border-b border-border/30 hover:bg-accent/20",
+        isEditing && "bg-accent/10"
+      )}>
+        <td className="px-3 py-2">
+          <div className="flex items-center gap-2.5">
+            {user.picture ? (
+              <img
+                src={user.picture}
+                alt=""
+                className="w-6 h-6 rounded-full shrink-0"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="w-6 h-6 rounded-full bg-accent shrink-0 flex items-center justify-center text-xs font-medium">
+                {(user.name || user.email)[0].toUpperCase()}
+              </div>
+            )}
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">{user.name}</p>
+              <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+            </div>
+          </div>
+        </td>
+        <td className="px-3 py-2">
+          {isAdmin ? (
+            <Badge variant="default" className="text-[10px]">Admin</Badge>
+          ) : (
+            <span className="text-xs text-muted-foreground">User</span>
+          )}
+        </td>
+        <td className="px-3 py-2 text-xs text-muted-foreground">
+          {formatRelativeTime(user.lastLoginAt)}
+        </td>
+        <td className="px-3 py-2 text-xs text-muted-foreground">
+          {isAdmin ? (
+            <span>All pages</span>
+          ) : (
+            <span>{permCount}/{totalPerms} pages</span>
+          )}
+        </td>
+        <td className="px-3 py-2">
+          {/* Env admins cannot be edited from UI -- controlled by NECTAR_ADMINS */}
+          {!user.isEnvAdmin && !isEditing && (
+            <button
+              onClick={onStartEdit}
+              className="text-xs text-primary hover:text-primary/80 transition-colors"
+            >
+              Edit
+            </button>
+          )}
+          {isEditing && (
+            <button
+              onClick={onCancelEdit}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+        </td>
+      </tr>
+
+      {/* Expanded edit row */}
+      {isEditing && (
+        <tr className="border-b border-border/30 bg-accent/5">
+          <td colSpan={5} className="px-3 py-3">
+            <div className="space-y-3">
+              {/* Permission toggles */}
+              <div className="grid grid-cols-4 gap-x-6 gap-y-2">
+                {PERMISSION_KEYS.map(p => (
+                  <label key={p.key} className="flex items-center gap-2 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={editRole === 'admin' || editPermissions[p.key] !== false}
+                      disabled={editRole === 'admin'}
+                      onChange={() => onTogglePermission(p.key)}
+                      className="rounded border-border"
+                    />
+                    <span className={cn(
+                      "text-xs",
+                      editRole === 'admin' ? "text-muted-foreground" : "group-hover:text-foreground"
+                    )}>
+                      {p.label}
+                    </span>
+                  </label>
+                ))}
+              </div>
+
+              {/* Role + Save */}
+              <div className="flex items-center gap-3 pt-1">
+                <label className="text-xs text-muted-foreground">Role:</label>
+                <select
+                  value={editRole}
+                  onChange={e => onRoleChange(e.target.value as 'admin' | 'user')}
+                  className="h-7 px-2 rounded border border-border bg-background text-xs"
+                >
+                  <option value="user">User</option>
+                  <option value="admin">Admin</option>
+                </select>
+                {editRole === 'admin' && (
+                  <span className="text-[10px] text-muted-foreground">
+                    Admins have all permissions
+                  </span>
+                )}
+                <div className="flex-1" />
+                <Button size="sm" onClick={onSave} disabled={saving}>
+                  {saving ? 'Saving...' : 'Save'}
+                </Button>
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   )
 }
 
