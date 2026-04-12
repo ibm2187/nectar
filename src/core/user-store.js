@@ -9,6 +9,7 @@ const DEFAULT_PERMISSIONS = {
   roadmap: true,
   tickets: true,
   environments: true,
+  health: true,
   features: true,
   integrations: true,
   issues: true,

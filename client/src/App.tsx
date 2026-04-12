@@ -13,6 +13,8 @@ import { TicketsPage } from './features/tickets/TicketsPage'
 import { RoadmapPage } from './features/roadmap/RoadmapPage'
 import { ConfigPage } from './features/config/ConfigPage'
 import { TasksPage } from './features/tasks/TasksPage'
+import { HealthDashboard } from './features/health/HealthDashboard'
+import { CustomerStatusPage } from './features/health/CustomerStatusPage'
 import { LoginPage } from './features/auth/LoginPage'
 import { connectWebSocket, disconnectWebSocket, useWsStore } from './stores/wsStore'
 import { useAuthStore, type UserPermissions } from './stores/authStore'
@@ -78,6 +80,8 @@ export default function App() {
             <Route path="/releases/:key" element={<PermissionGuard permKey="releases"><ReleaseDetail /></PermissionGuard>} />
             <Route path="/customers" element={<PermissionGuard permKey="environments"><CustomersPage /></PermissionGuard>} />
             <Route path="/environments/:id" element={<PermissionGuard permKey="environments"><EnvironmentDetailPage /></PermissionGuard>} />
+            <Route path="/health-dashboard" element={<PermissionGuard permKey="health"><HealthDashboard /></PermissionGuard>} />
+            <Route path="/health/:customerId" element={<PermissionGuard permKey="health"><CustomerStatusPage /></PermissionGuard>} />
             <Route path="/issues" element={<PermissionGuard permKey="issues"><IssuesPage /></PermissionGuard>} />
             <Route path="/tickets" element={<PermissionGuard permKey="tickets"><TicketsPage /></PermissionGuard>} />
             <Route path="/roadmap" element={<PermissionGuard permKey="roadmap"><RoadmapPage /></PermissionGuard>} />

@@ -5,6 +5,7 @@ export interface UserPermissions {
   roadmap: boolean
   tickets: boolean
   environments: boolean
+  health: boolean
   features: boolean
   integrations: boolean
   issues: boolean

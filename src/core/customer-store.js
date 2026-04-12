@@ -158,6 +158,31 @@ class CustomerStore extends EventEmitter {
   }
 
   /**
+   * Update an environment's health check data (from poller).
+   * Stores the overall health status, individual service checks, summary
+   * counts, response time, and timestamp.
+   *
+   * @param {string} envId
+   * @param {object} healthData - { status, checks, summary, responseTimeMs, checkedAt }
+   */
+  updateHealth(envId, healthData) {
+    const env = this.environments.get(envId);
+    if (!env) return null;
+    env.health = {
+      status: healthData.status,           // 'healthy' | 'degraded' | 'unhealthy' | 'unreachable'
+      checks: healthData.checks || {},     // { criticalFunctionality, externalServices, integrations }
+      summary: healthData.summary || {},   // { totalChecks, passed, failed, degraded, skipped }
+      responseTimeMs: healthData.responseTimeMs || null,
+      checkedAt: healthData.checkedAt || new Date().toISOString(),
+    };
+    env.lastHealthCheckedAt = env.health.checkedAt;
+    env.updatedAt = env.health.checkedAt;
+    this.emit('environment:updated', env);
+    this._debounceSave();
+    return env;
+  }
+
+  /**
    * Update an environment's feature flags data (from poller).
    */
   updateFeatures(envId, features) {

@@ -313,6 +313,102 @@ module.exports = function createRoutes(services, config) {
     res.json(envPoller.getStatus());
   });
 
+  // ── Health overview — dashboard and per-customer status ────────
+
+  /**
+   * GET /api/health/overview
+   * Returns all environments grouped by customer with health status.
+   * Used by the Health Dashboard page.
+   */
+  router.get('/health/overview', (req, res) => {
+    const customers = customerStore.listCustomers();
+    const environments = customerStore.listEnvironments();
+
+    const grouped = customers.map(c => {
+      const envs = environments
+        .filter(e => e.customerId === c.id && !e.disabled)
+        .map(e => ({
+          id: e.id,
+          name: e.name,
+          tier: e.tier,
+          franchise: e.franchise || null,
+          franchiseDisplayName: e.franchiseDisplayName || null,
+          url: e.url,
+          currentVersion: e.currentVersion || null,
+          reachable: e.reachable,
+          lastChecked: e.lastChecked || null,
+          health: e.health || null,
+        }));
+
+      return {
+        id: c.id,
+        name: c.name,
+        active: c.active,
+        environments: envs,
+      };
+    });
+
+    // Calculate rollup stats across all environments
+    const allHealth = environments
+      .filter(e => !e.disabled && e.health)
+      .map(e => e.health.status);
+
+    const stats = {
+      total: allHealth.length,
+      healthy: allHealth.filter(s => s === 'healthy').length,
+      degraded: allHealth.filter(s => s === 'degraded').length,
+      unhealthy: allHealth.filter(s => s === 'unhealthy').length,
+      unreachable: allHealth.filter(s => s === 'unreachable').length,
+    };
+
+    res.json({ customers: grouped, stats });
+  });
+
+  /**
+   * GET /api/health/:customerId
+   * Returns a single customer's environments with health data,
+   * formatted for the per-customer status page.
+   */
+  router.get('/health/:customerId', (req, res) => {
+    const customer = customerStore.getCustomer(req.params.customerId);
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+    const environments = customerStore
+      .listEnvironments({ customerId: customer.id })
+      .filter(e => !e.disabled)
+      .map(e => ({
+        id: e.id,
+        name: e.name,
+        tier: e.tier,
+        franchise: e.franchise || null,
+        franchiseDisplayName: e.franchiseDisplayName || null,
+        url: e.url,
+        currentVersion: e.currentVersion || null,
+        reachable: e.reachable,
+        lastChecked: e.lastChecked || null,
+        health: e.health || null,
+      }));
+
+    // Determine overall customer status
+    const statuses = environments
+      .filter(e => e.health)
+      .map(e => e.health.status);
+
+    let overallStatus = 'healthy';
+    if (statuses.some(s => s === 'unhealthy')) overallStatus = 'unhealthy';
+    else if (statuses.some(s => s === 'degraded')) overallStatus = 'degraded';
+    else if (statuses.every(s => s === 'unreachable')) overallStatus = 'unreachable';
+
+    res.json({
+      customer: {
+        id: customer.id,
+        name: customer.name,
+      },
+      overallStatus,
+      environments,
+    });
+  });
+
   // ── Feature flag aggregation — for the Features cleanup page ───
   router.get('/features/aggregated', (req, res) => {
     try {

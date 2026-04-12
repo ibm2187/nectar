@@ -228,6 +228,72 @@ export interface EnvUpgrades {
   items: EnvUpgradeItem[]
 }
 
+// ── Health types ──────────────────────────────────────────────
+
+export type HealthStatus = 'healthy' | 'degraded' | 'unhealthy' | 'unreachable'
+
+export interface HealthCheck {
+  name: string
+  status: 'pass' | 'fail' | 'degraded' | 'skipped'
+  responseTime?: number
+  message?: string
+}
+
+export interface HealthData {
+  status: HealthStatus
+  checks: {
+    criticalFunctionality?: HealthCheck[]
+    externalServices?: HealthCheck[]
+    integrations?: HealthCheck[]
+  }
+  summary: {
+    totalChecks: number
+    passed: number
+    failed: number
+    degraded: number
+    skipped: number
+  }
+  responseTimeMs: number | null
+  checkedAt: string
+}
+
+export interface HealthEnvironment {
+  id: string
+  name: string
+  tier: EnvTier
+  franchise: string | null
+  franchiseDisplayName: string | null
+  url: string | null
+  currentVersion: string | null
+  reachable: boolean | null
+  lastChecked: string | null
+  health: HealthData | null
+}
+
+export interface HealthCustomer {
+  id: string
+  name: string
+  active: boolean
+  environments: HealthEnvironment[]
+}
+
+export interface HealthOverview {
+  customers: HealthCustomer[]
+  stats: {
+    total: number
+    healthy: number
+    degraded: number
+    unhealthy: number
+    unreachable: number
+  }
+}
+
+export interface CustomerHealthResponse {
+  customer: { id: string; name: string }
+  overallStatus: HealthStatus
+  environments: HealthEnvironment[]
+}
+
 export interface EnvDeployment {
   id: string
   environmentId: string

@@ -155,21 +155,69 @@ class EnvironmentPoller extends EventEmitter {
   }
 
   /**
-   * Poll one environment — hits /version, /features, /integrations, /upgrades
-   * in parallel. Each endpoint failure is independent: a /features 404 doesn't
-   * prevent /version from being recorded.
+   * Fetch /api/status and measure the response time. Returns the parsed JSON
+   * along with the elapsed milliseconds so we can store responseTimeMs.
+   */
+  async _fetchHealthEndpoint(baseUrl) {
+    const start = Date.now();
+    const data = await this._fetchEndpoint(baseUrl, '/api/status');
+    const elapsed = Date.now() - start;
+    return { data, responseTimeMs: elapsed };
+  }
+
+  /**
+   * Derive an overall health status string from the /api/status response.
+   *
+   * Rules:
+   *  - 'unhealthy'  — any critical service (mongodb, redis) is down
+   *  - 'degraded'   — all critical services up but any response time > 500ms
+   *                    or any non-critical service is down
+   *  - 'healthy'    — everything passing and fast
+   */
+  _deriveHealthStatus(data) {
+    const checks = data.checks || {};
+    const allChecks = [
+      ...(checks.criticalFunctionality || []),
+      ...(checks.externalServices || []),
+      ...(checks.integrations || []),
+    ];
+
+    const CRITICAL_SERVICES = ['mongodb', 'redis'];
+
+    // Any critical service down → unhealthy
+    for (const check of allChecks) {
+      if (CRITICAL_SERVICES.includes(check.name) && check.status === 'fail') {
+        return 'unhealthy';
+      }
+    }
+
+    // Any non-critical failure or any response time > 500ms → degraded
+    for (const check of allChecks) {
+      if (check.status === 'fail' || check.status === 'degraded') return 'degraded';
+      if (check.responseTime && check.responseTime > 500) return 'degraded';
+    }
+
+    return 'healthy';
+  }
+
+  /**
+   * Poll one environment — hits /version, /features, /integrations, /upgrades,
+   * and /status (health) in parallel. Each endpoint failure is independent:
+   * a /features 404 doesn't prevent /version from being recorded.
    */
   async _pollOne(env) {
     if (!env.url) return { versionChanged: false };
     const previousVersion = env.currentVersion;
 
-    // Kick off all four in parallel. /upgrades is paginated — _fetchAllUpgrades
+    // Kick off all five in parallel. /upgrades is paginated — _fetchAllUpgrades
     // walks every page and returns a merged { environment, totalInPool, items }.
-    const [versionResult, featuresResult, integrationsResult, upgradesResult] = await Promise.allSettled([
+    // /status (health) is a single call measured with _fetchHealthEndpoint.
+    const [versionResult, featuresResult, integrationsResult, upgradesResult, healthResult] = await Promise.allSettled([
       this._fetchEndpoint(env.url, '/api/status/version'),
       this._fetchEndpoint(env.url, '/api/status/features'),
       this._fetchEndpoint(env.url, '/api/status/integrations'),
       this._fetchAllUpgrades(env.url),
+      this._fetchHealthEndpoint(env.url),
     ]);
 
     // /version → updates currentVersion + reachable + lastChecked
@@ -221,8 +269,42 @@ class EnvironmentPoller extends EventEmitter {
       this.customerStore.updateUpgrades(env.id, upgradesResult.value);
     }
 
+    // /status (health) → derive overall status and store structured health data
+    if (healthResult.status === 'fulfilled') {
+      const { data: healthData, responseTimeMs } = healthResult.value;
+      const status = this._deriveHealthStatus(healthData);
+      const checks = healthData.checks || {};
+      const summary = healthData.summary || {};
+      this.customerStore.updateHealth(env.id, {
+        status,
+        checks: {
+          criticalFunctionality: checks.criticalFunctionality || [],
+          externalServices: checks.externalServices || [],
+          integrations: checks.integrations || [],
+        },
+        summary: {
+          totalChecks: summary.totalChecks || 0,
+          passed: summary.passed || 0,
+          failed: summary.failed || 0,
+          degraded: summary.degraded || 0,
+          skipped: summary.skipped || 0,
+        },
+        responseTimeMs,
+        checkedAt: new Date().toISOString(),
+      });
+    } else {
+      // Health endpoint not available — mark as unreachable
+      this.customerStore.updateHealth(env.id, {
+        status: 'unreachable',
+        checks: {},
+        summary: { totalChecks: 0, passed: 0, failed: 0, degraded: 0, skipped: 0 },
+        responseTimeMs: null,
+        checkedAt: new Date().toISOString(),
+      });
+    }
+
     // Track per-env reachability for rollup (consider reachable if at least version succeeded)
-    const anySucceeded = [versionResult, featuresResult, integrationsResult, upgradesResult]
+    const anySucceeded = [versionResult, featuresResult, integrationsResult, upgradesResult, healthResult]
       .some(r => r.status === 'fulfilled');
     if (!anySucceeded) {
       throw new Error('All endpoints failed');

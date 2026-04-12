@@ -18,6 +18,7 @@ const links: ReadonlyArray<{
   { to: '/roadmap', label: 'Roadmap', icon: '🗺', permKey: 'roadmap' },
   { to: '/tickets', label: 'Tickets', icon: '🎯', permKey: 'tickets' },
   { to: '/customers', label: 'Environments', icon: '🏢', permKey: 'environments' },
+  { to: '/health-dashboard', label: 'Health', icon: '💚', permKey: 'health' },
   { to: '/features', label: 'Features', icon: '🚩', permKey: 'features' },
   { to: '/integrations', label: 'Integrations', icon: '🔌', permKey: 'integrations' },
   { to: '/issues', label: 'Issues', icon: '🐛', permKey: 'issues' },
