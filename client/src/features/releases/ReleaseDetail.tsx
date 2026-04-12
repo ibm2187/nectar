@@ -9,6 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/ca
 import { timeAgo, cn } from '../../lib/utils'
 import { TruthView } from './TruthView'
 import { NectarLoader } from '../../components/NectarLoader'
+import { CompareSelector } from './CompareSelector'
+import type { CompareTarget } from './CompareSelector'
 
 interface TaskInfo {
   id: string
@@ -72,6 +74,7 @@ export function ReleaseDetail() {
   const [task, setTask] = useState<TaskInfo | null>(null)
   const [taskLoading, setTaskLoading] = useState(false)
   const [taskError, setTaskError] = useState<string | null>(null)
+  const [compareSelectorOpen, setCompareSelectorOpen] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
@@ -124,18 +127,22 @@ export function ReleaseDetail() {
     }
   }, [task?.id, task?.status])
 
-  const generatePresentation = useCallback(async () => {
+  const generatePresentation = useCallback(async (compareVersion?: string) => {
     if (!version) return
     setTaskLoading(true)
     setTaskError(null)
     setTask(null) // Clear old task so UI resets
     try {
+      const body: Record<string, unknown> = {
+        type: 'release-presentation',
+        version,
+      }
+      if (compareVersion) {
+        body.compareVersion = compareVersion
+      }
       const newTask = await apiFetch<TaskInfo>('/tasks', {
         method: 'POST',
-        body: JSON.stringify({
-          type: 'release-presentation',
-          version,
-        }),
+        body: JSON.stringify(body),
       })
       setTask(newTask)
     } catch (err) {
@@ -143,6 +150,11 @@ export function ReleaseDetail() {
     }
     setTaskLoading(false)
   }, [version])
+
+  const handleCompareSelect = useCallback((target: CompareTarget) => {
+    setCompareSelectorOpen(false)
+    generatePresentation(target.version)
+  }, [generatePresentation])
 
   if (!release) {
     return <NectarLoader message="Loading release..." className="mt-32" />
@@ -256,7 +268,7 @@ export function ReleaseDetail() {
                 variant="outline"
                 size="sm"
                 className="text-xs h-7 text-muted-foreground"
-                onClick={generatePresentation}
+                onClick={() => setCompareSelectorOpen(true)}
               >
                 Regenerate
               </Button>
@@ -266,7 +278,7 @@ export function ReleaseDetail() {
               variant="outline"
               size="sm"
               className="text-xs h-7"
-              onClick={generatePresentation}
+              onClick={() => setCompareSelectorOpen(true)}
             >
               Retry Presentation
             </Button>
@@ -275,7 +287,7 @@ export function ReleaseDetail() {
               variant="outline"
               size="sm"
               className="text-xs h-7"
-              onClick={generatePresentation}
+              onClick={() => setCompareSelectorOpen(true)}
             >
               Generate Presentation
             </Button>
@@ -294,7 +306,7 @@ export function ReleaseDetail() {
           <span className="text-xs text-destructive">
             Presentation generation failed: {task.error || 'Unknown error'}
           </span>
-          <Button variant="outline" size="sm" className="text-xs h-6" onClick={generatePresentation}>
+          <Button variant="outline" size="sm" className="text-xs h-6" onClick={() => setCompareSelectorOpen(true)}>
             Retry
           </Button>
         </div>
@@ -480,6 +492,14 @@ export function ReleaseDetail() {
           )}
         </CardContent>
       </Card>
+
+      {/* Compare selector for presentation generation */}
+      <CompareSelector
+        open={compareSelectorOpen}
+        onOpenChange={setCompareSelectorOpen}
+        onSelect={handleCompareSelect}
+        releaseVersion={release.version}
+      />
     </div>
   )
 }

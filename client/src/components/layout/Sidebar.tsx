@@ -11,6 +11,7 @@ const links = [
   { to: '/features', label: 'Features', icon: '🚩' },
   { to: '/integrations', label: 'Integrations', icon: '🔌' },
   { to: '/issues', label: 'Issues', icon: '🐛' },
+  { to: '/tasks-queue', label: 'Tasks', icon: '📋' },
   { to: '/config', label: 'Config', icon: '⚙' },
 ]
 

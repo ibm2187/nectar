@@ -943,7 +943,7 @@ module.exports = function createRoutes(services, config) {
 
   if (taskQueue) {
     router.post('/tasks', asyncHandler(async (req, res) => {
-      const { type, version, slackUserId } = req.body || {};
+      const { type, version, slackUserId, compareVersion } = req.body || {};
 
       if (!type) {
         return res.status(400).json({ error: 'type is required' });
@@ -958,49 +958,76 @@ module.exports = function createRoutes(services, config) {
           return res.status(404).json({ error: `Release not found: ${version}` });
         }
 
-        // Try to compute truth data for richer input
+        // When compareVersion is provided, use impact data (delta between versions)
+        // instead of full truth for richer diff-based input
         let truth = null;
+        let impact = null;
         if (release.repo && releaseTruth) {
           try {
-            truth = await releaseTruth.compute(release.repo, release.version);
+            if (compareVersion) {
+              impact = await releaseTruth.computeImpact(release.repo, release.version, compareVersion);
+              truth = impact.targetTruth;
+            } else {
+              truth = await releaseTruth.compute(release.repo, release.version);
+            }
           } catch (err) {
             log.warn(`Could not compute truth for task input: ${err.message}`);
           }
         }
+
+        const mapTicket = (t) => ({
+          key: t.key,
+          summary: t.summary,
+          type: t.type,
+          component: t.component || null,
+          assignee: t.assignee || null,
+          qaAssignee: t.qaAssignee || null,
+          jiraStatus: t.jiraStatus,
+          health: t.health,
+          pr: t.pr ? t.pr.prNumber : null,
+          zohoRef: t.zohoRef || null,
+          customerTags: t.customerTags || [],
+        });
+
+        const mapRawTicket = (t) => ({
+          key: t.key,
+          summary: t.summary,
+          type: t.type || null,
+          component: t.component || null,
+          assignee: t.assignee || null,
+          qaAssignee: t.qaAssignee || null,
+          jiraStatus: t.jiraStatus || null,
+          pr: t.pr || null,
+          zohoRef: t.zohoRef || null,
+          customerTags: t.customerTags || [],
+        });
 
         input = {
           repo: release.repo || 'webplatform',
           version: release.version,
           branch: release.branch,
           jiraReleaseDate: release.jiraReleaseDate || null,
-          tickets: truth ? truth.verified.map(t => ({
-            key: t.key,
-            summary: t.summary,
-            type: t.type,
-            component: t.component || null,
-            assignee: t.assignee || null,
-            qaAssignee: t.qaAssignee || null,
-            jiraStatus: t.jiraStatus,
-            health: t.health,
-            pr: t.pr ? t.pr.prNumber : null,
-            zohoRef: t.zohoRef || null,
-            customerTags: t.customerTags || [],
-          })) : (release.tickets || []).map(t => ({
-            key: t.key,
-            summary: t.summary,
-            type: t.type || null,
-            component: t.component || null,
-            assignee: t.assignee || null,
-            qaAssignee: t.qaAssignee || null,
-            jiraStatus: t.jiraStatus || null,
-            pr: t.pr || null,
-            zohoRef: t.zohoRef || null,
-            customerTags: t.customerTags || [],
-          })),
+          tickets: truth ? truth.verified.map(mapTicket) : (release.tickets || []).map(mapRawTicket),
           rogues: truth ? truth.rogues : [],
           riskScore: release.risk ? release.risk.numericScore : null,
           riskFactors: release.risk ? release.risk.factors : [],
         };
+
+        // Include compareVersion and impact delta in the task input
+        if (compareVersion) {
+          input.compareVersion = compareVersion;
+          if (impact && impact.delta) {
+            input.delta = {
+              newTickets: impact.delta.tickets.new.map(mapTicket),
+              sharedTickets: impact.delta.tickets.shared.map(mapTicket),
+              deltaOnlyKeys: impact.delta.tickets.deltaOnly,
+              totalDeltaTickets: impact.delta.tickets.total,
+              commits: impact.delta.commits,
+              rollup: impact.delta.rollup,
+              rogues: impact.delta.rogues,
+            };
+          }
+        }
       }
 
       if (!input) {
@@ -1025,7 +1052,16 @@ module.exports = function createRoutes(services, config) {
       if (req.query.status) filters.status = req.query.status;
       if (req.query.type) filters.type = req.query.type;
       if (req.query.limit) filters.limit = parseInt(req.query.limit);
-      res.json(taskQueue.listTasks(filters));
+      if (req.query.offset) filters.offset = parseInt(req.query.offset);
+      const result = taskQueue.listTasks(filters);
+      // When offset is explicitly provided, return paginated response with
+      // { tasks, total, hasMore }. Otherwise return flat array for backward
+      // compatibility with existing callers (e.g., ReleaseDetail).
+      if (req.query.offset !== undefined) {
+        res.json(result);
+      } else {
+        res.json(result.tasks);
+      }
     });
 
     router.get('/tasks/:id', (req, res) => {

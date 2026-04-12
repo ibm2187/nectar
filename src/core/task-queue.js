@@ -162,7 +162,8 @@ class TaskQueue extends EventEmitter {
    * @param {string} [filters.status] - Filter by status
    * @param {string} [filters.type] - Filter by type
    * @param {number} [filters.limit] - Max results (default 100)
-   * @returns {object[]}
+   * @param {number} [filters.offset] - Skip first N results (default 0)
+   * @returns {{ tasks: object[], total: number, hasMore: boolean }}
    */
   listTasks(filters = {}) {
     let tasks = Array.from(this.tasks.values());
@@ -177,8 +178,16 @@ class TaskQueue extends EventEmitter {
     // Sort newest first
     tasks.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
+    const total = tasks.length;
+    const offset = filters.offset || 0;
     const limit = filters.limit || 100;
-    return tasks.slice(0, limit).map(t => ({ ...t }));
+    const sliced = tasks.slice(offset, offset + limit).map(t => ({ ...t }));
+
+    return {
+      tasks: sliced,
+      total,
+      hasMore: offset + limit < total,
+    };
   }
 
   /**
