@@ -61,6 +61,8 @@ export function RoadmapPage() {
 
   const search = searchParams.get('q') || ''
   const customerFilter = searchParams.get('customer') || ''
+  const defaultView = typeof window !== 'undefined' && window.innerWidth < 768 ? 'cards' : 'grid'
+  const viewMode = (searchParams.get('view') as 'grid' | 'cards') || defaultView
   const defaultZoom = typeof window !== 'undefined' && window.innerWidth < 768 ? 'day' : 'month'
   const zoom = (searchParams.get('zoom') as 'day' | 'week' | 'month' | 'quarter') || defaultZoom
   const offsetParam = parseInt(searchParams.get('offset') || '0', 10)
@@ -248,49 +250,71 @@ export function RoadmapPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Navigation */}
-          <Button variant="ghost" size="sm" onClick={goBack} disabled={offsetParam <= 0} className="text-xs h-7 px-2">
-            &larr;
-          </Button>
-          {offsetParam > 0 && (
-            <Button variant="ghost" size="sm" onClick={goToday} className="text-xs h-7 px-2">
-              Today
-            </Button>
-          )}
-          <Button variant="ghost" size="sm" onClick={goForward} className="text-xs h-7 px-2">
-            &rarr;
-          </Button>
-          {/* Zoom toggle */}
+          {/* View mode toggle: Grid | Cards */}
           <div className="flex rounded-md border text-xs">
             <button
               type="button"
-              onClick={() => updateParams({ zoom: 'day', offset: null })}
-              className={cn("px-3 py-1.5 rounded-l-md transition-colors", zoom === 'day' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+              onClick={() => updateParams({ view: 'grid', offset: null })}
+              className={cn("px-3 py-1.5 rounded-l-md transition-colors", viewMode === 'grid' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
             >
-              Day
+              Grid
             </button>
             <button
               type="button"
-              onClick={() => updateParams({ zoom: 'week', offset: null })}
-              className={cn("px-3 py-1.5 border-l transition-colors", zoom === 'week' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+              onClick={() => updateParams({ view: 'cards', offset: null })}
+              className={cn("px-3 py-1.5 rounded-r-md border-l transition-colors", viewMode === 'cards' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
             >
-              Week
-            </button>
-            <button
-              type="button"
-              onClick={() => updateParams({ zoom: null, offset: null })}
-              className={cn("px-3 py-1.5 border-l transition-colors", zoom === 'month' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
-            >
-              Month
-            </button>
-            <button
-              type="button"
-              onClick={() => updateParams({ zoom: 'quarter', offset: null })}
-              className={cn("px-3 py-1.5 rounded-r-md border-l transition-colors", zoom === 'quarter' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
-            >
-              Quarter
+              Cards
             </button>
           </div>
+
+          {/* Navigation + Zoom (only shown in Grid view) */}
+          {viewMode === 'grid' && (
+            <>
+              <Button variant="ghost" size="sm" onClick={goBack} disabled={offsetParam <= 0} className="text-xs h-7 px-2">
+                &larr;
+              </Button>
+              {offsetParam > 0 && (
+                <Button variant="ghost" size="sm" onClick={goToday} className="text-xs h-7 px-2">
+                  Today
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" onClick={goForward} className="text-xs h-7 px-2">
+                &rarr;
+              </Button>
+              {/* Zoom toggle */}
+              <div className="flex rounded-md border text-xs">
+                <button
+                  type="button"
+                  onClick={() => updateParams({ zoom: 'day', offset: null })}
+                  className={cn("px-3 py-1.5 rounded-l-md transition-colors", zoom === 'day' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+                >
+                  Day
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateParams({ zoom: 'week', offset: null })}
+                  className={cn("px-3 py-1.5 border-l transition-colors", zoom === 'week' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+                >
+                  Week
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateParams({ zoom: null, offset: null })}
+                  className={cn("px-3 py-1.5 border-l transition-colors", zoom === 'month' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+                >
+                  Month
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateParams({ zoom: 'quarter', offset: null })}
+                  className={cn("px-3 py-1.5 rounded-r-md border-l transition-colors", zoom === 'quarter' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+                >
+                  Quarter
+                </button>
+              </div>
+            </>
+          )}
           <Button variant="outline" size="sm" onClick={load}>Refresh</Button>
         </div>
       </div>
@@ -339,61 +363,74 @@ export function RoadmapPage() {
         )}
       </div>
 
-      {/* Grid */}
-      <div className="overflow-x-auto">
-        <div className="min-w-[800px]">
-          {/* Header row */}
-          <div className="flex border-b sticky top-0 bg-background z-10">
-            <div className="w-28 md:w-48 shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Theme
+      {/* Grid view */}
+      {viewMode === 'grid' && (
+        <div className="overflow-x-auto">
+          <div className="min-w-[800px]">
+            {/* Header row */}
+            <div className="flex border-b sticky top-0 bg-background z-10">
+              <div className="w-28 md:w-48 shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Theme
+              </div>
+              {hasOverdue && (
+                <div className="w-36 shrink-0 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-red-400/70 text-center border-l bg-red-500/[0.03]">
+                  Overdue
+                </div>
+              )}
+              {hasUnscheduled && (
+                <div className="w-36 shrink-0 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground/50 text-center border-l">
+                  Unscheduled
+                </div>
+              )}
+              {visibleColumns.map(m => (
+                <div
+                  key={m.key}
+                  className={cn(
+                    "flex-1 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center border-l",
+                    zoom === 'day' ? "min-w-[70px] md:min-w-[90px]" : zoom === 'week' ? "min-w-[90px] md:min-w-[110px]" : "min-w-[110px] md:min-w-[140px]"
+                  )}
+                >
+                  {m.label}
+                </div>
+              ))}
             </div>
-            {hasOverdue && (
-              <div className="w-36 shrink-0 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-red-400/70 text-center border-l bg-red-500/[0.03]">
-                Overdue
-              </div>
-            )}
-            {hasUnscheduled && (
-              <div className="w-36 shrink-0 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground/50 text-center border-l">
-                Unscheduled
-              </div>
-            )}
-            {visibleColumns.map(m => (
-              <div
-                key={m.key}
-                className={cn(
-                  "flex-1 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center border-l",
-                  zoom === 'day' ? "min-w-[70px] md:min-w-[90px]" : zoom === 'week' ? "min-w-[90px] md:min-w-[110px]" : "min-w-[110px] md:min-w-[140px]"
-                )}
-              >
-                {m.label}
-              </div>
-            ))}
-          </div>
 
-          {/* Theme rows */}
-          {filteredThemes.length === 0 ? (
-            <div className="text-center py-16 text-muted-foreground text-sm">
-              No themes match the current filters.
-            </div>
-          ) : (
-            filteredThemes.map(theme => (
-              <ThemeRow
-                key={theme.name}
-                theme={theme}
-                months={visibleColumns}
-                collapsed={collapsedThemes.has(theme.name)}
-                onToggle={() => toggleTheme(theme.name)}
-                isDayView={zoom === 'day'}
-                isWeekView={zoom === 'day' || zoom === 'week'}
-                onCardClick={(version, repo) => setDrawer({ theme: theme.name, version, repo })}
-                showOverdue={hasOverdue}
-                showUnscheduled={hasUnscheduled}
-                today={today}
-              />
-            ))
-          )}
+            {/* Theme rows */}
+            {filteredThemes.length === 0 ? (
+              <div className="text-center py-16 text-muted-foreground text-sm">
+                No themes match the current filters.
+              </div>
+            ) : (
+              filteredThemes.map(theme => (
+                <ThemeRow
+                  key={theme.name}
+                  theme={theme}
+                  months={visibleColumns}
+                  collapsed={collapsedThemes.has(theme.name)}
+                  onToggle={() => toggleTheme(theme.name)}
+                  isDayView={zoom === 'day'}
+                  isWeekView={zoom === 'day' || zoom === 'week'}
+                  onCardClick={(version, repo) => setDrawer({ theme: theme.name, version, repo })}
+                  showOverdue={hasOverdue}
+                  showUnscheduled={hasUnscheduled}
+                  today={today}
+                />
+              ))
+            )}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Card view */}
+      {viewMode === 'cards' && (
+        <RoadmapCardView
+          themes={filteredThemes}
+          collapsedThemes={collapsedThemes}
+          onToggleTheme={toggleTheme}
+          onCardClick={(theme, version, repo) => setDrawer({ theme, version, repo })}
+          today={today}
+        />
+      )}
 
       {/* Unmapped components notice */}
       {data.unmappedComponents.length > 0 && (
@@ -626,6 +663,184 @@ interface ThemeReleaseDetail {
   tickets: DrawerTicket[]
   stats: { total: number; done: number; remaining: number }
 }
+
+// ── Roadmap Card View ─────────────────────────────────
+
+function RoadmapCardView({ themes, collapsedThemes, onToggleTheme, onCardClick, today }: {
+  themes: Theme[]
+  collapsedThemes: Set<string>
+  onToggleTheme: (name: string) => void
+  onCardClick: (theme: string, version: string, repo: string) => void
+  today: string
+}) {
+  // For each theme, collect all release cards across all time periods, sorted by date
+  const themeCards = useMemo(() =>
+    themes.map(theme => {
+      const cards: ReleaseCard[] = []
+      for (const [, monthCards] of Object.entries(theme.months)) {
+        cards.push(...monthCards)
+      }
+      // Sort: overdue first (by date desc), then upcoming by date asc, unscheduled last
+      cards.sort((a, b) => {
+        const aDate = a.jiraReleaseDate || '9999-99-99'
+        const bDate = b.jiraReleaseDate || '9999-99-99'
+        const aOverdue = a.jiraReleaseDate && a.jiraReleaseDate < today && a.progress < 100
+        const bOverdue = b.jiraReleaseDate && b.jiraReleaseDate < today && b.progress < 100
+        // Overdue items first
+        if (aOverdue && !bOverdue) return -1
+        if (!aOverdue && bOverdue) return 1
+        // Then by date ascending
+        return aDate.localeCompare(bDate)
+      })
+      return { theme, cards }
+    }),
+    [themes, today]
+  )
+
+  if (themes.length === 0) {
+    return (
+      <div className="text-center py-16 text-muted-foreground text-sm">
+        No themes match the current filters.
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {themeCards.map(({ theme, cards }) => {
+        const collapsed = collapsedThemes.has(theme.name)
+        return (
+          <div key={theme.name} className="border rounded-lg overflow-hidden">
+            {/* Theme header */}
+            <button
+              type="button"
+              onClick={() => onToggleTheme(theme.name)}
+              className="w-full flex items-center gap-3 px-4 py-3 bg-muted/20 hover:bg-muted/40 transition-colors text-left"
+            >
+              <span className="text-xs text-muted-foreground">{collapsed ? '▸' : '▾'}</span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium">
+                    {theme.icon && <span className="mr-1">{theme.icon}</span>}
+                    {theme.name}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {theme.totalTickets} tickets · {theme.progress}% done
+                  </span>
+                </div>
+                <div className="mt-1.5 h-1 rounded-full bg-muted/30 overflow-hidden max-w-xs">
+                  <div className="h-full rounded-full bg-green-500/60 transition-all" style={{ width: `${theme.progress}%` }} />
+                </div>
+              </div>
+              <span className="text-xs text-muted-foreground shrink-0">{cards.length} releases</span>
+            </button>
+
+            {/* Release cards */}
+            {!collapsed && (
+              <div className="p-3 space-y-2">
+                {cards.length === 0 ? (
+                  <div className="text-xs text-muted-foreground italic text-center py-4">No releases</div>
+                ) : (
+                  cards.map(card => {
+                    const isOverdue = card.jiraReleaseDate && card.jiraReleaseDate < today && card.progress < 100
+                    return (
+                      <div
+                        key={`${card.repo}:${card.version}`}
+                        className={cn("rounded-lg", isOverdue && "ring-1 ring-red-500/30")}
+                      >
+                        {isOverdue && (
+                          <div className="text-[10px] text-red-400 font-medium px-2 pt-1">OVERDUE</div>
+                        )}
+                        <CardViewReleaseCard
+                          card={card}
+                          onClick={() => onCardClick(theme.name, card.version, card.repo)}
+                        />
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Full-width release card for the Card view — reuses the same data as ReleaseCardView but in a wider layout */
+function CardViewReleaseCard({ card, onClick }: { card: ReleaseCard; onClick: () => void }) {
+  const statusColor = card.progress === 100
+    ? 'border-green-500/40 bg-green-500/5'
+    : card.missingPlan > 0
+    ? 'border-yellow-500/40 bg-yellow-500/5'
+    : card.progress > 0
+    ? 'border-blue-500/40 bg-blue-500/5'
+    : 'border-muted/50 bg-muted/5'
+
+  const statusGlyph = card.progress === 100 ? '✅' :
+    card.missingPlan > 0 ? '⚠' :
+    card.progress > 0 ? '🟡' : '🔵'
+
+  const dateStr = card.jiraReleaseDate
+    ? new Date(card.jiraReleaseDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    : 'Unscheduled'
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "block w-full text-left rounded-md border p-3 transition-all hover:scale-[1.01] hover:shadow-sm cursor-pointer",
+        statusColor
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-mono text-sm font-medium truncate">{card.version}</span>
+          <span className="text-xs shrink-0">{statusGlyph}</span>
+        </div>
+        <span className="text-xs text-muted-foreground shrink-0">{dateStr}</span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="mt-2 h-1.5 rounded-full bg-muted/30 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-green-500/60"
+          style={{ width: `${card.progress}%` }}
+        />
+      </div>
+
+      <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>
+          {card.done}/{card.tickets} done
+          {card.missingPlan > 0 && (
+            <span className="text-yellow-400 ml-1"> · {card.missingPlan} missing</span>
+          )}
+        </span>
+        {card.progress > 0 && card.progress < 100 && (
+          <span>{card.progress}%</span>
+        )}
+      </div>
+
+      {/* Customer tags */}
+      {card.customers.length > 0 && card.customers[0] !== 'All' && (
+        <div className="flex flex-wrap gap-1 mt-2">
+          {card.customers.map(c => (
+            <span
+              key={c}
+              className="px-1.5 py-0.5 rounded text-[10px] bg-muted/30 text-muted-foreground"
+            >
+              {c}
+            </span>
+          ))}
+        </div>
+      )}
+    </button>
+  )
+}
+
+// ── Theme × Release Drawer ────────────────────────────
 
 function ThemeReleaseDrawer({ theme, version, repo, onClose }: {
   theme: string
