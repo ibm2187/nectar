@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const log = require('../core/log');
+const { requireAdmin } = require('./auth');
 const ReleaseManager = require('../core/release');
 const { annotateReleases } = require('../core/release-status');
 const { aggregateFeatureFlags, aggregateIntegrations } = require('../core/feature-aggregator');
@@ -878,9 +879,9 @@ module.exports = function createRoutes(services, config) {
     });
   });
 
-  // ── Theme configuration (roadmap) ─────────────────────
+  // ── Theme configuration (roadmap) — admin only ────────
 
-  router.get('/config/themes', (req, res) => {
+  router.get('/config/themes', requireAdmin, (req, res) => {
     // If themes haven't been configured yet, auto-generate from observed data
     if (themeConfig.themes.length === 0) {
       const components = new Set();
@@ -896,7 +897,7 @@ module.exports = function createRoutes(services, config) {
     res.json(themeConfig.getConfig());
   });
 
-  router.put('/config/themes', (req, res) => {
+  router.put('/config/themes', requireAdmin, (req, res) => {
     try {
       themeConfig.setConfig(req.body);
       res.json(themeConfig.getConfig());
@@ -906,7 +907,7 @@ module.exports = function createRoutes(services, config) {
   });
 
   // Auto-categorize: suggest theme groupings from all observed JIRA components
-  router.post('/config/themes/auto', (req, res) => {
+  router.post('/config/themes/auto', requireAdmin, (req, res) => {
     // Gather all observed components from active releases
     const components = new Set();
     for (const release of releases.list()) {
@@ -922,10 +923,10 @@ module.exports = function createRoutes(services, config) {
     res.json({ suggestions, totalComponents: components.size });
   });
 
-  // ── API Keys ─────────────────────────────────────────
+  // ── API Keys — admin only ────────────────────────────
 
   if (apiKeys) {
-    router.post('/keys', (req, res) => {
+    router.post('/keys', requireAdmin, (req, res) => {
       try {
         const { label } = req.body || {};
         const createdBy = req.user ? req.user.email : null;
@@ -936,11 +937,11 @@ module.exports = function createRoutes(services, config) {
       }
     });
 
-    router.get('/keys', (req, res) => {
+    router.get('/keys', requireAdmin, (req, res) => {
       res.json(apiKeys.list());
     });
 
-    router.delete('/keys/:id', (req, res) => {
+    router.delete('/keys/:id', requireAdmin, (req, res) => {
       const deleted = apiKeys.revoke(req.params.id);
       if (!deleted) return res.status(404).json({ error: 'Key not found' });
       res.json({ ok: true });
@@ -1256,8 +1257,8 @@ module.exports = function createRoutes(services, config) {
     return '****' + val.slice(-3);
   }
 
-  // GET /api/config/integrations — returns status of all integrations
-  router.get('/config/integrations', (req, res) => {
+  // GET /api/config/integrations — admin only
+  router.get('/config/integrations', requireAdmin, (req, res) => {
     const env = readEnvFile();
     const result = {};
 
@@ -1289,8 +1290,8 @@ module.exports = function createRoutes(services, config) {
     res.json(result);
   });
 
-  // POST /api/config/integrations/:name — save env vars for an integration
-  router.post('/config/integrations/:name', (req, res) => {
+  // POST /api/config/integrations/:name — admin only
+  router.post('/config/integrations/:name', requireAdmin, (req, res) => {
     const def = INTEGRATIONS[req.params.name];
     if (!def) return res.status(404).json({ error: 'Unknown integration' });
 
@@ -1325,8 +1326,8 @@ module.exports = function createRoutes(services, config) {
     }
   });
 
-  // POST /api/config/integrations/:name/test — test an integration connection
-  router.post('/config/integrations/:name/test', asyncHandler(async (req, res) => {
+  // POST /api/config/integrations/:name/test — admin only
+  router.post('/config/integrations/:name/test', requireAdmin, asyncHandler(async (req, res) => {
     const name = req.params.name;
     const def = INTEGRATIONS[name];
     if (!def) return res.status(404).json({ error: 'Unknown integration' });
@@ -1421,7 +1422,7 @@ module.exports = function createRoutes(services, config) {
 
   // ── Admin — Version & Update ──────────────────────────
 
-  router.get('/admin/version', (req, res) => {
+  router.get('/admin/version', requireAdmin, (req, res) => {
     try {
       const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: NECTAR_ROOT, encoding: 'utf8' }).trim();
       const commit = execSync('git rev-parse --short HEAD', { cwd: NECTAR_ROOT, encoding: 'utf8' }).trim();
@@ -1433,7 +1434,7 @@ module.exports = function createRoutes(services, config) {
     }
   });
 
-  router.post('/admin/pull', asyncHandler(async (req, res) => {
+  router.post('/admin/pull', requireAdmin, asyncHandler(async (req, res) => {
     try {
       const output = execSync('git pull 2>&1', {
         cwd: NECTAR_ROOT,
@@ -1447,7 +1448,7 @@ module.exports = function createRoutes(services, config) {
     }
   }));
 
-  router.post('/admin/restart', (req, res) => {
+  router.post('/admin/restart', requireAdmin, (req, res) => {
     log.info('Admin restart requested — exiting process');
     res.json({ ok: true, message: 'Restarting...' });
     // Give the response time to flush before exiting

@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import { cn } from '../../lib/utils'
 import { NectarIcon } from '../NectarLoader'
+import { useAuthStore } from '../../stores/authStore'
 
 const links = [
   { to: '/', label: 'Releases', icon: '📦' },
@@ -11,8 +12,8 @@ const links = [
   { to: '/integrations', label: 'Integrations', icon: '🔌' },
   { to: '/issues', label: 'Issues', icon: '🐛' },
   { to: '/tasks-queue', label: 'Tasks', icon: '📋' },
-  { to: '/config', label: 'Config', icon: '⚙' },
-]
+  { to: '/config', label: 'Config', icon: '⚙', adminOnly: true },
+] as const
 
 interface SidebarProps {
   open: boolean
@@ -20,6 +21,9 @@ interface SidebarProps {
 }
 
 export function Sidebar({ open, onClose }: SidebarProps) {
+  const { user, ssoEnabled } = useAuthStore()
+  const isAdmin = !ssoEnabled || user?.role === 'admin'
+
   return (
     <>
       {/* Backdrop — mobile only, visible when sidebar is open */}
@@ -45,7 +49,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           </div>
         </div>
         <nav className="flex-1 p-2 space-y-1">
-          {links.map(({ to, label, icon }) => (
+          {links.filter(l => !('adminOnly' in l && l.adminOnly) || isAdmin).map(({ to, label, icon }) => (
             <NavLink
               key={to}
               to={to}

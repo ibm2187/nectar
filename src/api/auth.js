@@ -8,6 +8,23 @@ const COOKIE_NAME = 'nectar_session';
 const COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /**
+ * Parse admin emails from NECTAR_ADMINS env var.
+ */
+function getAdminEmails() {
+  return (process.env.NECTAR_ADMINS || '')
+    .split(',')
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isAdmin(email) {
+  if (!email) return false;
+  const admins = getAdminEmails();
+  if (admins.length === 0) return true; // No admins configured = everyone is admin
+  return admins.includes(email.toLowerCase());
+}
+
+/**
  * Google OAuth routes and auth middleware.
  *
  * When ENABLE_GOOGLE_SSO is not set or false, all auth is bypassed
@@ -81,12 +98,14 @@ function createAuthRoutes() {
       }
 
       // Issue a Nectar JWT session cookie
+      const role = isAdmin(payload.email) ? 'admin' : 'user';
       const sessionToken = jwt.sign(
         {
           email: payload.email,
           name: payload.name || payload.email,
           picture: payload.picture || null,
           domain: payload.hd || null,
+          role,
         },
         jwtSecret,
         { expiresIn: '7d' }
@@ -117,6 +136,8 @@ function createAuthRoutes() {
 
     try {
       const user = jwt.verify(token, jwtSecret);
+      // Re-evaluate role on each /me call (in case NECTAR_ADMINS changed)
+      const currentRole = isAdmin(user.email) ? 'admin' : 'user';
       res.json({
         authenticated: true,
         ssoEnabled: true,
@@ -125,6 +146,7 @@ function createAuthRoutes() {
           name: user.name,
           picture: user.picture,
           domain: user.domain,
+          role: currentRole,
         },
       });
     } catch {
@@ -217,6 +239,7 @@ function createAuthMiddleware(apiKeys) {
           name: user.name,
           picture: user.picture,
           domain: user.domain,
+          role: isAdmin(user.email) ? 'admin' : 'user',
         };
         req.authenticated = true;
         return next();
@@ -313,4 +336,17 @@ function exchangeCode(code, clientId, clientSecret, redirectUri) {
   });
 }
 
-module.exports = { createAuthRoutes, createAuthMiddleware };
+/**
+ * Middleware: require admin role.
+ * API key requests bypass this (service-to-service is always admin).
+ * When SSO is disabled, everyone is admin.
+ */
+function requireAdmin(req, res, next) {
+  // API keys and WEB_TOKEN are always admin-level
+  if (req.apiKey || !process.env.ENABLE_GOOGLE_SSO) return next();
+  // Check user role
+  if (req.user && req.user.role === 'admin') return next();
+  return res.status(403).json({ error: 'Admin access required' });
+}
+
+module.exports = { createAuthRoutes, createAuthMiddleware, requireAdmin };

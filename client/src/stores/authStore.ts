@@ -5,6 +5,7 @@ interface AuthUser {
   name: string
   picture: string | null
   domain: string | null
+  role: 'admin' | 'user'
 }
 
 interface AuthState {
