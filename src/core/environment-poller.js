@@ -209,16 +209,18 @@ class EnvironmentPoller extends EventEmitter {
     if (!env.url) return { versionChanged: false };
     const previousVersion = env.currentVersion;
 
-    // Kick off all five in parallel. /upgrades is paginated — _fetchAllUpgrades
+    // Kick off requests in parallel. /upgrades is paginated — _fetchAllUpgrades
     // walks every page and returns a merged { environment, totalInPool, items }.
-    // /status (health) is a single call measured with _fetchHealthEndpoint.
-    const [versionResult, featuresResult, integrationsResult, upgradesResult, healthResult] = await Promise.allSettled([
+    // /status (health) only polled for production + staging to limit request volume.
+    const pollHealth = env.tier === 'production' || env.tier === 'staging';
+    const promises = [
       this._fetchEndpoint(env.url, '/api/status/version'),
       this._fetchEndpoint(env.url, '/api/status/features'),
       this._fetchEndpoint(env.url, '/api/status/integrations'),
       this._fetchAllUpgrades(env.url),
-      this._fetchHealthEndpoint(env.url),
-    ]);
+      pollHealth ? this._fetchHealthEndpoint(env.url) : Promise.reject(new Error('skipped')),
+    ];
+    const [versionResult, featuresResult, integrationsResult, upgradesResult, healthResult] = await Promise.allSettled(promises);
 
     // /version → updates currentVersion + reachable + lastChecked
     if (versionResult.status === 'fulfilled') {
@@ -270,6 +272,9 @@ class EnvironmentPoller extends EventEmitter {
     }
 
     // /status (health) → derive overall status and store structured health data
+    if (healthResult.status === 'rejected' && pollHealth) {
+      log.warn(`Health poll failed for ${env.id}: ${healthResult.reason?.message || 'unknown'}`);
+    }
     if (healthResult.status === 'fulfilled') {
       const { data: healthData, responseTimeMs } = healthResult.value;
       const status = this._deriveHealthStatus(healthData);
