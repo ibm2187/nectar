@@ -5,14 +5,18 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { NectarLoader } from '../../components/NectarLoader'
 import { cn } from '../../lib/utils'
+import { IntegrationsConfigPage } from '../integrations-config/IntegrationsConfigPage'
+import { UpdatePage } from '../admin/UpdatePage'
 
 // ── Tab types ─────────────────────────────────────────
 
-type Tab = 'themes' | 'api-keys'
+type Tab = 'themes' | 'api-keys' | 'connections' | 'update'
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'themes', label: 'Themes' },
   { key: 'api-keys', label: 'API Keys' },
+  { key: 'connections', label: 'Connections' },
+  { key: 'update', label: 'Update' },
 ]
 
 // ── Theme types ───────────────────────────────────────
@@ -36,7 +40,7 @@ export function ConfigPage() {
     <div className="w-full space-y-6 max-w-4xl">
       {/* Tab bar */}
       <div>
-        <h2 className="text-2xl font-bold">Settings</h2>
+        <h2 className="text-2xl font-bold">Config</h2>
         <div className="flex items-center gap-1 mt-3">
           {TABS.map(tab => (
             <button
@@ -58,6 +62,8 @@ export function ConfigPage() {
       {/* Tab content */}
       {activeTab === 'themes' && <ThemesTab />}
       {activeTab === 'api-keys' && <ApiKeysSection />}
+      {activeTab === 'connections' && <IntegrationsConfigPage />}
+      {activeTab === 'update' && <UpdatePage />}
     </div>
   )
 }

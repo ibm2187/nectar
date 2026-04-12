@@ -11,9 +11,7 @@ const links = [
   { to: '/integrations', label: 'Integrations', icon: '🔌' },
   { to: '/issues', label: 'Issues', icon: '🐛' },
   { to: '/tasks-queue', label: 'Tasks', icon: '📋' },
-  { to: '/settings', label: 'Settings', icon: '⚙' },
-  { to: '/integrations-config', label: 'Connections', icon: '🔗' },
-  { to: '/admin/update', label: 'Update', icon: '🔄' },
+  { to: '/config', label: 'Config', icon: '⚙' },
 ]
 
 export function Sidebar() {

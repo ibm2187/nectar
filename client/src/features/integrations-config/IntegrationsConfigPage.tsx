@@ -56,13 +56,10 @@ export function IntegrationsConfigPage() {
   }
 
   return (
-    <div className="w-full space-y-6 max-w-4xl">
-      <div>
-        <h2 className="text-2xl font-bold">Integrations</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Configure external service connections. Changes are saved to the .env file.
-        </p>
-      </div>
+    <div className="w-full space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Configure external service connections. Changes are saved to the .env file.
+      </p>
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">

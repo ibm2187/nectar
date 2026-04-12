@@ -92,13 +92,10 @@ export function UpdatePage() {
   }
 
   return (
-    <div className="w-full space-y-6 max-w-4xl">
-      <div>
-        <h2 className="text-2xl font-bold">Update</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          View current version and update the Nectar server.
-        </p>
-      </div>
+    <div className="w-full space-y-4">
+      <p className="text-sm text-muted-foreground">
+        View current version and update the Nectar server.
+      </p>
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
