@@ -920,9 +920,9 @@ module.exports = function createRoutes(services, config) {
   }));
 
   /**
-   * GET /api/datadog/hosts/:envTag — hosts filtered by environment tag.
-   * Returns hosts whose tags_by_source contain a matching env: tag.
-   * The envTag param is matched against tags like "env:ck-production", "env:bayada".
+   * GET /api/datadog/hosts/:envTag — hosts filtered by environment.
+   * Matches by: 1) env: tags, 2) hostname prefix (e.g., "bayada-prod-" matches env "bayada").
+   * This fallback is needed because most hosts lack env: tags in Datadog.
    */
   router.get('/datadog/hosts/:envTag', asyncHandler(async (req, res) => {
     if (!datadog || !datadog.isConfigured()) {
@@ -930,16 +930,28 @@ module.exports = function createRoutes(services, config) {
     }
     try {
       const data = await datadog.getHosts();
-      const envTag = req.params.envTag.toLowerCase();
+      const envId = req.params.envTag.toLowerCase();
       const allHosts = data.host_list || [];
+
       const filtered = allHosts.filter(host => {
+        // Match 1: env: tags
         const tagsBySource = host.tags_by_source || {};
         const allTags = Object.values(tagsBySource).flat();
-        return allTags.some(t => {
+        const tagMatch = allTags.some(t => {
           const tag = (t || '').toLowerCase();
-          return tag === `env:${envTag}` || tag === envTag;
+          return tag === `env:${envId}` || tag === envId;
         });
+        if (tagMatch) return true;
+
+        // Match 2: hostname starts with the environment ID
+        // e.g., envId="bayada" matches "bayada-prod-mongo-1"
+        // e.g., envId="ck" matches "ck-prod-mongo-1", "ck-1005-alb-..."
+        const name = (host.name || '').toLowerCase();
+        if (name.startsWith(envId + '-') || name === envId) return true;
+
+        return false;
       });
+
       const mapped = filtered.map(host => ({
         name: host.name || host.host_name || '',
         cpu: host.metrics?.cpu ?? null,

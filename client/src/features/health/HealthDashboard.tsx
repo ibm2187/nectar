@@ -164,21 +164,38 @@ export function HealthDashboard() {
     const map: Record<string, { avgCpu: number; hostCount: number }> = {}
     if (allHosts.length === 0) return map
 
+    // Collect known env IDs for hostname matching
+    const envIds = new Set<string>()
+    if (data) {
+      for (const c of data.customers) {
+        for (const e of c.environments) envIds.add(e.id.toLowerCase())
+      }
+    }
+
     for (const host of allHosts) {
       if (host.cpu === null) continue
-      for (const tag of host.envTags) {
-        const envId = tag.replace('env:', '')
+      const matched = new Set<string>()
+
+      // Match by env: tags
+      for (const tag of host.envTags) matched.add(tag.replace('env:', ''))
+
+      // Match by hostname prefix
+      const name = host.name.toLowerCase()
+      for (const eid of envIds) {
+        if (name.startsWith(eid + '-') || name === eid) matched.add(eid)
+      }
+
+      for (const envId of matched) {
         if (!map[envId]) map[envId] = { avgCpu: 0, hostCount: 0 }
-        map[envId].avgCpu += host.cpu
+        map[envId].avgCpu += host.cpu!
         map[envId].hostCount += 1
       }
     }
-    // Convert sums to averages
     for (const key of Object.keys(map)) {
       map[key].avgCpu = map[key].avgCpu / map[key].hostCount
     }
     return map
-  }, [allHosts])
+  }, [allHosts, data])
 
   // Initial fetch + auto-refresh
   useEffect(() => {
