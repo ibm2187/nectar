@@ -141,7 +141,12 @@ function computeReleaseStatus(release, prodEnvs = [], now = new Date()) {
     return { status: 'unknown', shippedSignals: [], matchingEnvs: [] };
   }
 
-  const daysUntil = Math.round((releaseDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+  // Compare date-only (ignore time) to avoid timezone issues.
+  // jiraReleaseDate is "YYYY-MM-DD" which JS parses as UTC midnight.
+  // Use UTC date strings for comparison.
+  const todayStr = now.toISOString().slice(0, 10);
+  const releaseDateStr = release.jiraReleaseDate;
+  const daysUntil = Math.round((new Date(releaseDateStr + 'T12:00:00Z').getTime() - new Date(todayStr + 'T12:00:00Z').getTime()) / (1000 * 60 * 60 * 24));
 
   if (daysUntil < 0) {
     return { status: 'overdue', shippedSignals: [], matchingEnvs: [], daysOverdue: -daysUntil };
