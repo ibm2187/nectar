@@ -5,6 +5,7 @@ import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { NectarLoader } from '../../components/NectarLoader'
+import { EnvDetailPanel, type EnvDetailItem } from '../../components/EnvDetailPanel'
 import { useWsStore } from '../../stores/wsStore'
 import { cn } from '../../lib/utils'
 
@@ -17,11 +18,21 @@ interface FlagOutlier {
   enabled: boolean
 }
 
+interface EnvDetail {
+  envId: string
+  envName: string
+  tier: string
+  franchise: string | null
+  franchiseDisplayName: string | null
+  enabled: boolean | null
+}
+
 interface AggregatedFlag {
   key: string
   bucket: Bucket
   isMobileFeature: boolean
   customerStates: Record<string, CustomerState>
+  customerEnvs: Record<string, EnvDetail[]>
   outliers: FlagOutlier[]
   enabledInAnyNonProd: boolean
 }
@@ -76,6 +87,7 @@ export function FeaturesPage() {
   const [expandedBuckets, setExpandedBuckets] = useState<Set<Bucket>>(
     new Set(['everywhere-on', 'everywhere-off'])
   )
+  const [panel, setPanel] = useState<{ customerName: string; flagKey: string; envs: EnvDetailItem[] } | null>(null)
 
   const customersMap = useWsStore(s => s.customers)
 
@@ -273,6 +285,7 @@ export function FeaturesPage() {
                         customers={data.customers}
                         customerNames={customerNames}
                         onCopy={copyKey}
+                        onClickCustomer={(customerName, envs) => setPanel({ customerName, flagKey: flag.key, envs })}
                       />
                     ))}
                   </div>
@@ -282,14 +295,24 @@ export function FeaturesPage() {
           </div>
         )
       })}
+
+      <EnvDetailPanel
+        open={!!panel}
+        onClose={() => setPanel(null)}
+        customerName={panel?.customerName || ''}
+        itemName={panel?.flagKey || ''}
+        itemType="feature"
+        envs={panel?.envs || []}
+      />
     </div>
   )
 }
 
-function FlagRow({ flag, customers, customerNames, onCopy }: {
+function FlagRow({ flag, customers, customerNames, onCopy, onClickCustomer }: {
   flag: AggregatedFlag
   customers: string[]
   customerNames: Record<string, string>
+  onClickCustomer: (customerName: string, envs: EnvDetailItem[]) => void
   onCopy: (key: string) => void
 }) {
   const githubUrl = `https://github.com/mavencare/webplatform/search?q=${encodeURIComponent(flag.key)}`
@@ -319,11 +342,13 @@ function FlagRow({ flag, customers, customerNames, onCopy }: {
           {customers.map(customerId => {
             const state = flag.customerStates[customerId] || 'unknown'
             const name = customerNames[customerId] || customerId
+            const envs = flag.customerEnvs?.[customerId] || []
             return (
               <CustomerPill
                 key={customerId}
                 name={name}
                 state={state}
+                onClick={() => onClickCustomer(name, envs)}
               />
             )
           })}
@@ -360,7 +385,7 @@ function FlagRow({ flag, customers, customerNames, onCopy }: {
   )
 }
 
-function CustomerPill({ name, state }: { name: string; state: CustomerState }) {
+function CustomerPill({ name, state, onClick }: { name: string; state: CustomerState; onClick: () => void }) {
   const classes = {
     on:      'bg-green-500/15 border-green-500/40 text-green-300',
     off:     'bg-muted/30 border-border text-muted-foreground/60 line-through',
@@ -373,13 +398,19 @@ function CustomerPill({ name, state }: { name: string; state: CustomerState }) {
     partial: 'bg-yellow-500',
     unknown: 'bg-transparent border border-dashed border-muted-foreground/30',
   }[state]
+
   return (
-    <span
-      className={cn("inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium", classes)}
-      title={`${name}: ${state}`}
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium cursor-pointer hover:ring-1 hover:ring-primary/30 transition-all",
+        classes
+      )}
+      title={`${name}: ${state} — click for details`}
     >
-      <span className={cn("w-1.5 h-1.5 rounded-full", dot)} />
+      <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", dot)} />
       {name}
-    </span>
+    </button>
   )
 }

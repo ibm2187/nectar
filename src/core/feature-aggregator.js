@@ -136,11 +136,34 @@ function aggregateFeatureFlags(environments) {
       }
     }
 
+    // Per-customer environment breakdown — for the detail panel
+    // customerEnvs: { customerId → [{ envId, envName, tier, franchise, enabled }] }
+    const customerEnvs = {};
+    for (const customerId of customers) {
+      const envs = prodEnvsByCustomer.get(customerId) || [];
+      const envDetails = [];
+      for (const env of envs) {
+        const flag = env.features.dbFeatureFlags.find(f => f.key === key);
+        envDetails.push({
+          envId: env.id,
+          envName: env.name || env.nodeEnv || env.id,
+          tier: env.tier,
+          franchise: env.franchise || null,
+          franchiseDisplayName: env.franchiseDisplayName || null,
+          enabled: flag ? flag.enabled : null,
+        });
+      }
+      if (envDetails.length > 0) {
+        customerEnvs[customerId] = envDetails;
+      }
+    }
+
     flags.push({
       key,
       bucket,
       isMobileFeature: meta.isMobileFeature,
       customerStates,
+      customerEnvs,
       outliers,
       enabledInAnyNonProd,
     });
@@ -284,11 +307,34 @@ function aggregateIntegrations(environments) {
       }
     }
 
+    // Per-customer environment breakdown
+    const customerEnvs = {};
+    for (const customerId of customers) {
+      const envs = prodEnvsByCustomer.get(customerId) || [];
+      const envDetails = [];
+      for (const env of envs) {
+        const entry = env.integrations.dbIntegrations[type];
+        envDetails.push({
+          envId: env.id,
+          envName: env.name || env.nodeEnv || env.id,
+          tier: env.tier,
+          franchise: env.franchise || null,
+          franchiseDisplayName: env.franchiseDisplayName || null,
+          enabled: entry ? entry.enabled : null,
+          configured: entry ? entry.configured : null,
+        });
+      }
+      if (envDetails.length > 0) {
+        customerEnvs[customerId] = envDetails;
+      }
+    }
+
     integrations.push({
       type,
       bucket,
       customerStates,
       customerConfigured,
+      customerEnvs,
       outliers,
       enabledInAnyNonProd,
     });

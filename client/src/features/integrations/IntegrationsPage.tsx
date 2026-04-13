@@ -4,6 +4,7 @@ import { Card, CardContent } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { NectarLoader } from '../../components/NectarLoader'
+import { EnvDetailPanel, type EnvDetailItem } from '../../components/EnvDetailPanel'
 import { useWsStore } from '../../stores/wsStore'
 import { cn } from '../../lib/utils'
 
@@ -17,11 +18,22 @@ interface IntegrationOutlier {
   configured: boolean
 }
 
+interface IntegrationEnvDetail {
+  envId: string
+  envName: string
+  tier: string
+  franchise: string | null
+  franchiseDisplayName: string | null
+  enabled: boolean | null
+  configured: boolean | null
+}
+
 interface AggregatedIntegration {
   type: string
   bucket: Bucket
   customerStates: Record<string, CustomerState>
   customerConfigured: Record<string, boolean>
+  customerEnvs: Record<string, IntegrationEnvDetail[]>
   outliers: IntegrationOutlier[]
   enabledInAnyNonProd: boolean
 }
@@ -109,6 +121,7 @@ export function IntegrationsPage() {
   const [expandedBuckets, setExpandedBuckets] = useState<Set<Bucket>>(
     new Set(['everywhere-on', 'mixed'])
   )
+  const [panel, setPanel] = useState<{ customerName: string; integrationType: string; envs: EnvDetailItem[] } | null>(null)
 
   const customersMap = useWsStore(s => s.customers)
 
@@ -279,6 +292,7 @@ export function IntegrationsPage() {
                         integration={integ}
                         customers={data.customers}
                         customerNames={customerNames}
+                        onClickCustomer={(customerName, envs) => setPanel({ customerName, integrationType: integ.type, envs })}
                       />
                     ))}
                   </div>
@@ -288,12 +302,22 @@ export function IntegrationsPage() {
           </div>
         )
       })}
+
+      <EnvDetailPanel
+        open={!!panel}
+        onClose={() => setPanel(null)}
+        customerName={panel?.customerName || ''}
+        itemName={panel?.integrationType || ''}
+        itemType="integration"
+        envs={panel?.envs || []}
+      />
     </div>
   )
 }
 
-function IntegrationRow({ integration, customers, customerNames }: {
+function IntegrationRow({ integration, customers, customerNames, onClickCustomer }: {
   integration: AggregatedIntegration
+  onClickCustomer: (customerName: string, envs: EnvDetailItem[]) => void
   customers: string[]
   customerNames: Record<string, string>
 }) {
@@ -319,12 +343,14 @@ function IntegrationRow({ integration, customers, customerNames }: {
             const state = integration.customerStates[customerId] || 'unknown'
             const configured = integration.customerConfigured[customerId]
             const name = customerNames[customerId] || customerId
+            const envs = integration.customerEnvs?.[customerId] || []
             return (
               <CustomerPill
                 key={customerId}
                 name={name}
                 state={state}
                 configured={configured}
+                onClick={() => onClickCustomer(name, envs)}
               />
             )
           })}
@@ -334,10 +360,11 @@ function IntegrationRow({ integration, customers, customerNames }: {
   )
 }
 
-function CustomerPill({ name, state, configured }: {
+function CustomerPill({ name, state, configured, onClick }: {
   name: string
   state: CustomerState
   configured?: boolean
+  onClick: () => void
 }) {
   const classes = {
     on:      'bg-green-500/15 border-green-500/40 text-green-300',
@@ -352,17 +379,21 @@ function CustomerPill({ name, state, configured }: {
     unknown: 'bg-transparent border border-dashed border-muted-foreground/30',
   }[state]
 
-  // "Enabled but not configured" = admin flipped it on but OAuth not complete
   const showWarning = state === 'on' && configured === false
 
   return (
-    <span
-      className={cn("inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium", classes)}
-      title={`${name}: ${state}${configured !== undefined ? (configured ? ' (configured)' : ' (not configured)') : ''}`}
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium cursor-pointer hover:ring-1 hover:ring-primary/30 transition-all",
+        classes
+      )}
+      title={`${name}: ${state} — click for details`}
     >
       <span className={cn("w-1.5 h-1.5 rounded-full", dot)} />
       {name}
-      {showWarning && <span className="text-yellow-400 ml-0.5" title="Enabled but not configured">⚠</span>}
-    </span>
+      {showWarning && <span className="text-yellow-400 ml-0.5">⚠</span>}
+    </button>
   )
 }
