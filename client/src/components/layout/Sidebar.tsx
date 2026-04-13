@@ -41,9 +41,10 @@ function useSidebarBadges() {
   const environments = useWsStore(s => s.environments)
   const [pendingTaskCount, setPendingTaskCount] = useState(0)
 
-  // Count overdue releases from the ws store
+  // Count overdue releases — past release date, not done, not archived
+  const today = new Date().toISOString().slice(0, 10)
   const overdueCount = releases.filter(
-    r => r.effectiveStatus?.status === 'overdue'
+    r => r.jiraReleaseDate && r.jiraReleaseDate < today && r.state !== 'done' && !r.jiraArchived
   ).length
 
   // Derive health — check if any production environment is unhealthy/unreachable
