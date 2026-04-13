@@ -22,16 +22,18 @@ const COMPONENT_FIELD = 'customfield_10463';
 const CUSTOMER_TAG_FIELD = 'customfield_11056';
 const DEPLOYED_ENVS_FIELD = 'customfield_10595';
 const QA_ASSIGNEE_FIELD = 'customfield_10466';
+const PRODUCT_ASSIGNEE_FIELD = 'customfield_10757';
 
 // Shared fields list — every Nectar JIRA query should request at minimum these
 // so normalizeIssue can populate all fields consistently.
 const NECTAR_FIELDS = [
-  'summary', 'status', 'issuetype', 'assignee', 'fixVersions', 'labels',
+  'summary', 'status', 'issuetype', 'assignee', 'reporter', 'fixVersions', 'labels',
   'customfield_10594',  // Target FixVersion
   'customfield_10463',  // Component / area
   'customfield_11056',  // Customer tag
   'customfield_10691',  // Zoho Desk Ticket ID
   'customfield_10466',  // QA Assignee
+  'customfield_10757',  // Product Assignee
   'customfield_10595',  // Deployed Environments
   'customfield_10992',  // Submitter Name
   'customfield_10993',  // Submitter Email
@@ -272,7 +274,9 @@ class JiraClient {
       labels: fields.labels || [],
       component: JiraClient.extractFieldString(fields[COMPONENT_FIELD]),
       customerTags: JiraClient.extractStringArray(fields[CUSTOMER_TAG_FIELD]),
+      reporter: fields.reporter ? fields.reporter.displayName : null,
       qaAssignee: fields[QA_ASSIGNEE_FIELD] ? fields[QA_ASSIGNEE_FIELD].displayName || null : null,
+      productAssignee: fields[PRODUCT_ASSIGNEE_FIELD] ? fields[PRODUCT_ASSIGNEE_FIELD].displayName || null : null,
       deployedEnvironments: JiraClient.extractStringArray(fields[DEPLOYED_ENVS_FIELD]),
       zohoRef: rawZoho ? JiraClient.parseZohoRef(rawZoho) : null,
       submitterName: fields[ZOHO_SUBMITTER_NAME_FIELD] || null,

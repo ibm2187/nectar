@@ -69,6 +69,18 @@ export interface Ticket {
   summary: string
   state: string
   pr: number | null
+  jiraStatus?: string
+  type?: string
+  assignee?: string | null
+  reporter?: string | null
+  qaAssignee?: string | null
+  productAssignee?: string | null
+  component?: string | null
+  customerTags?: string[]
+  fixVersions?: string[]
+  targetFixVersions?: string[]
+  deployedEnvironments?: string[]
+  zohoRef?: ZohoRef | null
 }
 
 export interface CherryPick {

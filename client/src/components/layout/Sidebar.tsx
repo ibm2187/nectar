@@ -17,7 +17,8 @@ const links: ReadonlyArray<{
   adminOnly?: boolean
   permKey?: PermKey
 }> = [
-  { to: '/', label: 'Releases', icon: '📦', permKey: 'releases' },
+  { to: '/', label: 'Home', icon: '🏠' },
+  { to: '/releases', label: 'Releases', icon: '📦', permKey: 'releases' },
   { to: '/roadmap', label: 'Roadmap', icon: '🗺', permKey: 'roadmap' },
   { to: '/tickets', label: 'Tickets', icon: '🎯', permKey: 'tickets' },
   { to: '/customers', label: 'Environments', icon: '🏢', permKey: 'environments' },
@@ -117,7 +118,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           }).map(({ to, label, icon }) => {
             // Determine badge for this nav item
             let badge: React.ReactNode = null
-            if (to === '/' && overdueCount > 0) {
+            if ((to === '/' || to === '/releases') && overdueCount > 0) {
               badge = (
                 <span className="ml-auto bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-medium">
                   {overdueCount}

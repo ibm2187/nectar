@@ -9,6 +9,7 @@ import { Badge } from '../../components/ui/badge'
 import { Card, CardContent } from '../../components/ui/card'
 import { timeAgo, cn } from '../../lib/utils'
 import { TruthView } from './TruthView'
+import { CustomerImpact } from './CustomerImpact'
 import { NectarLoader } from '../../components/NectarLoader'
 import { CompareSelector } from './CompareSelector'
 import type { CompareTarget } from './CompareSelector'
@@ -48,11 +49,12 @@ export function ReleaseDetail() {
   // Determine where to go back based on navigation state
   const from = (location.state as { from?: string } | null)?.from
   const backPaths: Record<string, { path: string; label: string }> = {
-    releases: { path: '/',         label: 'Back to releases' },
-    roadmap:  { path: '/roadmap',  label: 'Back to roadmap' },
-    tickets:  { path: '/tickets',  label: 'Back to tickets' },
+    home:     { path: '/',          label: 'Back to home' },
+    releases: { path: '/releases',  label: 'Back to releases' },
+    roadmap:  { path: '/roadmap',   label: 'Back to roadmap' },
+    tickets:  { path: '/tickets',   label: 'Back to tickets' },
   }
-  const { path: backPath, label: backLabel } = backPaths[from || ''] || { path: '/', label: 'Back to releases' }
+  const { path: backPath, label: backLabel } = backPaths[from || ''] || { path: '/', label: 'Back to home' }
 
   // key can be "repo:version" or just "version"
   const release = useWsStore(s => {
@@ -525,6 +527,14 @@ export function ReleaseDetail() {
           <TruthView repo={release.repo} version={release.version} />
         </div>
       )}
+
+      {/* Customer Impact — Zoho support tickets linked to JIRA issues in this release */}
+      <CollapsibleSection
+        title={`Customer Impact${(release as any).zohoTickets?.length ? ` (${(release as any).zohoTickets.length} support tickets)` : ''}`}
+        defaultOpen={(release as any).zohoTickets?.length > 0}
+      >
+        <CustomerImpact version={release.version} />
+      </CollapsibleSection>
 
       {/* Deployment Impact */}
       {impactData && impactData.total > 0 && (

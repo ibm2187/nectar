@@ -51,6 +51,40 @@ class JiraSync extends EventEmitter {
   }
 
   /**
+   * One-time migration: remove jira-synced tickets from repos that previously
+   * used sharesVersionsWith but no longer do. These tickets were blindly copied
+   * from the primary repo and don't actually belong to the sharing repo.
+   */
+  _migrateStaleSharedTickets() {
+    if (this._migrationDone) return;
+    this._migrationDone = true;
+
+    // Find repos that currently have sharesVersionsWith configured
+    const activeSharing = new Set();
+    for (const repo of (this.config.repos || [])) {
+      if (repo.sharesVersionsWith) activeSharing.add(repo.name);
+    }
+
+    // Known repos that previously shared — clean them if they're no longer sharing
+    const previouslySharing = ['bluesummit'];
+    for (const repoName of previouslySharing) {
+      if (activeSharing.has(repoName)) continue; // still sharing, skip
+
+      let cleaned = 0;
+      for (const release of this.releases.list()) {
+        if (release.repo !== repoName) continue;
+        const before = release.tickets.length;
+        release.tickets = release.tickets.filter(t => t.source !== 'jira');
+        cleaned += before - release.tickets.length;
+      }
+      if (cleaned > 0) {
+        log.info(`Migration: removed ${cleaned} stale jira-synced tickets from ${repoName} releases (sharesVersionsWith removed)`);
+        this.releases._debounceSave();
+      }
+    }
+  }
+
+  /**
    * Run full JIRA sync.
    */
   async run() {
@@ -62,6 +96,9 @@ class JiraSync extends EventEmitter {
     this._running = true;
     const startTime = Date.now();
     this.emit('sync:started');
+
+    // Run one-time migration to clean stale shared tickets
+    this._migrateStaleSharedTickets();
 
     const results = {
       versions: { total: 0, unreleased: 0, synced: 0 },
@@ -254,11 +291,13 @@ class JiraSync extends EventEmitter {
         jiraStatus: normalized.status,
         type: normalized.type,
         assignee: normalized.assignee,
+        reporter: normalized.reporter,
+        qaAssignee: normalized.qaAssignee,
+        productAssignee: normalized.productAssignee,
         fixVersions: normalized.fixVersions,
         targetFixVersions: normalized.targetFixVersions,
         component: normalized.component,
         customerTags: normalized.customerTags,
-        qaAssignee: normalized.qaAssignee,
         deployedEnvironments: normalized.deployedEnvironments,
         zohoRef: normalized.zohoRef,
         source: 'jira',

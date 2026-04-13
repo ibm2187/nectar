@@ -265,6 +265,11 @@ function createWebServer(services, config) {
       broadcast({ type: 'jira:sync-completed', results, releases: releases.list() })
     );
   }
+  if (services.zohoSync) {
+    services.zohoSync.on('sync:completed', (results) =>
+      broadcast({ type: 'zoho:sync-completed', results, releases: releases.list() })
+    );
+  }
   if (envPoller) {
     envPoller.on('poll:completed', (results) =>
       broadcast({
