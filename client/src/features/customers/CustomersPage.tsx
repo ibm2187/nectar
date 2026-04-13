@@ -7,7 +7,7 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { apiFetch } from '../../api/client'
 import type { Customer, Environment, EnvTier } from '../../api/client'
-import { cn, timeAgo } from '../../lib/utils'
+import { cn, timeAgo, exportToCsv } from '../../lib/utils'
 import { SetVersionDialog } from './SetVersionDialog'
 import { NectarLoader } from '../../components/NectarLoader'
 
@@ -126,6 +126,33 @@ export function CustomersPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs h-7"
+            onClick={() => {
+              exportToCsv(
+                'environments.csv',
+                ['Customer', 'Environment ID', 'Tier', 'Version', 'Franchise', 'Reachable', 'Last Checked', 'Health'],
+                environments.map(env => {
+                  const cust = customers.find(c => c.id === env.customerId)
+                  const health = (env as unknown as Record<string, unknown>).health as { status?: string } | null | undefined
+                  return [
+                    cust?.name || env.customerId,
+                    env.id,
+                    env.tier,
+                    env.currentVersion || '',
+                    env.franchise || '',
+                    env.reachable === false ? 'No' : env.reachable === true ? 'Yes' : '',
+                    env.lastChecked || '',
+                    health?.status || '',
+                  ]
+                })
+              )
+            }}
+          >
+            Export CSV
+          </Button>
           <Button variant="outline" size="sm" onClick={handleScan} disabled={scanning}>
             {scanning ? 'Scanning...' : 'Sync from webplatform'}
           </Button>
@@ -320,6 +347,13 @@ function CustomerCard({
 
 // ── Environment tile ────────────────────────────────────────
 
+// Health dot color mapping for environment tiles
+const HEALTH_DOT_COLOR: Record<string, string> = {
+  healthy: 'bg-green-500',
+  degraded: 'bg-yellow-500',
+  unhealthy: 'bg-red-500',
+}
+
 function EnvTile({
   env, onDrilldown, onEdit,
 }: {
@@ -327,7 +361,18 @@ function EnvTile({
   onDrilldown: () => void
   onEdit: () => void
 }) {
+  const navigate = useNavigate()
   const tierColor = TIER_COLORS[env.tier] || TIER_COLORS.other
+
+  // Health data may be present on the environment object from the poller
+  const health = (env as unknown as Record<string, unknown>).health as { status?: string } | null | undefined
+  const healthStatus = health?.status || null
+  const healthDotClass = healthStatus
+    ? (HEALTH_DOT_COLOR[healthStatus] || 'bg-gray-500')
+    : 'bg-gray-500/50'
+  const healthLabel = healthStatus
+    ? healthStatus.charAt(0).toUpperCase() + healthStatus.slice(1)
+    : 'Unknown'
 
   return (
     <div className="group relative rounded-lg border p-3 transition-all hover:border-primary/50 hover:bg-accent/30">
@@ -344,6 +389,18 @@ function EnvTile({
           {env.franchise && (
             <span className="text-xs text-muted-foreground font-mono">{env.franchise}</span>
           )}
+          {/* Health indicator dot */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              navigate(`/health/${encodeURIComponent(env.customerId)}`)
+            }}
+            className="ml-auto shrink-0"
+            title={`Health: ${healthLabel} — click to view health details`}
+          >
+            <span className={cn("inline-block w-2.5 h-2.5 rounded-full", healthDotClass)} />
+          </button>
         </div>
         <div className="font-mono text-sm font-semibold truncate pr-8" title={env.id}>
           {env.id}

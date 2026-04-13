@@ -6,7 +6,8 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { JiraLink } from '../../components/JiraLink'
 import { NectarLoader } from '../../components/NectarLoader'
-import { cn } from '../../lib/utils'
+import { cn, exportToCsv } from '../../lib/utils'
+import { SavedViews } from '../../components/SavedViews'
 
 // ── Types ──────────────────────────────────────────────
 
@@ -268,6 +269,30 @@ export function TicketsPage() {
               Clear filters
             </Button>
           )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs h-7"
+            onClick={() => {
+              exportToCsv(
+                'tickets.csv',
+                ['Key', 'Summary', 'Status', 'Type', 'Assignee', 'QA', 'Deployed', 'Releases'],
+                filtered.map(t => [
+                  t.key,
+                  t.summary,
+                  t.jiraStatus,
+                  t.type || '',
+                  t.assignee || '',
+                  t.qaAssignee || '',
+                  t.deployedEnvironments.join('; '),
+                  t.releases.map(r => r.version).join('; '),
+                ])
+              )
+            }}
+          >
+            Export CSV
+          </Button>
+          <SavedViews storageKey="nectar-saved-views-tickets" />
         </div>
 
         {/* Release filter chips — horizontal scroll, compact */}
@@ -298,7 +323,7 @@ export function TicketsPage() {
                   <col className="w-28" />
                   <col />{/* releases */}
                 </colgroup>
-                <thead>
+                <thead className="sticky top-0 bg-background z-10">
                   <tr className="border-b text-left">
                     <SortHeader label="Key"       active={sortKey === 'key'}       dir={sortDir} onClick={() => setSort('key')} />
                     <SortHeader label="Summary"   active={sortKey === 'summary'}   dir={sortDir} onClick={() => setSort('summary')} />

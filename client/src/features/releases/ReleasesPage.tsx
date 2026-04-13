@@ -7,6 +7,7 @@ import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { NectarLoader } from '../../components/NectarLoader'
 import { cn } from '../../lib/utils'
+import { SavedViews } from '../../components/SavedViews'
 
 /**
  * Combined Releases page with two view modes:
@@ -313,6 +314,7 @@ export function ReleasesPage() {
             ))}
           </select>
           <Button variant="outline" size="sm" onClick={load}>Refresh</Button>
+          <SavedViews storageKey="nectar-saved-views-releases" />
         </div>
       </div>
 
@@ -652,6 +654,22 @@ function CalendarReleaseCard({ release, onClick }: { release: Release; onClick: 
   const riskGlyph = release.risk.score === 'high' ? '🔴' :
     release.risk.score === 'medium' ? '🟡' : null
 
+  // Ticket progress
+  const tickets = release.tickets || []
+  const doneCount = tickets.filter(t => t.state === 'done' || t.state === 'closed').length
+  const totalCount = tickets.length
+  const progressPct = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0
+
+  // Risk badge styling
+  const riskScore = release.risk.score
+  const riskBadge = riskScore === 'high'
+    ? { label: 'HIGH', cls: 'bg-red-500/20 text-red-400' }
+    : riskScore === 'medium'
+    ? { label: 'MED', cls: 'bg-yellow-500/20 text-yellow-400' }
+    : riskScore === 'low'
+    ? { label: 'LOW', cls: 'bg-green-500/20 text-green-400' }
+    : null
+
   return (
     <button
       type="button"
@@ -663,14 +681,37 @@ function CalendarReleaseCard({ release, onClick }: { release: Release; onClick: 
     >
       <div className="flex items-baseline justify-between gap-1">
         <span className="font-mono text-xs font-medium truncate">{release.version}</span>
-        {riskGlyph && <span className="text-[10px] shrink-0">{riskGlyph}</span>}
+        <div className="flex items-center gap-1 shrink-0">
+          {riskBadge && (
+            <span className={cn("text-[9px] px-1 rounded font-semibold", riskBadge.cls)}>
+              {riskBadge.label}
+            </span>
+          )}
+          {riskGlyph && !riskBadge && <span className="text-[10px]">{riskGlyph}</span>}
+        </div>
       </div>
       <div className="flex items-center gap-1 mt-1">
         <Badge variant="outline" className={cn("text-[9px] px-1 py-0", style.text)}>{style.label}</Badge>
       </div>
-      <div className="mt-1 text-[10px] text-muted-foreground leading-tight">
-        {(release.tickets || []).length} tickets
-      </div>
+      {/* Progress bar + count */}
+      {totalCount > 0 && (
+        <div className="mt-1.5">
+          <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-0.5">
+            <span>{doneCount}/{totalCount} done</span>
+          </div>
+          <div className="w-full h-1 rounded-full bg-muted/50 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-green-500/60 transition-all"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+        </div>
+      )}
+      {totalCount === 0 && (
+        <div className="mt-1 text-[10px] text-muted-foreground leading-tight">
+          0 tickets
+        </div>
+      )}
     </button>
   )
 }
@@ -881,6 +922,21 @@ function AgendaReleaseRow({ release, now, onClick }: {
 
   const proof = release.effectiveStatus?.shippedSignals?.[0]?.detail
 
+  // Ticket progress
+  const tickets = release.tickets || []
+  const doneCount = tickets.filter(t => t.state === 'done' || t.state === 'closed').length
+  const totalCount = tickets.length
+
+  // Risk badge
+  const riskScore = release.risk.score
+  const riskBadge = riskScore === 'high'
+    ? { label: 'HIGH', cls: 'bg-red-500/20 text-red-400 border-red-500/30' }
+    : riskScore === 'medium'
+    ? { label: 'MED', cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' }
+    : riskScore === 'low'
+    ? { label: 'LOW', cls: 'bg-green-500/20 text-green-400 border-green-500/30' }
+    : null
+
   return (
     <button
       type="button"
@@ -902,9 +958,19 @@ function AgendaReleaseRow({ release, now, onClick }: {
               <Badge variant="outline" className="text-xs">{release.repo}</Badge>
             )}
             <Badge variant="outline" className={cn("text-xs", style.text)}>{style.label}</Badge>
+            {riskBadge && (
+              <span className={cn("text-[10px] px-1.5 py-0.5 rounded border font-semibold", riskBadge.cls)}>
+                {riskBadge.label}
+              </span>
+            )}
+            {totalCount > 0 && (
+              <span className="text-[10px] text-muted-foreground font-mono">
+                {doneCount}/{totalCount} done
+              </span>
+            )}
           </div>
           <div className="text-xs text-muted-foreground mt-0.5">
-            {(release.tickets || []).length} tickets · {release.state}
+            {totalCount} tickets · {release.state}
             {timingText && <span> · {timingText}</span>}
             {proof && status === 'shipped' && <span> · ✓ {proof}</span>}
           </div>

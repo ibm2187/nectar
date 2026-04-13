@@ -7,11 +7,12 @@ import { Input } from '../../components/ui/input'
 import { JiraLink } from '../../components/JiraLink'
 import { apiFetch } from '../../api/client'
 import type { ReleaseTruthReport, DeploymentImpactReport, VerifiedTicket, Health, HealthCategory, ZohoRef } from '../../api/client'
-import { cn, timeAgo } from '../../lib/utils'
+import { cn, timeAgo, exportToCsv } from '../../lib/utils'
 import { useWsStore } from '../../stores/wsStore'
 import { NectarLoader, NectarSpinner } from '../../components/NectarLoader'
 import { CompareSelector } from './CompareSelector'
 import type { CompareTarget } from './CompareSelector'
+import { SavedViews } from '../../components/SavedViews'
 
 interface Props {
   repo: string
@@ -402,6 +403,32 @@ export function TruthView({ repo, version }: Props) {
             Copy link
           </Button>
         )}
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs h-7"
+            onClick={() => {
+              exportToCsv(
+                `truth-${version}.csv`,
+                ['Key', 'Summary', 'JIRA Status', 'Assignee', 'QA', 'Health', 'Health Message', 'On Branch'],
+                filtered.map(t => [
+                  t.key,
+                  t.summary || '',
+                  t.jiraStatus,
+                  t.assignee || '',
+                  t.qaAssignee || '',
+                  HEALTH_INFO[t.health]?.label || t.health,
+                  t.healthMessage || '',
+                  t.onBranch ? 'Yes' : 'No',
+                ])
+              )
+            }}
+          >
+            Export CSV
+          </Button>
+          <SavedViews storageKey="nectar-saved-views-truth" />
+        </div>
       </div>
 
       {/* Tickets table */}
@@ -419,7 +446,7 @@ export function TruthView({ repo, version }: Props) {
                 <col className="w-24" />
                 <col className="w-56" />
               </colgroup>
-              <thead>
+              <thead className="sticky top-0 bg-background z-10">
                 <tr className="border-b text-left">
                   <SortHeader label="Key"        active={sortKey === 'key'}        dir={sortDir} onClick={() => setSort('key')} />
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Title</th>
