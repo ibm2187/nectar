@@ -58,10 +58,11 @@ function useSidebarBadges() {
     let cancelled = false
     const fetchTasks = async () => {
       try {
-        const data = await apiFetch<{ tasks: Array<{ status: string }>; total: number }>('/tasks?limit=50')
+        const data = await apiFetch<Array<{ status: string }>>('/tasks?limit=50')
         if (!cancelled) {
-          const active = data.tasks.filter(
-            t => t.status === 'pending' || t.status === 'in-progress'
+          const tasks = Array.isArray(data) ? data : (data as any).tasks || []
+          const active = tasks.filter(
+            (t: { status: string }) => t.status === 'pending' || t.status === 'in-progress'
           ).length
           setPendingTaskCount(active)
         }
