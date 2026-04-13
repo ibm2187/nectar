@@ -1872,6 +1872,107 @@ module.exports = function createRoutes(services, config) {
     }, 500);
   });
 
+  // ── Global search ─────────────────────────────────────
+
+  router.get('/search', (req, res) => {
+    const q = (req.query.q || '').trim().toLowerCase();
+    if (q.length < 2) {
+      return res.json({ query: req.query.q || '', results: [], total: 0 });
+    }
+
+    const MAX_PER_CATEGORY = 5;
+    const MAX_TOTAL = 20;
+    const results = [];
+
+    // Search releases — match version or branch
+    const allReleases = releases.list();
+    let releaseCount = 0;
+    for (const r of allReleases) {
+      if (releaseCount >= MAX_PER_CATEGORY) break;
+      const matchVersion = (r.version || '').toLowerCase().includes(q);
+      const matchBranch = (r.branch || '').toLowerCase().includes(q);
+      if (matchVersion || matchBranch) {
+        results.push({
+          type: 'release',
+          version: r.version,
+          repo: r.repo || null,
+          state: r.state,
+          branch: r.branch || null,
+        });
+        releaseCount++;
+      }
+    }
+
+    // Search tickets — match key or summary across all releases
+    const seenTickets = new Set();
+    let ticketCount = 0;
+    for (const r of allReleases) {
+      if (ticketCount >= MAX_PER_CATEGORY) break;
+      for (const t of r.tickets || []) {
+        if (ticketCount >= MAX_PER_CATEGORY) break;
+        if (seenTickets.has(t.key)) continue;
+        const matchKey = (t.key || '').toLowerCase().includes(q);
+        const matchSummary = (t.summary || '').toLowerCase().includes(q);
+        if (matchKey || matchSummary) {
+          seenTickets.add(t.key);
+          results.push({
+            type: 'ticket',
+            key: t.key,
+            summary: t.summary || '',
+            jiraStatus: t.jiraStatus || t.state || null,
+            version: r.version,
+          });
+          ticketCount++;
+        }
+      }
+    }
+
+    // Search environments — match id, name, or customerId
+    const allEnvs = customerStore.listEnvironments();
+    let envCount = 0;
+    for (const e of allEnvs) {
+      if (envCount >= MAX_PER_CATEGORY) break;
+      const matchId = (e.id || '').toLowerCase().includes(q);
+      const matchName = (e.name || '').toLowerCase().includes(q);
+      const matchCustomer = (e.customerId || '').toLowerCase().includes(q);
+      if (matchId || matchName || matchCustomer) {
+        results.push({
+          type: 'environment',
+          id: e.id,
+          customerId: e.customerId,
+          tier: e.tier || null,
+          currentVersion: e.currentVersion || null,
+        });
+        envCount++;
+      }
+    }
+
+    // Search customers — match id or name
+    const allCustomers = customerStore.listCustomers();
+    let customerCount = 0;
+    for (const c of allCustomers) {
+      if (customerCount >= MAX_PER_CATEGORY) break;
+      const matchId = (c.id || '').toLowerCase().includes(q);
+      const matchName = (c.name || '').toLowerCase().includes(q);
+      if (matchId || matchName) {
+        results.push({
+          type: 'customer',
+          id: c.id,
+          name: c.name,
+        });
+        customerCount++;
+      }
+    }
+
+    // Trim to MAX_TOTAL
+    const total = results.length;
+    res.json({
+      query: req.query.q || '',
+      results: results.slice(0, MAX_TOTAL),
+      total,
+    });
+  });
+
   // ── Meta ──────────────────────────────────────────────
 
   router.get('/states', (req, res) => {
