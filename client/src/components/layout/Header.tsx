@@ -1,5 +1,6 @@
 import { useWsStore } from '../../stores/wsStore'
 import { useAuthStore } from '../../stores/authStore'
+import { useThemeStore } from '../../stores/themeStore'
 import { cn } from '../../lib/utils'
 
 interface HeaderProps {
@@ -13,6 +14,7 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
   const active = releases.filter(r => r.state !== 'done').length
 
   const { ssoEnabled, authenticated, user, logout } = useAuthStore()
+  const { theme, toggle: toggleTheme } = useThemeStore()
 
   return (
     <header className="h-12 border-b bg-card flex items-center justify-between px-4">
@@ -46,6 +48,24 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
           </svg>
           <span className="flex-1 text-left truncate">Search...</span>
           <kbd className="hidden md:inline-flex items-center px-1.5 py-0.5 rounded bg-muted/50 border border-border/30 font-mono text-[10px]">⌘K</kbd>
+        </button>
+
+        {/* Theme toggle */}
+        <button
+          type="button"
+          onClick={toggleTheme}
+          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {theme === 'dark' ? (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+            </svg>
+          ) : (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+            </svg>
+          )}
         </button>
 
         {/* User info (only when SSO is enabled and authenticated) */}
