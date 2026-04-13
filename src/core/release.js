@@ -38,6 +38,7 @@ function createRelease({ repo, version, branch, cutFrom, cutBy }) {
     ci: { status: null, buildUrl: null, lastRun: null },
     risk: { score: null, numericScore: null, factors: [] },
 
+    comments: [],
     deployments: [],
     approvals: [],
     notes: null,
@@ -62,6 +63,8 @@ function createRelease({ repo, version, branch, cutFrom, cutBy }) {
  *   approval:added   (release, approval)
  *   deployment:added  (release, deployment)
  *   deployment:updated (release, deployment)
+ *   comment:added    (release, comment)
+ *   comment:deleted  (release, commentId)
  */
 class ReleaseManager extends EventEmitter {
   constructor(audit) {
@@ -261,6 +264,39 @@ class ReleaseManager extends EventEmitter {
     this.emit('approval:added', release, record);
     this._debounceSave();
     return release;
+  }
+
+  // ── Comments ────────────────────────────────────────────
+
+  addComment(version, { text, user }) {
+    const release = this._getOrThrow(version);
+    const comment = {
+      id: `cmt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      text,
+      user: user || 'anonymous',
+      createdAt: new Date().toISOString(),
+    };
+    if (!release.comments) release.comments = [];
+    release.comments.push(comment);
+    release.updatedAt = new Date().toISOString();
+    this.audit.record(version, 'comment:added', { commentId: comment.id }, user);
+    this.emit('comment:added', release, comment);
+    this._debounceSave();
+    return comment;
+  }
+
+  deleteComment(version, commentId, user) {
+    const release = this._getOrThrow(version);
+    if (!release.comments) release.comments = [];
+    const idx = release.comments.findIndex(c => c.id === commentId);
+    if (idx === -1) throw new Error(`Comment ${commentId} not found`);
+    // Authorization (author vs admin) is handled by the API layer
+    release.comments.splice(idx, 1);
+    release.updatedAt = new Date().toISOString();
+    this.audit.record(version, 'comment:deleted', { commentId }, user);
+    this.emit('comment:deleted', release, commentId);
+    this._debounceSave();
+    return { ok: true };
   }
 
   // ── Deployments ─────────────────────────────────────────

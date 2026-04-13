@@ -1,8 +1,9 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useWsStore } from '../../stores/wsStore'
+import { useAuthStore } from '../../stores/authStore'
 import { apiFetch } from '../../api/client'
-import type { AuditEntry, ValidationReport, DatadogImpactResponse } from '../../api/client'
+import type { AuditEntry, ValidationReport, DatadogImpactResponse, ReleaseComment } from '../../api/client'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
@@ -76,6 +77,11 @@ export function ReleaseDetail() {
   const [taskError, setTaskError] = useState<string | null>(null)
   const [compareSelectorOpen, setCompareSelectorOpen] = useState(false)
   const [impactData, setImpactData] = useState<DatadogImpactResponse | null>(null)
+  const [comments, setComments] = useState<ReleaseComment[]>([])
+  const [commentText, setCommentText] = useState('')
+  const [commentPosting, setCommentPosting] = useState(false)
+  const authUser = useAuthStore(s => s.user)
+  const ssoEnabled = useAuthStore(s => s.ssoEnabled)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
@@ -83,6 +89,45 @@ export function ReleaseDetail() {
       apiFetch<AuditEntry[]>(`/audit/${version}`).then(setAudit).catch(() => {})
     }
   }, [version, release?.updatedAt])
+
+  // Fetch comments for this release
+  useEffect(() => {
+    if (!version) return
+    apiFetch<ReleaseComment[]>(`/releases/${version}/comments`)
+      .then(setComments)
+      .catch(() => {})
+  }, [version, release?.updatedAt])
+
+  const postComment = useCallback(async () => {
+    if (!version || !commentText.trim() || commentPosting) return
+    setCommentPosting(true)
+    try {
+      const comment = await apiFetch<ReleaseComment>(`/releases/${version}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ text: commentText.trim() }),
+      })
+      setComments(prev => [comment, ...prev])
+      setCommentText('')
+    } catch {
+      // silently fail
+    }
+    setCommentPosting(false)
+  }, [version, commentText, commentPosting])
+
+  const deleteComment = useCallback(async (commentId: string) => {
+    if (!version) return
+    try {
+      await apiFetch(`/releases/${version}/comments/${commentId}`, {
+        method: 'DELETE',
+      })
+      setComments(prev => prev.filter(c => c.id !== commentId))
+    } catch {
+      // silently fail
+    }
+  }, [version])
+
+  const currentUserEmail = authUser?.email || null
+  const isAdmin = authUser?.role === 'admin' || !ssoEnabled
 
   // Fetch Datadog deployment impact for this version
   useEffect(() => {
@@ -495,6 +540,75 @@ export function ReleaseDetail() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Comments */}
+      <Card className="mt-4">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">
+            Comments{comments.length > 0 ? ` (${comments.length})` : ''}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {/* Comment input */}
+          <div className="flex gap-2 mb-4">
+            <input
+              type="text"
+              className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              placeholder="Add a comment..."
+              value={commentText}
+              onChange={e => setCommentText(e.target.value)}
+              onKeyDown={e => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                  postComment()
+                }
+              }}
+              disabled={commentPosting}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-9"
+              onClick={postComment}
+              disabled={!commentText.trim() || commentPosting}
+            >
+              {commentPosting ? 'Posting...' : 'Post'}
+            </Button>
+          </div>
+
+          {/* Comment list */}
+          {comments.length === 0 ? (
+            <p className="text-sm text-muted-foreground italic">
+              No comments yet. Add one to share context with your team.
+            </p>
+          ) : (
+            <div className="space-y-3 max-h-80 overflow-auto">
+              {comments.map(comment => {
+                const canDelete = isAdmin || (currentUserEmail && comment.user === currentUserEmail)
+                return (
+                  <div key={comment.id} className="flex items-start justify-between gap-2 py-2 border-b border-border/50 last:border-0">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className="text-sm font-medium">{comment.user}</span>
+                        <span className="text-xs text-muted-foreground">{timeAgo(comment.createdAt)}</span>
+                      </div>
+                      <p className="text-sm text-foreground whitespace-pre-wrap break-words">{comment.text}</p>
+                    </div>
+                    {canDelete && (
+                      <button
+                        className="text-muted-foreground hover:text-destructive text-xs shrink-0 mt-1"
+                        onClick={() => deleteComment(comment.id)}
+                        title="Delete comment"
+                      >
+                        x
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Audit Trail */}
       <Card className="mt-4">

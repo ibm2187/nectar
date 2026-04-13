@@ -165,6 +165,52 @@ module.exports = function createRoutes(services, config) {
     }
   });
 
+  // ── Comments ──────────────────────────────────────────
+
+  router.get('/releases/:version/comments', (req, res) => {
+    try {
+      const release = releases.get(req.params.version);
+      if (!release) return res.status(404).json({ error: 'Release not found' });
+      const comments = (release.comments || []).slice().reverse(); // newest first
+      res.json(comments);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.post('/releases/:version/comments', (req, res) => {
+    try {
+      const { text } = req.body;
+      if (!text || !text.trim()) {
+        return res.status(400).json({ error: 'text is required' });
+      }
+      const user = (req.user && (req.user.email || req.user.name)) || 'anonymous';
+      const comment = releases.addComment(req.params.version, { text: text.trim(), user });
+      res.status(201).json(comment);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.delete('/releases/:version/comments/:commentId', (req, res) => {
+    try {
+      const user = (req.user && (req.user.email || req.user.name)) || 'anonymous';
+      const isUserAdmin = req.user && req.user.role === 'admin';
+      const release = releases.get(req.params.version);
+      if (!release) return res.status(404).json({ error: 'Release not found' });
+      const comment = (release.comments || []).find(c => c.id === req.params.commentId);
+      if (!comment) return res.status(404).json({ error: 'Comment not found' });
+      // Allow deletion if user is the author or an admin
+      if (comment.user !== user && !isUserAdmin) {
+        return res.status(403).json({ error: 'Only the comment author or an admin can delete this comment' });
+      }
+      releases.deleteComment(req.params.version, req.params.commentId, user);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // ── Deployments ───────────────────────────────────────
 
   router.post('/releases/:version/deploy', (req, res) => {

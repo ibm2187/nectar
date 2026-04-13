@@ -37,6 +37,7 @@ export interface Release {
   cutAt: string | null
   cutBy: string | null
   tickets: Ticket[]
+  comments?: ReleaseComment[]
   cherryPicks: CherryPick[]
   ci: { status: string | null; buildUrl: string | null; lastRun: string | null }
   risk: { score: string | null; numericScore: number | null; factors: RiskFactor[] }
@@ -54,6 +55,13 @@ export interface Release {
   presentationUrl?: string | null
   // Set by backend when releases are returned via /api/releases or /api/releases/calendar
   effectiveStatus?: EffectiveStatus
+}
+
+export interface ReleaseComment {
+  id: string
+  text: string
+  user: string
+  createdAt: string
 }
 
 export interface Ticket {
