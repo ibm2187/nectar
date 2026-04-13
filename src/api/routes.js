@@ -924,6 +924,16 @@ module.exports = function createRoutes(services, config) {
    * Matches by: 1) env: tags, 2) hostname prefix (e.g., "bayada-prod-" matches env "bayada").
    * This fallback is needed because most hosts lack env: tags in Datadog.
    */
+  // Shared infrastructure mapping — some customers share infra with others
+  const SHARED_INFRA = {
+    // All CK franchises share CK infrastructure
+    'ck': 'ck',
+    // Tribute, Quality Care, and Haven share Tribute infrastructure
+    'tribute': 'tribute',
+    'qualitycare': 'tribute',
+    'haven': 'tribute',
+  };
+
   router.get('/datadog/hosts/:envTag', asyncHandler(async (req, res) => {
     if (!datadog || !datadog.isConfigured()) {
       return res.json({ hosts: [], configured: false });
@@ -933,21 +943,36 @@ module.exports = function createRoutes(services, config) {
       const envId = req.params.envTag.toLowerCase();
       const allHosts = data.host_list || [];
 
+      // Determine which host prefixes to match:
+      // 1. The env ID itself (e.g., "bayada")
+      // 2. The customer ID if this is a franchise (e.g., "ck-615" → also match "ck")
+      // 3. The shared infra parent (e.g., "qualitycare" → also match "tribute")
+      const matchPrefixes = new Set([envId]);
+
+      // Extract customer prefix (e.g., "ck-615" → "ck", "bayada-staging" → "bayada")
+      const env = customerStore.listEnvironments().find(e => e.id === envId);
+      if (env && env.customerId) matchPrefixes.add(env.customerId.toLowerCase());
+
+      // Add shared infra mappings
+      for (const prefix of [...matchPrefixes]) {
+        if (SHARED_INFRA[prefix]) matchPrefixes.add(SHARED_INFRA[prefix]);
+      }
+
       const filtered = allHosts.filter(host => {
         // Match 1: env: tags
         const tagsBySource = host.tags_by_source || {};
         const allTags = Object.values(tagsBySource).flat();
         const tagMatch = allTags.some(t => {
           const tag = (t || '').toLowerCase();
-          return tag === `env:${envId}` || tag === envId;
+          return [...matchPrefixes].some(p => tag === `env:${p}` || tag === p);
         });
         if (tagMatch) return true;
 
-        // Match 2: hostname starts with the environment ID
-        // e.g., envId="bayada" matches "bayada-prod-mongo-1"
-        // e.g., envId="ck" matches "ck-prod-mongo-1", "ck-1005-alb-..."
+        // Match 2: hostname starts with any matching prefix
         const name = (host.name || '').toLowerCase();
-        if (name.startsWith(envId + '-') || name === envId) return true;
+        for (const prefix of matchPrefixes) {
+          if (name.startsWith(prefix + '-') || name === prefix) return true;
+        }
 
         return false;
       });
