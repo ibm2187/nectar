@@ -1,13 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
-<script>
-  // Apply saved theme immediately to prevent flash
-  (function() {
-    var t = localStorage.getItem('nectar-theme');
-    if (t !== 'light') document.documentElement.classList.add('dark');
-  })();
-</script>
 <head>
+  <script>
+    // Apply saved theme immediately to prevent flash
+    (function() {
+      var t = localStorage.getItem('nectar-theme');
+      if (t !== 'light') document.documentElement.classList.add('dark');
+    })();
+  </script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
