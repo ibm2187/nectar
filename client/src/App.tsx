@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { useEffect, useRef } from 'react'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { AppShell } from './components/layout/AppShell'
+import { HomePage } from './features/home/HomePage'
 import { ReleasesPage } from './features/releases/ReleasesPage'
 import { ReleaseDetail } from './features/releases/ReleaseDetail'
 import { FeaturesPage } from './features/features/FeaturesPage'
@@ -74,7 +75,8 @@ export default function App() {
               <AppShell />
             </AuthGuard>
           }>
-            <Route path="/" element={<PermissionGuard permKey="releases"><ReleasesPage /></PermissionGuard>} />
+            <Route path="/" element={<HomePage />} />
+            <Route path="/releases" element={<PermissionGuard permKey="releases"><ReleasesPage /></PermissionGuard>} />
             <Route path="/features" element={<PermissionGuard permKey="features"><FeaturesPage /></PermissionGuard>} />
             <Route path="/integrations" element={<PermissionGuard permKey="integrations"><IntegrationsPage /></PermissionGuard>} />
             <Route path="/releases/:key" element={<PermissionGuard permKey="releases"><ReleaseDetail /></PermissionGuard>} />

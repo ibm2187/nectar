@@ -54,9 +54,6 @@ module.exports = {
       cherryPick: null,
       ci: null,
       jiraProject: 'DEV',
-      // BlueSummit releases share JIRA version numbers with webplatform.
-      // Tickets from DEV project fixVersions like "4.2.3" apply to both repos.
-      sharesVersionsWith: 'webplatform',
       risk: {},
     },
   ],

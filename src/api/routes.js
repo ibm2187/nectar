@@ -65,10 +65,120 @@ module.exports = function createRoutes(services, config) {
     res.json(releases.active());
   });
 
+  // Home dashboard — overdue + upcoming 2 weeks of releases with tickets,
+  // optionally filtered by person and role view.
+  router.get('/releases/home', (req, res) => {
+    const { view, person } = req.query;
+    const today = new Date().toISOString().slice(0, 10);
+    const twoWeeksOut = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    let list = releases.list();
+    // Exclude done/archived
+    list = list.filter(r => r.state !== 'done' && !r.jiraArchived);
+    // Include: overdue (past release date) OR upcoming (within 2 weeks) OR no date (unscheduled active)
+    list = list.filter(r => {
+      if (!r.jiraReleaseDate) return true; // unscheduled active
+      if (r.jiraReleaseDate < today) return true; // overdue
+      if (r.jiraReleaseDate <= twoWeeksOut) return true; // upcoming
+      return false;
+    });
+
+    // Sort: overdue first, then by date
+    list.sort((a, b) => {
+      const aDate = a.jiraReleaseDate || 'zzzz';
+      const bDate = b.jiraReleaseDate || 'zzzz';
+      return aDate.localeCompare(bDate);
+    });
+
+    // Annotate with effective status
+    const environments = customerStore.listEnvironments();
+    const annotated = annotateReleases(list, environments);
+
+    // Build response with ticket filtering per view/person
+    let result = annotated.map(release => {
+      let tickets = release.tickets || [];
+
+      // Filter tickets by person + view role
+      if (person && view && view !== 'pm') {
+        const personLower = person.toLowerCase();
+        tickets = tickets.filter(t => {
+          switch (view) {
+            case 'dev':
+              return t.assignee && t.assignee.toLowerCase() === personLower;
+            case 'qa':
+              return t.qaAssignee && t.qaAssignee.toLowerCase() === personLower;
+            default:
+              return true;
+          }
+        });
+      }
+
+      return {
+        ...release,
+        tickets,
+        ticketCount: tickets.length,
+        totalTicketCount: (release.tickets || []).length,
+        zohoTicketCount: (release.zohoTickets || []).length,
+        zohoTickets: release.zohoTickets || [],
+        isOverdue: release.jiraReleaseDate && release.jiraReleaseDate < today,
+      };
+    });
+
+    // When filtering by person in dev/qa view, hide releases with 0 matching tickets
+    if (person && view && (view === 'dev' || view === 'qa')) {
+      result = result.filter(r => r.ticketCount > 0);
+    }
+
+    res.json(result);
+  });
+
   router.get('/releases/:version', (req, res) => {
     const release = releases.get(req.params.version);
     if (!release) return res.status(404).json({ error: 'Release not found' });
     res.json(release);
+  });
+
+  // Customer impact — Zoho tickets grouped by customer/department
+  router.get('/releases/:version/customer-impact', (req, res) => {
+    const release = releases.get(req.params.version);
+    if (!release) return res.status(404).json({ error: 'Release not found' });
+
+    const zohoTickets = release.zohoTickets || [];
+    const zohoByJiraKey = release.zohoByJiraKey || {};
+
+    // Group by department (≈ customer)
+    const byDepartment = {};
+    for (const ticket of zohoTickets) {
+      const dept = ticket.departmentId || 'unknown';
+      if (!byDepartment[dept]) byDepartment[dept] = [];
+      byDepartment[dept].push(ticket);
+    }
+
+    // Map department IDs to customer names using customerStore
+    const deptMap = {};
+    if (customerStore) {
+      const customers = customerStore.listCustomers ? customerStore.listCustomers() : [];
+      for (const c of customers) {
+        // Department IDs may be stored on customer — build mapping
+        if (c.zohoDepartmentId) deptMap[c.zohoDepartmentId] = c.name;
+      }
+    }
+
+    const groups = Object.entries(byDepartment).map(([deptId, tickets]) => ({
+      departmentId: deptId,
+      customerName: deptMap[deptId] || null,
+      tickets,
+      count: tickets.length,
+    }));
+
+    res.json({
+      version: release.version,
+      repo: release.repo,
+      totalZohoTickets: zohoTickets.length,
+      zohoSyncedAt: release.zohoSyncedAt || null,
+      byJiraKey: zohoByJiraKey,
+      byCustomer: groups,
+    });
   });
 
   router.post('/releases', (req, res) => {
@@ -652,6 +762,54 @@ module.exports = function createRoutes(services, config) {
 
   router.post('/jira/sync', asyncHandler(async (req, res) => {
     const results = await jiraSync.run();
+    res.json(results);
+  }));
+
+  // ── People (extracted from synced JIRA tickets) ──────
+
+  router.get('/people', (req, res) => {
+    const people = new Map(); // name → { name, roles: Set }
+    const allReleases = releases.list();
+    for (const release of allReleases) {
+      for (const ticket of (release.tickets || [])) {
+        if (ticket.assignee) {
+          const p = people.get(ticket.assignee) || { name: ticket.assignee, roles: new Set() };
+          p.roles.add('dev');
+          people.set(ticket.assignee, p);
+        }
+        if (ticket.reporter) {
+          const p = people.get(ticket.reporter) || { name: ticket.reporter, roles: new Set() };
+          p.roles.add('reporter');
+          people.set(ticket.reporter, p);
+        }
+        if (ticket.qaAssignee) {
+          const p = people.get(ticket.qaAssignee) || { name: ticket.qaAssignee, roles: new Set() };
+          p.roles.add('qa');
+          people.set(ticket.qaAssignee, p);
+        }
+        if (ticket.productAssignee) {
+          const p = people.get(ticket.productAssignee) || { name: ticket.productAssignee, roles: new Set() };
+          p.roles.add('pm');
+          people.set(ticket.productAssignee, p);
+        }
+      }
+    }
+    const result = Array.from(people.values())
+      .map(p => ({ name: p.name, roles: Array.from(p.roles) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    res.json(result);
+  });
+
+  // ── Zoho Sync ─────────────────────────────────────────
+
+  router.get('/zoho/status', (req, res) => {
+    if (!services.zohoSync) return res.json({ configured: false });
+    res.json(services.zohoSync.getStatus());
+  });
+
+  router.post('/zoho/sync', asyncHandler(async (req, res) => {
+    if (!services.zohoSync) return res.status(503).json({ error: 'Zoho sync not configured' });
+    const results = await services.zohoSync.run();
     res.json(results);
   }));
 
@@ -1665,6 +1823,15 @@ module.exports = function createRoutes(services, config) {
         { key: 'DATADOG_APP_KEY_ID', label: 'App Key ID' },
       ],
     },
+    zoho: {
+      label: 'Zoho Desk',
+      vars: [
+        { key: 'ZOHO_DESK_ORG_ID', label: 'Org ID', secret: false },
+        { key: 'ZOHO_DESK_CLIENT_ID', label: 'OAuth Client ID', secret: false },
+        { key: 'ZOHO_DESK_CLIENT_SECRET', label: 'OAuth Client Secret', secret: true },
+        { key: 'ZOHO_DESK_REFRESH_TOKEN', label: 'OAuth Refresh Token', secret: true },
+      ],
+    },
   };
 
   /** Read .env file into a Map of key → value */
@@ -1895,6 +2062,14 @@ module.exports = function createRoutes(services, config) {
         case 'datadog': {
           if (!datadog || !datadog.isConfigured()) throw new Error('Datadog is not configured');
           result = await datadog.testConnection();
+          break;
+        }
+        case 'zoho': {
+          const zohoClient = services.zoho;
+          if (!zohoClient || !zohoClient.isConfigured()) throw new Error('Zoho Desk is not configured');
+          // Test by listing 1 ticket — proves OAuth + org ID are valid
+          const tickets = await zohoClient.listTickets({ limit: 1 });
+          result = { ok: true, detail: `Connected to Zoho Desk (org ${zohoClient.orgId})` };
           break;
         }
         default:

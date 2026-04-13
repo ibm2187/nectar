@@ -65,6 +65,10 @@ const jenkins = new JenkinsClient(config);
 const SlackNotifier = require('./integrations/slack');
 const slack = new SlackNotifier(config);
 
+const ZohoClient = require('./integrations/zoho');
+const zoho = new ZohoClient();
+if (zoho.isConfigured()) log.info('Zoho Desk client configured');
+
 const DatadogClient = require('./integrations/datadog');
 const datadog = new DatadogClient();
 if (datadog.isConfigured()) log.info('Datadog client configured');
@@ -98,6 +102,9 @@ const jiraSync = new JiraSync(releases, jira, config);
 
 const ReleaseTruth = require('./core/release-truth');
 const releaseTruth = new ReleaseTruth(releases, repoManager, github, jira, config);
+
+const ZohoSync = require('./core/zoho-sync');
+const zohoSync = new ZohoSync(releases, zoho, config);
 
 
 const CustomerStore = require('./core/customer-store');
@@ -168,6 +175,7 @@ const services = {
   customerStore, webplatformScanner, envPoller, themeConfig,
   apiKeys, taskQueue, userStore,
   datadog, datadogPoller,
+  zoho, zohoSync,
 };
 const webServer = createWebServer(services, config);
 
@@ -185,6 +193,9 @@ const webServer = createWebServer(services, config);
 
   // Start git discovery (cross-references JIRA with git branches)
   discovery.start();
+
+  // Start Zoho sync (finds Zoho tickets linked to JIRA issues)
+  zohoSync.start();
 
   // Run initial webplatform scan to seed customers/environments
   try {

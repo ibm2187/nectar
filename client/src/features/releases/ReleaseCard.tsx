@@ -1,5 +1,6 @@
 import { Card, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
+import { ZohoImpactBadge } from './CustomerImpact'
 import { timeAgo, riskLabel, cn } from '../../lib/utils'
 import type { Release } from '../../api/client'
 
@@ -43,6 +44,7 @@ export function ReleaseCard({ release: r, onClick }: ReleaseCardProps) {
               CI: {r.ci.status}
             </Badge>
           )}
+          <ZohoImpactBadge count={(r as any).zohoTickets?.length || 0} />
         </div>
         <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
           {r.tickets.length > 0 && (

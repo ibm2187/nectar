@@ -21,7 +21,7 @@
 
 const NECTAR_URL = process.argv.includes('--url')
   ? process.argv[process.argv.indexOf('--url') + 1]
-  : 'http://localhost:4000/mcp';
+  : (process.env.NECTAR_MCP_URL || 'https://nectar.vivtechnologies.com/mcp');
 
 const AUTH_TOKEN = process.argv.includes('--token')
   ? process.argv[process.argv.indexOf('--token') + 1]
@@ -61,6 +61,7 @@ async function forwardToHttp(msg) {
       method: 'POST',
       headers,
       body: JSON.stringify(msg),
+      signal: AbortSignal.timeout(30000),
     });
 
     const contentType = res.headers.get('content-type') || '';
@@ -68,6 +69,10 @@ async function forwardToHttp(msg) {
     if (!res.ok) {
       const text = await res.text();
       process.stderr.write(`[nectar-bridge] HTTP ${res.status}: ${text.slice(0, 200)}\n`);
+      if (msg.id != null) {
+        const errResp = JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: `Nectar HTTP ${res.status}: ${text.slice(0, 100)}` } });
+        process.stdout.write(errResp + '\n');
+      }
       return;
     }
     process.stderr.write(`[nectar-bridge] << HTTP ${res.status} (${contentType})\n`);
@@ -91,7 +96,11 @@ async function forwardToHttp(msg) {
       }
     }
   } catch (err) {
-    process.stderr.write(`Nectar bridge error: ${err.message}\n`);
+    process.stderr.write(`[nectar-bridge] error: ${err.message}\n`);
+    if (msg.id != null) {
+      const errResp = JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: `Nectar bridge error: ${err.message}` } });
+      process.stdout.write(errResp + '\n');
+    }
   }
 }
 
