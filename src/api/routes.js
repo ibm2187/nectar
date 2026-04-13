@@ -920,6 +920,41 @@ module.exports = function createRoutes(services, config) {
   }));
 
   /**
+   * GET /api/datadog/hosts/:envTag — hosts filtered by environment tag.
+   * Returns hosts whose tags_by_source contain a matching env: tag.
+   * The envTag param is matched against tags like "env:ck-production", "env:bayada".
+   */
+  router.get('/datadog/hosts/:envTag', asyncHandler(async (req, res) => {
+    if (!datadog || !datadog.isConfigured()) {
+      return res.json({ hosts: [], configured: false });
+    }
+    try {
+      const data = await datadog.getHosts();
+      const envTag = req.params.envTag.toLowerCase();
+      const allHosts = data.host_list || [];
+      const filtered = allHosts.filter(host => {
+        const tagsBySource = host.tags_by_source || {};
+        const allTags = Object.values(tagsBySource).flat();
+        return allTags.some(t => {
+          const tag = (t || '').toLowerCase();
+          return tag === `env:${envTag}` || tag === envTag;
+        });
+      });
+      const mapped = filtered.map(host => ({
+        name: host.name || host.host_name || '',
+        cpu: host.metrics?.cpu ?? null,
+        load: host.metrics?.load ?? null,
+        apps: host.apps || [],
+        envTags: (Object.values(host.tags_by_source || {}).flat() || [])
+          .filter(t => (t || '').startsWith('env:')),
+      }));
+      res.json({ hosts: mapped, total: mapped.length, configured: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message, configured: true });
+    }
+  }));
+
+  /**
    * POST /api/admin/datadog/backfill — iterate through deployments within
    * Datadog's retention window and backfill impact data. Rate-limited.
    */

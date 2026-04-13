@@ -6,7 +6,7 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { cn, timeAgo } from '../../lib/utils'
 import { apiFetch } from '../../api/client'
-import type { HealthOverview, HealthCustomer, HealthEnvironment, HealthStatus, HealthCheck, DatadogAlert, DatadogAlertsResponse } from '../../api/client'
+import type { HealthOverview, HealthCustomer, HealthEnvironment, HealthStatus, HealthCheck, DatadogAlert, DatadogAlertsResponse, DatadogHost } from '../../api/client'
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -115,6 +115,7 @@ export function HealthDashboard() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [alerts, setAlerts] = useState<DatadogAlert[]>([])
   const [alertsExpanded, setAlertsExpanded] = useState(false)
+  const [allHosts, setAllHosts] = useState<DatadogHost[]>([])
 
   const fetchData = useCallback(async () => {
     try {
@@ -139,14 +140,56 @@ export function HealthDashboard() {
     }
   }, [])
 
+  const fetchHosts = useCallback(async () => {
+    try {
+      const result = await apiFetch<{ hosts: Array<{ name: string; metrics: { cpu?: number; load?: number }; apps: string[]; tags_by_source: Record<string, string[]> }>; configured: boolean }>('/datadog/hosts')
+      if (result.configured && result.hosts) {
+        const mapped: DatadogHost[] = result.hosts.map(h => ({
+          name: h.name || '',
+          cpu: h.metrics?.cpu ?? null,
+          load: h.metrics?.load ?? null,
+          apps: h.apps || [],
+          envTags: (Object.values(h.tags_by_source || {}).flat() || [])
+            .filter(t => (t || '').startsWith('env:')),
+        }))
+        setAllHosts(mapped)
+      }
+    } catch {
+      // Host data is optional
+    }
+  }, [])
+
+  // Build a map of envId -> average CPU from all hosts
+  const envCpuMap = useMemo(() => {
+    const map: Record<string, { avgCpu: number; hostCount: number }> = {}
+    if (allHosts.length === 0) return map
+
+    for (const host of allHosts) {
+      if (host.cpu === null) continue
+      for (const tag of host.envTags) {
+        const envId = tag.replace('env:', '')
+        if (!map[envId]) map[envId] = { avgCpu: 0, hostCount: 0 }
+        map[envId].avgCpu += host.cpu
+        map[envId].hostCount += 1
+      }
+    }
+    // Convert sums to averages
+    for (const key of Object.keys(map)) {
+      map[key].avgCpu = map[key].avgCpu / map[key].hostCount
+    }
+    return map
+  }, [allHosts])
+
   // Initial fetch + auto-refresh
   useEffect(() => {
     fetchData()
     fetchAlerts()
+    fetchHosts()
     const timer = setInterval(fetchData, REFRESH_INTERVAL_MS)
     const alertTimer = setInterval(fetchAlerts, REFRESH_INTERVAL_MS)
-    return () => { clearInterval(timer); clearInterval(alertTimer) }
-  }, [fetchData, fetchAlerts])
+    const hostTimer = setInterval(fetchHosts, REFRESH_INTERVAL_MS)
+    return () => { clearInterval(timer); clearInterval(alertTimer); clearInterval(hostTimer) }
+  }, [fetchData, fetchAlerts, fetchHosts])
 
   // Flatten, filter, and sort cards
   const cards = useMemo(() => {
@@ -323,6 +366,7 @@ export function HealthDashboard() {
             <EnvironmentCard
               key={card.env.id}
               card={card}
+              cpuInfo={envCpuMap[card.env.id] || envCpuMap[card.env.name] || null}
               onClick={() => navigate(`/health/${card.env.id}`)}
             />
           ))}
@@ -334,7 +378,7 @@ export function HealthDashboard() {
 
 // ── EnvironmentCard ─────────────────────────────────────────
 
-function EnvironmentCard({ card, onClick }: { card: EnvCard; onClick: () => void }) {
+function EnvironmentCard({ card, cpuInfo, onClick }: { card: EnvCard; cpuInfo: { avgCpu: number; hostCount: number } | null; onClick: () => void }) {
   const { env, customerName, status } = card
   const cfg = STATUS_CONFIG[status]
   const checks = getAllChecks(env)
@@ -344,6 +388,12 @@ function EnvironmentCard({ card, onClick }: { card: EnvCard; onClick: () => void
   const displayName = env.franchiseDisplayName
     ? `${customerName} - ${env.franchiseDisplayName}`
     : customerName
+
+  const cpuColorClass = (cpu: number): string => {
+    if (cpu < 50) return 'text-green-400'
+    if (cpu < 80) return 'text-yellow-400'
+    return 'text-red-400'
+  }
 
   return (
     <Card className="hover:border-accent/50 transition-colors">
@@ -362,9 +412,16 @@ function EnvironmentCard({ card, onClick }: { card: EnvCard; onClick: () => void
               {env.currentVersion && <span className="ml-2">v{env.currentVersion}</span>}
             </p>
           </div>
-          <Badge variant={cfg.badgeVariant} className="shrink-0 text-xs">
-            {cfg.label}
-          </Badge>
+          <div className="flex items-center gap-2 shrink-0">
+            {cpuInfo && (
+              <span className={cn('text-xs font-mono', cpuColorClass(cpuInfo.avgCpu))}>
+                CPU: {Math.round(cpuInfo.avgCpu)}% avg
+              </span>
+            )}
+            <Badge variant={cfg.badgeVariant} className="shrink-0 text-xs">
+              {cfg.label}
+            </Badge>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="pt-0 space-y-3">

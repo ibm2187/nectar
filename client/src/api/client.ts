@@ -334,6 +334,20 @@ export interface DatadogAlertsResponse {
   configured: boolean
 }
 
+export interface DatadogHost {
+  name: string
+  cpu: number | null
+  load: number | null
+  apps: string[]
+  envTags: string[]
+}
+
+export interface DatadogHostsResponse {
+  hosts: DatadogHost[]
+  total: number
+  configured: boolean
+}
+
 export interface DatadogImpactMetric {
   before: number | null
   after: number | null

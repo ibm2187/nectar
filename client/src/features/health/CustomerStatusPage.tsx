@@ -5,7 +5,7 @@ import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { cn, timeAgo } from '../../lib/utils'
 import { apiFetch } from '../../api/client'
-import type { CustomerHealthResponse, HealthEnvironment, HealthStatus, HealthCheck, DatadogAlert, DatadogAlertsResponse, EnvironmentDeployment, EnvironmentDeploymentsResponse } from '../../api/client'
+import type { CustomerHealthResponse, HealthEnvironment, HealthStatus, HealthCheck, DatadogAlert, DatadogAlertsResponse, EnvironmentDeployment, EnvironmentDeploymentsResponse, DatadogHost, DatadogHostsResponse } from '../../api/client'
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -65,6 +65,24 @@ const deltaIndicator = (deltaPercent: number | null | undefined): { icon: string
 const formatErrorRate = (val: number | null): string => val !== null ? `${val.toFixed(1)}%` : '--'
 const formatLatency = (val: number | null): string => val !== null ? `${Math.round(val)}ms` : '--'
 const formatThroughput = (val: number | null): string => val !== null ? `${Math.round(val)}/s` : '--'
+
+const cpuColorClass = (cpu: number | null): string => {
+  if (cpu === null) return 'text-muted-foreground'
+  if (cpu < 50) return 'text-green-400'
+  if (cpu < 80) return 'text-yellow-400'
+  return 'text-red-400'
+}
+
+/** Shorten host names: strip common AWS/cloud prefixes, truncate long names */
+const shortenHostName = (name: string): string => {
+  // Strip common prefixes like "ip-10-0-1-234."
+  let short = name.replace(/^ip-[\d-]+\./, '')
+  // Strip common domain suffixes
+  short = short.replace(/\.ec2\.internal$/, '').replace(/\.compute\.internal$/, '')
+  // If still very long (e.g. AWS instance IDs), truncate with ellipsis
+  if (short.length > 40) short = short.slice(0, 37) + '...'
+  return short || name
+}
 
 const overallBanner = (status: HealthStatus): { text: string; className: string } => {
   switch (status) {
@@ -295,6 +313,8 @@ function EnvironmentSection({ env, showDeployments = false }: { env: HealthEnvir
     : tierLabel
 
   const [deployments, setDeployments] = useState<EnvironmentDeployment[]>([])
+  const [hosts, setHosts] = useState<DatadogHost[]>([])
+  const [infraExpanded, setInfraExpanded] = useState(false)
 
   useEffect(() => {
     if (!showDeployments) return
@@ -302,6 +322,12 @@ function EnvironmentSection({ env, showDeployments = false }: { env: HealthEnvir
       .then(res => setDeployments(res.deployments))
       .catch(() => {})
   }, [env.id, showDeployments])
+
+  useEffect(() => {
+    apiFetch<DatadogHostsResponse>(`/datadog/hosts/${env.id}`)
+      .then(res => { if (res.configured) setHosts(res.hosts) })
+      .catch(() => {})
+  }, [env.id])
 
   const statusBadge = (): { label: string; variant: 'success' | 'warning' | 'destructive' | 'secondary' } => {
     switch (status) {
@@ -360,6 +386,49 @@ function EnvironmentSection({ env, showDeployments = false }: { env: HealthEnvir
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">No health data available for this environment.</p>
+        )}
+
+        {/* Infrastructure hosts */}
+        {hosts.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-border/30">
+            <button
+              onClick={() => setInfraExpanded(!infraExpanded)}
+              className="flex items-center gap-2 text-sm font-medium mb-2 hover:text-foreground transition-colors w-full text-left"
+            >
+              <span className="text-xs text-muted-foreground">{infraExpanded ? '\u25BC' : '\u25B6'}</span>
+              Infrastructure ({hosts.length} host{hosts.length !== 1 ? 's' : ''})
+            </button>
+            {infraExpanded && (
+              <div className="space-y-1">
+                {hosts.map(host => (
+                  <div
+                    key={host.name}
+                    className="flex items-center gap-4 text-xs font-mono py-1 border-b border-border/20 last:border-0"
+                  >
+                    <span className="text-foreground truncate min-w-0 w-44" title={host.name}>
+                      {shortenHostName(host.name)}
+                    </span>
+                    <span className={cn('shrink-0', cpuColorClass(host.cpu))}>
+                      CPU: {host.cpu !== null ? `${Math.round(host.cpu)}%` : '--'}
+                    </span>
+                    <span className="text-muted-foreground shrink-0">
+                      Load: {host.load !== null ? host.load.toFixed(2) : '--'}
+                    </span>
+                    <div className="flex gap-1 ml-auto shrink-0">
+                      {host.apps.slice(0, 3).map(app => (
+                        <Badge key={app} variant="outline" className="text-[10px] px-1 py-0 font-sans">
+                          {app}
+                        </Badge>
+                      ))}
+                      {host.apps.length > 3 && (
+                        <span className="text-[10px] text-muted-foreground">+{host.apps.length - 3}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Recent Deployments */}
