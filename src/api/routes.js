@@ -19,7 +19,7 @@ const asyncHandler = (fn) => (req, res, next) => {
  * @param {object} config
  */
 module.exports = function createRoutes(services, config) {
-  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig, apiKeys, taskQueue, userStore } = services;
+  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig, apiKeys, taskQueue, userStore, datadog, datadogPoller } = services;
 
   // Nectar's own repo — used by the Issues page so users can file bugs/feedback.
   const NECTAR_REPO = 'mavencare/nectar';
@@ -162,6 +162,52 @@ module.exports = function createRoutes(services, config) {
       res.json(approvals.getStatus(req.params.version));
     } catch (err) {
       res.status(404).json({ error: err.message });
+    }
+  });
+
+  // ── Comments ──────────────────────────────────────────
+
+  router.get('/releases/:version/comments', (req, res) => {
+    try {
+      const release = releases.get(req.params.version);
+      if (!release) return res.status(404).json({ error: 'Release not found' });
+      const comments = (release.comments || []).slice().reverse(); // newest first
+      res.json(comments);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.post('/releases/:version/comments', (req, res) => {
+    try {
+      const { text } = req.body;
+      if (!text || !text.trim()) {
+        return res.status(400).json({ error: 'text is required' });
+      }
+      const user = (req.user && (req.user.email || req.user.name)) || 'anonymous';
+      const comment = releases.addComment(req.params.version, { text: text.trim(), user });
+      res.status(201).json(comment);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.delete('/releases/:version/comments/:commentId', (req, res) => {
+    try {
+      const user = (req.user && (req.user.email || req.user.name)) || 'anonymous';
+      const isUserAdmin = req.user && req.user.role === 'admin';
+      const release = releases.get(req.params.version);
+      if (!release) return res.status(404).json({ error: 'Release not found' });
+      const comment = (release.comments || []).find(c => c.id === req.params.commentId);
+      if (!comment) return res.status(404).json({ error: 'Comment not found' });
+      // Allow deletion if user is the author or an admin
+      if (comment.user !== user && !isUserAdmin) {
+        return res.status(403).json({ error: 'Only the comment author or an admin can delete this comment' });
+      }
+      releases.deleteComment(req.params.version, req.params.commentId, user);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
     }
   });
 
@@ -434,6 +480,29 @@ module.exports = function createRoutes(services, config) {
       },
       overallStatus: env.health?.status || (env.reachable ? 'healthy' : 'unreachable'),
     });
+  });
+
+  /**
+   * GET /api/health/env/:envId/deployments
+   * Returns the last 5 deployments for an environment with their datadogImpact data.
+   * Used by the per-environment status page to show recent deployment impact.
+   */
+  router.get('/health/env/:envId/deployments', (req, res) => {
+    const env = customerStore.listEnvironments().find(e => e.id === req.params.envId);
+    if (!env) return res.status(404).json({ error: 'Environment not found' });
+
+    const deployments = customerStore.listDeployments({ environmentId: env.id });
+    const recent = deployments.slice(0, 5).map(d => ({
+      id: d.id,
+      environmentId: d.environmentId,
+      customerId: d.customerId,
+      version: d.version,
+      previousVersion: d.previousVersion || null,
+      detectedAt: d.detectedAt,
+      datadogImpact: d.datadogImpact || null,
+    }));
+
+    res.json({ environmentId: env.id, deployments: recent });
   });
 
   // ── Feature flag aggregation — for the Features cleanup page ───
@@ -744,6 +813,180 @@ module.exports = function createRoutes(services, config) {
       tickets,
     });
   });
+
+  // ── Datadog ────────────────────────────────────────────
+
+  /**
+   * GET /api/datadog/monitors — all monitors with status, grouped by state.
+   */
+  router.get('/datadog/monitors', (req, res) => {
+    if (!datadogPoller) return res.status(503).json({ error: 'Datadog not available' });
+    res.json(datadogPoller.getMonitorsGrouped());
+  });
+
+  /**
+   * GET /api/datadog/monitors/:envTag — monitors for a specific environment.
+   */
+  router.get('/datadog/monitors/:envTag', (req, res) => {
+    if (!datadogPoller) return res.status(503).json({ error: 'Datadog not available' });
+    const monitors = datadogPoller.getMonitorsForEnv(req.params.envTag);
+    res.json({ envTag: req.params.envTag, monitors, total: monitors.length });
+  });
+
+  /**
+   * GET /api/datadog/alerts — recent alerts (last 24h by default, ?hours=N param).
+   * Optional ?env=<envId> to filter by environment.
+   */
+  router.get('/datadog/alerts', asyncHandler(async (req, res) => {
+    if (!datadog || !datadog.isConfigured()) {
+      return res.json({ events: [], configured: false });
+    }
+    const hours = parseInt(req.query.hours) || 24;
+    const now = Math.floor(Date.now() / 1000);
+    const from = now - (hours * 3600);
+    try {
+      const data = await datadog.getAlertEvents(from, now);
+      let events = data.events || [];
+
+      // Optional env filter — best-effort matching on tags
+      if (req.query.env) {
+        const envFilter = req.query.env.toLowerCase();
+        events = events.filter(e => {
+          const tags = (e.tags || []).join(' ').toLowerCase();
+          return tags.includes(envFilter) || tags.includes(`env:${envFilter}`);
+        });
+      }
+
+      res.json({
+        events: events.map(e => ({
+          id: e.id,
+          title: e.title,
+          text: e.text,
+          alertType: e.alert_type,
+          priority: e.priority,
+          source: e.source,
+          dateHappened: e.date_happened,
+          tags: e.tags || [],
+          url: e.url,
+        })),
+        total: events.length,
+        hours,
+        configured: true,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message, configured: true });
+    }
+  }));
+
+  /**
+   * GET /api/datadog/impact/:version — deployment impact data for a release.
+   * Returns impact data across all environments that deployed this version.
+   */
+  router.get('/datadog/impact/:version', (req, res) => {
+    const version = req.params.version;
+    const deployments = customerStore.listDeployments({ version });
+
+    const impacts = deployments.map(d => ({
+      deploymentId: d.id,
+      environmentId: d.environmentId,
+      customerId: d.customerId,
+      version: d.version,
+      previousVersion: d.previousVersion,
+      detectedAt: d.detectedAt,
+      datadogImpact: d.datadogImpact || null,
+    }));
+
+    res.json({
+      version,
+      deployments: impacts,
+      total: impacts.length,
+      withImpactData: impacts.filter(i => i.datadogImpact).length,
+    });
+  });
+
+  /**
+   * GET /api/datadog/hosts — infrastructure host list with metrics.
+   */
+  router.get('/datadog/hosts', asyncHandler(async (req, res) => {
+    if (!datadog || !datadog.isConfigured()) {
+      return res.json({ hosts: [], configured: false });
+    }
+    try {
+      const data = await datadog.getHosts(req.query.filter);
+      res.json({ hosts: data.host_list || [], total: data.total_matching || 0, configured: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message, configured: true });
+    }
+  }));
+
+  /**
+   * POST /api/admin/datadog/backfill — iterate through deployments within
+   * Datadog's retention window and backfill impact data. Rate-limited.
+   */
+  router.post('/admin/datadog/backfill', requireAdmin, asyncHandler(async (req, res) => {
+    if (!datadog || !datadog.isConfigured()) {
+      return res.status(400).json({ error: 'Datadog is not configured' });
+    }
+
+    const RETENTION_MONTHS = 15;
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - RETENTION_MONTHS);
+    const cutoffISO = cutoff.toISOString();
+
+    // Find deployments within retention that lack impact data
+    const allDeployments = customerStore.listDeployments({});
+    const eligible = allDeployments.filter(d =>
+      d.detectedAt >= cutoffISO && !d.datadogImpact
+    );
+
+    // Process in background with rate limiting (max 5 per minute to be safe)
+    let processed = 0;
+    let succeeded = 0;
+    let failed = 0;
+
+    // Process up to 50 at a time, then return progress
+    const batchSize = Math.min(eligible.length, 50);
+    const batch = eligible.slice(0, batchSize);
+
+    for (const deployment of batch) {
+      // Use environmentId as the Datadog env tag — matches how DD monitors are tagged
+      const envTag = `env:${deployment.environmentId}`;
+      log.info(`Backfill [${processed + 1}/${batchSize}]: ${deployment.environmentId} v${deployment.version} (${deployment.detectedAt.slice(0,16)}) tag=${envTag}`);
+      try {
+        const impact = await datadog.getDeploymentImpact(envTag, deployment.detectedAt);
+        log.info(`  → error: ${impact.errorRate.before} → ${impact.errorRate.after}, latency: ${impact.latencyP90.before} → ${impact.latencyP90.after}, throughput: ${impact.throughput.before} → ${impact.throughput.after}, alerts: ${impact.alertsTriggered}`);
+        deployment.datadogImpact = {
+          capturedAt: new Date().toISOString(),
+          window: impact.window,
+          errorRate: impact.errorRate,
+          latencyP90: impact.latencyP90,
+          throughput: impact.throughput,
+          alertsTriggered: impact.alertsTriggered,
+        };
+        succeeded++;
+      } catch (err) {
+        log.warn(`  → FAILED: ${err.message}`);
+        failed++;
+      }
+      processed++;
+
+      // Rate limit: pause 200ms between requests to stay well under 300/min
+      if (processed < batchSize) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    }
+
+    customerStore._debounceSave();
+
+    res.json({
+      ok: true,
+      totalEligible: eligible.length,
+      processed,
+      succeeded,
+      failed,
+      remaining: eligible.length - processed,
+    });
+  }));
 
   // ── Config (safe values exposed to frontend) ──────────
 
@@ -1341,6 +1584,15 @@ module.exports = function createRoutes(services, config) {
         { key: 'GAMMA_API_KEY', label: 'API Key', secret: true },
       ],
     },
+    datadog: {
+      label: 'Datadog',
+      vars: [
+        { key: 'DATADOG_API_KEY', label: 'API Key', secret: true },
+        { key: 'DATADOG_API_KEY_ID', label: 'API Key ID' },
+        { key: 'DATADOG_APP_KEY', label: 'App Key', secret: true },
+        { key: 'DATADOG_APP_KEY_ID', label: 'App Key ID' },
+      ],
+    },
   };
 
   /** Read .env file into a Map of key → value */
@@ -1566,6 +1818,11 @@ module.exports = function createRoutes(services, config) {
           const apiKey = process.env.GAMMA_API_KEY;
           if (!apiKey) throw new Error('Gamma API key not configured');
           result = { ok: true, detail: 'API key is set (no test endpoint available)' };
+          break;
+        }
+        case 'datadog': {
+          if (!datadog || !datadog.isConfigured()) throw new Error('Datadog is not configured');
+          result = await datadog.testConnection();
           break;
         }
         default:

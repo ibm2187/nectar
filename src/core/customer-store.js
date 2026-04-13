@@ -264,6 +264,14 @@ class CustomerStore extends EventEmitter {
     return updated;
   }
 
+  /**
+   * Set the DatadogClient instance so deployment impact can be captured
+   * automatically when version changes are detected.
+   */
+  setDatadogClient(datadogClient) {
+    this._datadogClient = datadogClient || null;
+  }
+
   // ── Deployments ─────────────────────────────────────
 
   _recordDeployment(env, previousVersion, source = 'api-poll') {
@@ -284,6 +292,27 @@ class CustomerStore extends EventEmitter {
       source,
     };
     this.deployments.push(deployment);
+
+    // Asynchronously capture Datadog deployment impact if configured.
+    // Fire-and-forget: failures are logged but do not block deployment recording.
+    if (this._datadogClient && this._datadogClient.isConfigured()) {
+      const envTag = `env:${env.customerId}`;
+      this._datadogClient.getDeploymentImpact(envTag, now)
+        .then(impact => {
+          deployment.datadogImpact = {
+            capturedAt: new Date().toISOString(),
+            window: impact.window,
+            errorRate: impact.errorRate,
+            latencyP90: impact.latencyP90,
+            throughput: impact.throughput,
+            alertsTriggered: impact.alertsTriggered,
+          };
+          this._debounceSave();
+        })
+        .catch(err => {
+          log.warn(`Datadog impact capture failed for ${deployment.id}: ${err.message}`);
+        });
+    }
 
     // Cap deployment history to keep file size reasonable
     if (this.deployments.length > 10000) {

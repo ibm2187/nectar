@@ -224,6 +224,12 @@ function createWebServer(services, config) {
   releases.on('deployment:updated', (release) =>
     broadcast({ type: 'release:updated', release })
   );
+  releases.on('comment:added', (release, comment) =>
+    broadcast({ type: 'comment:added', release, comment })
+  );
+  releases.on('comment:deleted', (release, commentId) =>
+    broadcast({ type: 'comment:deleted', release, commentId })
+  );
   releases.audit.on('entry', (entry) =>
     broadcast({ type: 'audit:entry', entry })
   );

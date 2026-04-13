@@ -132,6 +132,10 @@ export function connectWebSocket() {
       case 'release:transition':
         s.upsertRelease(msg.release)
         break
+      case 'comment:added':
+      case 'comment:deleted':
+        if (msg.release) s.upsertRelease(msg.release)
+        break
       case 'release:deleted':
         s.removeRelease(msg.version)
         break

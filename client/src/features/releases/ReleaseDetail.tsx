@@ -1,11 +1,12 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useWsStore } from '../../stores/wsStore'
+import { useAuthStore } from '../../stores/authStore'
 import { apiFetch } from '../../api/client'
-import type { AuditEntry, ValidationReport } from '../../api/client'
+import type { AuditEntry, ValidationReport, DatadogImpactResponse, ReleaseComment } from '../../api/client'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
+import { Card, CardContent } from '../../components/ui/card'
 import { timeAgo, cn } from '../../lib/utils'
 import { TruthView } from './TruthView'
 import { NectarLoader } from '../../components/NectarLoader'
@@ -75,6 +76,12 @@ export function ReleaseDetail() {
   const [taskLoading, setTaskLoading] = useState(false)
   const [taskError, setTaskError] = useState<string | null>(null)
   const [compareSelectorOpen, setCompareSelectorOpen] = useState(false)
+  const [impactData, setImpactData] = useState<DatadogImpactResponse | null>(null)
+  const [comments, setComments] = useState<ReleaseComment[]>([])
+  const [commentText, setCommentText] = useState('')
+  const [commentPosting, setCommentPosting] = useState(false)
+  const authUser = useAuthStore(s => s.user)
+  const ssoEnabled = useAuthStore(s => s.ssoEnabled)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
@@ -82,6 +89,53 @@ export function ReleaseDetail() {
       apiFetch<AuditEntry[]>(`/audit/${version}`).then(setAudit).catch(() => {})
     }
   }, [version, release?.updatedAt])
+
+  // Fetch comments for this release
+  useEffect(() => {
+    if (!version) return
+    apiFetch<ReleaseComment[]>(`/releases/${version}/comments`)
+      .then(setComments)
+      .catch(() => {})
+  }, [version, release?.updatedAt])
+
+  const postComment = useCallback(async () => {
+    if (!version || !commentText.trim() || commentPosting) return
+    setCommentPosting(true)
+    try {
+      const comment = await apiFetch<ReleaseComment>(`/releases/${version}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ text: commentText.trim() }),
+      })
+      setComments(prev => [comment, ...prev])
+      setCommentText('')
+    } catch {
+      // silently fail
+    }
+    setCommentPosting(false)
+  }, [version, commentText, commentPosting])
+
+  const deleteComment = useCallback(async (commentId: string) => {
+    if (!version) return
+    try {
+      await apiFetch(`/releases/${version}/comments/${commentId}`, {
+        method: 'DELETE',
+      })
+      setComments(prev => prev.filter(c => c.id !== commentId))
+    } catch {
+      // silently fail
+    }
+  }, [version])
+
+  const currentUserEmail = authUser?.email || null
+  const isAdmin = authUser?.role === 'admin' || !ssoEnabled
+
+  // Fetch Datadog deployment impact for this version
+  useEffect(() => {
+    if (!version) return
+    apiFetch<DatadogImpactResponse>(`/datadog/impact/${version}`)
+      .then(setImpactData)
+      .catch(() => {})
+  }, [version])
 
   // Check for existing tasks for this release
   useEffect(() => {
@@ -422,6 +476,49 @@ export function ReleaseDetail() {
         </Card>
       )}
 
+      {/* Comments — at the top for visibility */}
+      <CollapsibleSection title={`Comments${comments.length > 0 ? ` (${comments.length})` : ''}`} defaultOpen>
+        <div className="flex gap-2 mb-4">
+          <input
+            type="text"
+            className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            placeholder="Add a comment..."
+            value={commentText}
+            onChange={e => setCommentText(e.target.value)}
+            onKeyDown={e => {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') postComment()
+            }}
+            disabled={commentPosting}
+          />
+          <Button variant="outline" size="sm" className="text-xs h-9" onClick={postComment} disabled={!commentText.trim() || commentPosting}>
+            {commentPosting ? 'Posting...' : 'Post'}
+          </Button>
+        </div>
+        {comments.length === 0 ? (
+          <p className="text-sm text-muted-foreground italic">No comments yet. Add one to share context with your team.</p>
+        ) : (
+          <div className="space-y-3 max-h-80 overflow-auto">
+            {comments.map(comment => {
+              const canDelete = isAdmin || (currentUserEmail && comment.user === currentUserEmail)
+              return (
+                <div key={comment.id} className="flex items-start justify-between gap-2 py-2 border-b border-border/50 last:border-0">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="text-sm font-medium">{comment.user}</span>
+                      <span className="text-xs text-muted-foreground">{timeAgo(comment.createdAt)}</span>
+                    </div>
+                    <p className="text-sm text-foreground whitespace-pre-wrap break-words">{comment.text}</p>
+                  </div>
+                  {canDelete && (
+                    <button className="text-muted-foreground hover:text-destructive text-xs shrink-0 mt-1" onClick={() => deleteComment(comment.id)} title="Delete comment">x</button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </CollapsibleSection>
+
       {/* Truth view — JIRA + Git + PR reconciliation */}
       {release.repo && (
         <div className="mb-4">
@@ -429,69 +526,72 @@ export function ReleaseDetail() {
         </div>
       )}
 
+      {/* Deployment Impact */}
+      {impactData && impactData.total > 0 && (
+        <div className="rounded-lg border bg-card px-4 py-3 mb-4 flex items-center gap-2 text-sm text-muted-foreground">
+          <span>Deployed to <span className="font-medium text-foreground">{impactData.total}</span> environment{impactData.total !== 1 ? 's' : ''}</span>
+          {impactData.withImpactData > 0 && (() => {
+            const totalAlerts = impactData.deployments.reduce((sum, d) => sum + (d.datadogImpact?.alertsTriggered ?? 0), 0)
+            return (
+              <span>
+                &middot; <span className={cn('font-medium', totalAlerts > 0 ? 'text-red-400' : 'text-green-400')}>{totalAlerts}</span> alert{totalAlerts !== 1 ? 's' : ''} triggered
+              </span>
+            )
+          })()}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Approvals */}
-        <Card>
-          <CardHeader className="pb-3"><CardTitle className="text-base">Approvals</CardTitle></CardHeader>
-          <CardContent>
-            {release.approvals.length === 0 ? (
-              <p className="text-sm text-muted-foreground italic">No approvals</p>
-            ) : (
-              <div className="space-y-2">
-                {release.approvals.map(a => (
-                  <div key={a.role} className="flex items-center gap-2 text-sm">
-                    <Badge variant="success">{a.role}</Badge>
-                    <span className="text-muted-foreground">{a.user}</span>
-                    <span className="text-muted-foreground text-xs">{timeAgo(a.at)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Deployments */}
-        <Card>
-          <CardHeader className="pb-3"><CardTitle className="text-base">Deployments</CardTitle></CardHeader>
-          <CardContent>
-            {release.deployments.length === 0 ? (
-              <p className="text-sm text-muted-foreground italic">No deployments</p>
-            ) : (
-              <div className="space-y-2">
-                {release.deployments.map((d, i) => (
-                  <div key={i} className="flex items-center gap-2 text-sm">
-                    <span className="font-semibold">{d.customer}</span>
-                    <span className="text-muted-foreground">{d.env}</span>
-                    <Badge variant={d.status === 'deployed' ? 'success' : 'warning'}>{d.status}</Badge>
-                    <span className="text-muted-foreground text-xs">{timeAgo(d.at)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Audit Trail */}
-      <Card className="mt-4">
-        <CardHeader className="pb-3"><CardTitle className="text-base">Audit Trail</CardTitle></CardHeader>
-        <CardContent>
-          {audit.length === 0 ? (
-            <p className="text-sm text-muted-foreground italic">No audit entries</p>
+        <CollapsibleSection title={`Approvals (${release.approvals.length})`} defaultOpen={release.approvals.length > 0}>
+          {release.approvals.length === 0 ? (
+            <p className="text-sm text-muted-foreground italic">No approvals</p>
           ) : (
-            <div className="space-y-1 max-h-64 overflow-auto">
-              {audit.map(entry => (
-                <div key={entry.id} className="flex items-center gap-3 text-xs py-1.5 border-b border-border/50 last:border-0">
-                  <span className="text-muted-foreground w-16 shrink-0">{timeAgo(entry.at)}</span>
-                  <span className="font-mono text-primary">{entry.action}</span>
-                  {entry.user && <span className="text-muted-foreground">by {entry.user}</span>}
-                  <span className="text-muted-foreground truncate">{JSON.stringify(entry.detail)}</span>
+            <div className="space-y-2">
+              {release.approvals.map(a => (
+                <div key={a.role} className="flex items-center gap-2 text-sm">
+                  <Badge variant="success">{a.role}</Badge>
+                  <span className="text-muted-foreground">{a.user}</span>
+                  <span className="text-muted-foreground text-xs">{timeAgo(a.at)}</span>
                 </div>
               ))}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </CollapsibleSection>
+
+        <CollapsibleSection title={`Deployments (${release.deployments.length})`} defaultOpen={release.deployments.length > 0}>
+          {release.deployments.length === 0 ? (
+            <p className="text-sm text-muted-foreground italic">No deployments</p>
+          ) : (
+            <div className="space-y-2">
+              {release.deployments.map((d, i) => (
+                <div key={i} className="flex items-center gap-2 text-sm">
+                  <span className="font-semibold">{d.customer}</span>
+                  <span className="text-muted-foreground">{d.env}</span>
+                  <Badge variant={d.status === 'deployed' ? 'success' : 'warning'}>{d.status}</Badge>
+                  <span className="text-muted-foreground text-xs">{timeAgo(d.at)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CollapsibleSection>
+      </div>
+
+      <CollapsibleSection title={`Audit Trail (${audit.length})`} defaultOpen={false}>
+        {audit.length === 0 ? (
+          <p className="text-sm text-muted-foreground italic">No audit entries</p>
+        ) : (
+          <div className="space-y-1 max-h-64 overflow-auto">
+            {audit.map(entry => (
+              <div key={entry.id} className="flex items-center gap-3 text-xs py-1.5 border-b border-border/50 last:border-0">
+                <span className="text-muted-foreground w-16 shrink-0">{timeAgo(entry.at)}</span>
+                <span className="font-mono text-primary">{entry.action}</span>
+                {entry.user && <span className="text-muted-foreground">by {entry.user}</span>}
+                <span className="text-muted-foreground truncate">{JSON.stringify(entry.detail)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </CollapsibleSection>
 
       {/* Compare selector for presentation generation */}
       <CompareSelector
@@ -503,3 +603,25 @@ export function ReleaseDetail() {
     </div>
   )
 }
+
+function CollapsibleSection({ title, defaultOpen = true, children }: {
+  title: string
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <Card className="mb-4">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-accent/30 transition-colors rounded-t-lg"
+      >
+        <span className="text-sm font-semibold">{title}</span>
+        <span className="text-xs text-muted-foreground">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && <CardContent className="pt-0">{children}</CardContent>}
+    </Card>
+  )
+}
+

@@ -65,6 +65,12 @@ const jenkins = new JenkinsClient(config);
 const SlackNotifier = require('./integrations/slack');
 const slack = new SlackNotifier(config);
 
+const DatadogClient = require('./integrations/datadog');
+const datadog = new DatadogClient();
+if (datadog.isConfigured()) log.info('Datadog client configured');
+
+const DatadogPoller = require('./core/datadog-poller');
+const datadogPoller = new DatadogPoller(datadog);
 
 // ── Initialize core feature engines ─────────────────────
 const RiskAssessor = require('./core/risk');
@@ -96,6 +102,7 @@ const releaseTruth = new ReleaseTruth(releases, repoManager, github, jira, confi
 
 const CustomerStore = require('./core/customer-store');
 const customerStore = new CustomerStore();
+customerStore.setDatadogClient(datadog);
 
 const WebplatformScanner = require('./core/webplatform-scanner');
 const webplatformScanner = new WebplatformScanner(repoManager, config);
@@ -160,6 +167,7 @@ const services = {
   risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth,
   customerStore, webplatformScanner, envPoller, themeConfig,
   apiKeys, taskQueue, userStore,
+  datadog, datadogPoller,
 };
 const webServer = createWebServer(services, config);
 
@@ -198,6 +206,9 @@ const webServer = createWebServer(services, config);
 
   // Start environment version poller (hits /api/status/version on each env)
   envPoller.start();
+
+  // Start Datadog monitor poller (every 2 minutes, if configured)
+  datadogPoller.start();
 })();
 
 // ── Graceful shutdown ─────────────────────────────────────
@@ -207,6 +218,7 @@ function shutdown() {
   discovery.stop();
   cherryPickWatcher.stop();
   envPoller.stop();
+  datadogPoller.stop();
   slack.stop().catch(() => {});
   releases.flush();
   customerStore.flush();
