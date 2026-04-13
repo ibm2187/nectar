@@ -33,9 +33,9 @@ variable "vpc_id" {
 # 10.0.4.0/24 (us-east-1b), dedicated to nectar and other lightweight services.
 
 variable "instance_type" {
-  description = "EC2 instance type (t3.medium: 2 vCPU, 4 GB — headroom for Vite client build)"
+  description = "EC2 instance type (t3.large: 2 vCPU, 8 GB — Node peaks ~3.5 GB, needs headroom over 4 GB t3.medium which OOM-looped)"
   type        = string
-  default     = "t3.medium"
+  default     = "t3.large"
 }
 
 variable "ami_id" {
