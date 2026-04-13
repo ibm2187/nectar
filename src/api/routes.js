@@ -98,6 +98,13 @@ module.exports = function createRoutes(services, config) {
     let result = annotated.map(release => {
       let tickets = release.tickets || [];
 
+      // Enrich tickets with PR data from PR sync
+      const prsByJiraKey = release.prsByJiraKey || {};
+      tickets = tickets.map(t => ({
+        ...t,
+        prs: prsByJiraKey[t.key] || [],
+      }));
+
       // Filter tickets by person + view role
       if (person && view && view !== 'pm') {
         const personLower = person.toLowerCase();
@@ -799,6 +806,19 @@ module.exports = function createRoutes(services, config) {
       .sort((a, b) => a.name.localeCompare(b.name));
     res.json(result);
   });
+
+  // ── PR Sync ───────────────────────────────────────────
+
+  router.get('/pr/status', (req, res) => {
+    if (!services.prSync) return res.json({ configured: false });
+    res.json(services.prSync.getStatus());
+  });
+
+  router.post('/pr/sync', asyncHandler(async (req, res) => {
+    if (!services.prSync) return res.status(503).json({ error: 'PR sync not configured' });
+    const results = await services.prSync.run();
+    res.json(results);
+  }));
 
   // ── Zoho Sync ─────────────────────────────────────────
 

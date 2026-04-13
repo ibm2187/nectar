@@ -106,6 +106,9 @@ const releaseTruth = new ReleaseTruth(releases, repoManager, github, jira, confi
 const ZohoSync = require('./core/zoho-sync');
 const zohoSync = new ZohoSync(releases, zoho, config);
 
+const PrSync = require('./core/pr-sync');
+const prSync = new PrSync(releases, github, config);
+
 
 const CustomerStore = require('./core/customer-store');
 const customerStore = new CustomerStore();
@@ -176,6 +179,7 @@ const services = {
   apiKeys, taskQueue, userStore,
   datadog, datadogPoller,
   zoho, zohoSync,
+  prSync,
 };
 const webServer = createWebServer(services, config);
 
@@ -196,6 +200,9 @@ const webServer = createWebServer(services, config);
 
   // Start Zoho sync (finds Zoho tickets linked to JIRA issues)
   zohoSync.start();
+
+  // Start PR sync (finds GitHub PRs linked to JIRA issues)
+  prSync.start();
 
   // Run initial webplatform scan to seed customers/environments
   try {

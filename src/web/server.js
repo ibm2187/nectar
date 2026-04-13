@@ -270,6 +270,11 @@ function createWebServer(services, config) {
       broadcast({ type: 'zoho:sync-completed', results, releases: releases.list() })
     );
   }
+  if (services.prSync) {
+    services.prSync.on('sync:completed', (results) =>
+      broadcast({ type: 'pr:sync-completed', results, releases: releases.list() })
+    );
+  }
   if (envPoller) {
     envPoller.on('poll:completed', (results) =>
       broadcast({

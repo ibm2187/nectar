@@ -13,6 +13,7 @@ import { NectarLoader, NectarSpinner } from '../../components/NectarLoader'
 import { CompareSelector } from './CompareSelector'
 import type { CompareTarget } from './CompareSelector'
 import { SavedViews } from '../../components/SavedViews'
+import { PrDetailPanel, isCodeStatus, type PrInfo } from '../../components/PrDetailPanel'
 
 interface Props {
   repo: string
@@ -128,6 +129,7 @@ export function TruthView({ repo, version }: Props) {
   const [impact, setImpact] = useState<DeploymentImpactReport | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [prPanel, setPrPanel] = useState<{ jiraKey: string; summary: string; prs: PrInfo[] } | null>(null)
 
   async function loadTruth() {
     setLoading(true)
@@ -466,7 +468,7 @@ export function TruthView({ repo, version }: Props) {
                     </td>
                   </tr>
                 ) : (
-                  filtered.map(t => <TicketRow key={t.key} ticket={t} />)
+                  filtered.map(t => <TicketRow key={t.key} ticket={t} onClickPr={(prs) => setPrPanel({ jiraKey: t.key, summary: t.summary, prs })} />)
                 )}
               </tbody>
             </table>
@@ -572,6 +574,15 @@ export function TruthView({ repo, version }: Props) {
           })
         }}
       />
+
+      <PrDetailPanel
+        open={!!prPanel}
+        onClose={() => setPrPanel(null)}
+        jiraKey={prPanel?.jiraKey || ''}
+        summary={prPanel?.summary || ''}
+        prs={prPanel?.prs || []}
+        githubSearchUrl={prPanel ? `https://github.com/mavencare/${repo}/pulls?q=${prPanel.jiraKey}` : undefined}
+      />
     </div>
   )
 }
@@ -592,7 +603,7 @@ function SortHeader({
   )
 }
 
-function TicketRow({ ticket: t }: { ticket: VerifiedTicket }) {
+function TicketRow({ ticket: t, onClickPr }: { ticket: VerifiedTicket; onClickPr: (prs: PrInfo[]) => void }) {
   const info = HEALTH_INFO[t.health]
   // A ticket is a "missing plan" for this release if it appears in Target FixVersion
   // but NOT in the canonical fixVersions — meaning the plan says it should ship here,
@@ -644,7 +655,24 @@ function TicketRow({ ticket: t }: { ticket: VerifiedTicket }) {
 
       {/* JIRA Status */}
       <td className="px-3 py-2 align-top">
-        <span className="text-xs">{t.jiraStatus}</span>
+        {isCodeStatus(t.jiraStatus) ? (
+          <button
+            type="button"
+            onClick={() => onClickPr(t.pr ? [{
+              prNumber: t.pr!.prNumber,
+              prTitle: t.pr!.prTitle,
+              prAuthor: t.pr!.prAuthor,
+              prUrl: t.pr!.prUrl,
+              prCreatedAt: t.pr!.prCreatedAt,
+              status: 'open',
+            }] : [])}
+            className="text-xs text-primary hover:underline cursor-pointer"
+          >
+            {t.jiraStatus}
+          </button>
+        ) : (
+          <span className="text-xs">{t.jiraStatus}</span>
+        )}
       </td>
 
       {/* QA Assignee */}
@@ -655,14 +683,20 @@ function TicketRow({ ticket: t }: { ticket: VerifiedTicket }) {
       {/* Cherry-pick PR */}
       <td className="px-3 py-2 align-top hidden md:table-cell">
         {t.pr ? (
-          <a
-            href={t.pr.prUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary hover:underline text-xs"
+          <button
+            type="button"
+            onClick={() => onClickPr([{
+              prNumber: t.pr!.prNumber,
+              prTitle: t.pr!.prTitle,
+              prAuthor: t.pr!.prAuthor,
+              prUrl: t.pr!.prUrl,
+              prCreatedAt: t.pr!.prCreatedAt,
+              status: 'open',
+            }])}
+            className="text-primary hover:underline text-xs cursor-pointer"
           >
             #{t.pr.prNumber} (open)
-          </a>
+          </button>
         ) : (
           <span className="text-xs text-muted-foreground">—</span>
         )}

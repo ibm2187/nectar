@@ -8,6 +8,7 @@ import { Badge } from '../../components/ui/badge'
 import { cn } from '../../lib/utils'
 import { JiraLink } from '../../components/JiraLink'
 import { ZohoImpactBadge } from '../releases/CustomerImpact'
+import { PrDetailPanel, type PrInfo } from '../../components/PrDetailPanel'
 
 // ── Types ────────────────────────────────────────────────
 
@@ -107,6 +108,7 @@ export function HomePage() {
   const [people, setPeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [prPanel, setPrPanel] = useState<{ jiraKey: string; summary: string; prs: PrInfo[]; repo: string } | null>(null)
 
   // Fetch home data
   useEffect(() => {
@@ -254,6 +256,7 @@ export function HomePage() {
                   navigate={navigate}
                   collapsed={collapsed}
                   onToggle={toggleCollapse}
+                  onClickPr={(jiraKey, summary, prs, repo) => setPrPanel({ jiraKey, summary, prs, repo })}
                 />
               )}
               {upcoming.length > 0 && (
@@ -265,6 +268,7 @@ export function HomePage() {
                   navigate={navigate}
                   collapsed={collapsed}
                   onToggle={toggleCollapse}
+                  onClickPr={(jiraKey, summary, prs, repo) => setPrPanel({ jiraKey, summary, prs, repo })}
                 />
               )}
               {unscheduled.length > 0 && (
@@ -277,12 +281,22 @@ export function HomePage() {
                   navigate={navigate}
                   collapsed={collapsed}
                   onToggle={toggleCollapse}
+                  onClickPr={(jiraKey, summary, prs, repo) => setPrPanel({ jiraKey, summary, prs, repo })}
                 />
               )}
             </>
           )}
         </>
       )}
+
+      <PrDetailPanel
+        open={!!prPanel}
+        onClose={() => setPrPanel(null)}
+        jiraKey={prPanel?.jiraKey || ''}
+        summary={prPanel?.summary || ''}
+        prs={prPanel?.prs || []}
+        githubSearchUrl={prPanel ? `https://github.com/mavencare/${prPanel.repo || 'webplatform'}/pulls?q=${prPanel.jiraKey}` : undefined}
+      />
     </div>
   )
 }
@@ -290,7 +304,7 @@ export function HomePage() {
 // ── Release group ────────────────────────────────────────
 
 function ReleaseGroup({
-  title, titleColor, releases, view, person, navigate, collapsed, onToggle,
+  title, titleColor, releases, view, person, navigate, collapsed, onToggle, onClickPr,
 }: {
   title: string
   titleColor?: string
@@ -300,6 +314,7 @@ function ReleaseGroup({
   navigate: (path: string, opts?: any) => void
   collapsed: Set<string>
   onToggle: (id: string) => void
+  onClickPr: (jiraKey: string, summary: string, prs: PrInfo[], repo: string) => void
 }) {
   return (
     <div>
@@ -316,6 +331,7 @@ function ReleaseGroup({
             navigate={navigate}
             isCollapsed={collapsed.has(release.id)}
             onToggle={() => onToggle(release.id)}
+            onClickPr={onClickPr}
           />
         ))}
       </div>
@@ -326,7 +342,7 @@ function ReleaseGroup({
 // ── Release panel with collapsible tickets ───────────────
 
 function ReleasePanel({
-  release: r, view, person, navigate, isCollapsed, onToggle,
+  release: r, view, person, navigate, isCollapsed, onToggle, onClickPr,
 }: {
   release: HomeRelease
   view: HomeView
@@ -334,6 +350,7 @@ function ReleasePanel({
   navigate: (path: string, opts?: any) => void
   isCollapsed: boolean
   onToggle: () => void
+  onClickPr: (jiraKey: string, summary: string, prs: PrInfo[], repo: string) => void
 }) {
   const releaseKey = r.repo ? `${r.repo}:${r.version}` : r.version
   const dateInfo = r.jiraReleaseDate ? relativeDate(r.jiraReleaseDate) : null
@@ -395,6 +412,8 @@ function ReleasePanel({
           <table className="w-full text-sm table-fixed">
             <colgroup>
               <col style={{ width: '100px' }} />
+              <col style={{ width: '30px' }} />
+              <col style={{ width: '30px' }} />
               <col />
               <col style={{ width: '160px' }} />
               <col style={{ width: '130px' }} />
@@ -402,6 +421,8 @@ function ReleasePanel({
             <thead>
               <tr className="border-b border-border/20 text-left">
                 <th className="pl-4 pr-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Key</th>
+                <th className="px-0.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Cherry-Pick PRs">CPs</th>
+                <th className="px-0.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Original PRs">PRs</th>
                 <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Summary</th>
                 <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">Status</th>
                 <th className="px-2 pr-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">
@@ -410,36 +431,42 @@ function ReleasePanel({
               </tr>
             </thead>
             <tbody>
-              {r.tickets.slice(0, view === 'pm' ? 50 : 25).map((ticket: any) => (
-                <tr key={ticket.key} className="border-b border-border/10 hover:bg-accent/20 transition-colors">
-                  <td className="pl-4 pr-2 py-1.5 align-middle whitespace-nowrap">
-                    <JiraLink jiraKey={ticket.key} className="text-xs" />
-                  </td>
-                  <td className="px-2 py-1.5 align-middle">
-                    <div className="text-foreground truncate" title={ticket.summary}>{ticket.summary}</div>
-                  </td>
-                  <td className="px-2 py-1.5 align-middle text-right whitespace-nowrap">
-                    {ticket.jiraStatus && (
-                      <span className={cn(
-                        'inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium border',
-                        getJiraStatusColor(ticket.jiraStatus)
-                      )}>
-                        {ticket.jiraStatus}
+              {r.tickets.slice(0, view === 'pm' ? 50 : 25).map((ticket: any) => {
+                return (
+                  <tr key={ticket.key} className="border-b border-border/10 hover:bg-accent/20 transition-colors">
+                    <td className="pl-4 pr-2 py-1.5 align-middle whitespace-nowrap">
+                      <JiraLink jiraKey={ticket.key} className="text-xs" />
+                    </td>
+                    <PrCountCells
+                      prs={ticket.prs || []}
+                      onClick={() => onClickPr(ticket.key, ticket.summary, ticket.prs || [], r.repo || 'webplatform')}
+                    />
+                    <td className="px-2 py-1.5 align-middle">
+                      <div className="text-foreground truncate" title={ticket.summary}>{ticket.summary}</div>
+                    </td>
+                    <td className="px-2 py-1.5 align-middle text-right whitespace-nowrap">
+                      {ticket.jiraStatus && (
+                        <span className={cn(
+                          'inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium border',
+                          getJiraStatusColor(ticket.jiraStatus)
+                        )}>
+                          {ticket.jiraStatus}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-2 pr-4 py-1.5 align-middle text-right whitespace-nowrap">
+                      <span className="text-xs text-muted-foreground">
+                        {view === 'dev' ? (ticket.qaAssignee || '') :
+                         view === 'qa' ? (ticket.assignee || '') :
+                         (ticket.assignee || '')}
                       </span>
-                    )}
-                  </td>
-                  <td className="px-2 pr-4 py-1.5 align-middle text-right whitespace-nowrap">
-                    <span className="text-xs text-muted-foreground truncate">
-                      {view === 'dev' ? (ticket.qaAssignee || '') :
-                       view === 'qa' ? (ticket.assignee || '') :
-                       (ticket.assignee || '')}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                  </tr>
+                )
+              })}
               {r.tickets.length > (view === 'pm' ? 50 : 25) && (
                 <tr>
-                  <td colSpan={4} className="pl-4 py-2 text-xs text-muted-foreground">
+                  <td colSpan={6} className="pl-4 py-2 text-xs text-muted-foreground">
                     +{r.tickets.length - (view === 'pm' ? 50 : 25)} more tickets
                   </td>
                 </tr>
@@ -456,6 +483,44 @@ function ReleasePanel({
         </button>
       )}
     </Card>
+  )
+}
+
+// ── PR count cells (two columns: CPs and PRs) ───────────
+
+function PrCountCells({ prs, onClick }: { prs: PrInfo[]; onClick: () => void }) {
+  const cpCount = prs.filter(p => {
+    const b = p.baseBranch || ''
+    return b.startsWith('releases/') || b.startsWith('VIV/') || b.startsWith('release/')
+  }).length
+  const prCount = prs.filter(p => {
+    const b = p.baseBranch || ''
+    return b === 'master' || b === 'main' || b === 'develop'
+  }).length
+
+  return (
+    <>
+      <td className="px-0.5 py-1.5 align-middle text-center">
+        {cpCount > 0 ? (
+          <button type="button" onClick={(e) => { e.stopPropagation(); onClick() }}
+            className="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold bg-green-500/20 text-green-400 cursor-pointer hover:bg-green-500/30 transition-colors"
+            title={`${cpCount} cherry-pick PR${cpCount !== 1 ? 's' : ''}`}
+          >{cpCount}</button>
+        ) : (
+          <span className="text-[10px] text-muted-foreground/25">—</span>
+        )}
+      </td>
+      <td className="px-0.5 py-1.5 align-middle text-center">
+        {prCount > 0 ? (
+          <button type="button" onClick={(e) => { e.stopPropagation(); onClick() }}
+            className="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold bg-blue-500/20 text-blue-400 cursor-pointer hover:bg-blue-500/30 transition-colors"
+            title={`${prCount} original PR${prCount !== 1 ? 's' : ''}`}
+          >{prCount}</button>
+        ) : (
+          <span className="text-[10px] text-muted-foreground/25">—</span>
+        )}
+      </td>
+    </>
   )
 }
 
