@@ -179,11 +179,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       <div className="fixed inset-0 bg-black/50" onClick={onClose} />
 
       {/* Modal */}
-      <div className="fixed left-1/2 top-[20%] z-50 w-[95vw] max-w-lg -translate-x-1/2 rounded-lg border bg-background shadow-lg overflow-hidden">
+      <div className="fixed left-1/2 top-[15%] z-50 w-[95vw] max-w-2xl -translate-x-1/2 rounded-xl border border-border/60 bg-card shadow-2xl overflow-hidden">
         {/* Search input */}
-        <div className="flex items-center gap-3 border-b px-4 py-3">
+        <div className="flex items-center gap-3 border-b border-border/50 px-5 py-4">
           <svg
-            className="w-4 h-4 text-muted-foreground shrink-0"
+            className="w-5 h-5 text-muted-foreground shrink-0"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -202,7 +202,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             onChange={e => handleQueryChange(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search releases, tickets, environments..."
-            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            className="flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground/60 text-foreground"
           />
           {loading && (
             <div className="w-4 h-4 border-2 border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin" />
@@ -225,7 +225,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
           {grouped.map(group => (
             <div key={group.type}>
-              <div className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30">
+              <div className="px-5 py-2 text-[11px] font-semibold text-muted-foreground/70 uppercase tracking-widest">
                 {group.label}
               </div>
               {group.items.map(item => {
@@ -238,11 +238,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     onClick={() => handleSelect(item)}
                     onMouseEnter={() => setActiveIndex(idx)}
                     className={cn(
-                      "w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors",
-                      isActive ? "bg-accent text-accent-foreground" : "text-foreground hover:bg-accent/50"
+                      "w-full flex items-center gap-3 px-5 py-3 text-sm text-left transition-colors",
+                      isActive ? "bg-primary/10 text-foreground" : "text-foreground/80 hover:bg-accent/40"
                     )}
                   >
-                    <span className="shrink-0">{CATEGORY_ICONS[item.type]}</span>
+                    <span className="shrink-0 text-base">{CATEGORY_ICONS[item.type]}</span>
                     <ResultLabel item={item} />
                   </button>
                 )

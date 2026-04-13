@@ -35,17 +35,17 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
         )}
       </div>
       <div className="flex items-center gap-3">
-        {/* Search button */}
+        {/* Search bar — opens command palette */}
         <button
           type="button"
           onClick={onOpenSearch}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-          aria-label="Search (Cmd+K)"
-          title="Search (Cmd+K)"
+          className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border/50 bg-muted/30 text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors text-xs w-48 md:w-64"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
+          <span className="flex-1 text-left truncate">Search...</span>
+          <kbd className="hidden md:inline-flex items-center px-1.5 py-0.5 rounded bg-muted/50 border border-border/30 font-mono text-[10px]">⌘K</kbd>
         </button>
 
         {/* User info (only when SSO is enabled and authenticated) */}
