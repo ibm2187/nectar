@@ -41,26 +41,34 @@ const STATUS_STYLE: Record<EffectiveReleaseStatus, { bg: string; text: string; d
 // ── Shared helpers ─────────────────────────────────────
 
 function formatDateShort(iso: string) {
-  const d = new Date(iso)
+  // JIRA dates are "YYYY-MM-DD" — append T12:00 to prevent timezone shift
+  const d = new Date(iso.length === 10 ? iso + 'T12:00:00' : iso)
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+/** Parse a date-only string ("YYYY-MM-DD") as local, not UTC */
+function parseLocalDate(iso: string): Date {
+  return new Date(iso.length === 10 ? iso + 'T12:00:00' : iso)
+}
+
 function daysBetween(iso: string, now: Date): number {
-  const d = new Date(iso)
-  return Math.round((d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+  const d = parseLocalDate(iso)
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const rel = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  return Math.round((rel.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
 }
 
 function weekStart(iso: string): string {
-  const d = new Date(iso)
+  const d = parseLocalDate(iso)
   const day = d.getDay()
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1) // Monday start
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1)
   d.setDate(diff)
   d.setHours(0, 0, 0, 0)
-  return d.toISOString().slice(0, 10)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 function weekLabel(weekStartIso: string, now: Date): string {
-  const start = new Date(weekStartIso)
+  const start = parseLocalDate(weekStartIso)
   const end = new Date(start)
   end.setDate(end.getDate() + 6)
   const startStr = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
@@ -77,10 +85,8 @@ function weekLabel(weekStartIso: string, now: Date): string {
 }
 
 function dayLabel(iso: string, now: Date): string {
-  const d = new Date(iso)
-  const today = new Date(now)
-  today.setHours(0, 0, 0, 0)
-  const diff = Math.round((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+  const d = parseLocalDate(iso)
+  const diff = daysBetween(iso, now)
 
   const dateStr = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
   if (diff === 0) return `Today · ${dateStr}`
