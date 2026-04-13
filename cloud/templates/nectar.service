@@ -11,10 +11,13 @@ WorkingDirectory=/home/ubuntu/nectar
 ExecStartPre=/bin/bash /home/ubuntu/nectar/cloud/scripts/boot.sh
 ExecStart=/usr/bin/node /home/ubuntu/nectar/src/index.js
 Restart=on-failure
-RestartSec=10
+RestartSec=30
 StandardOutput=append:/home/ubuntu/nectar.log
 StandardError=append:/home/ubuntu/nectar.log
 Environment=NODE_ENV=production
+# Cap V8 old-space below instance RAM so a runaway allocation throws instead
+# of being OOM-killed by the kernel (seen looping every ~45s on t3.medium).
+Environment=NODE_OPTIONS=--max-old-space-size=6144
 
 # Grant boot.sh enough time to fetch the secret from AWS Secrets Manager
 # (runs as the ubuntu user via ExecStartPre — inherits User=ubuntu above)
