@@ -122,31 +122,9 @@ class Discovery extends EventEmitter {
       const existing = this.releases.get(version, name);
 
       if (!existing) {
-        // New release — check age if maxAge is set
-        if (maxAge > 0) {
-          try {
-            const dateStr = await this.repoManager.getBranchDate(name, branch);
-            const branchDate = new Date(dateStr);
-            const ageDays = (Date.now() - branchDate.getTime()) / (1000 * 60 * 60 * 24);
-            if (ageDays > maxAge) continue;
-          } catch {
-            // Can't determine age, include it
-          }
-        }
-
-        let cutFrom = null;
-        try {
-          cutFrom = await this.repoManager.getBranchHead(name, branch);
-        } catch { /* ok */ }
-
-        this.releases.create({
-          repo: name,
-          version,
-          branch,
-          cutFrom,
-          cutBy: 'discovery',
-        });
-        discovered++;
+        // Releases are only created by JIRA sync. Discovery only enriches
+        // existing releases with branch data. Skip unknown branches.
+        continue;
       } else if (!existing.branch) {
         // Existing release (likely created by JIRA sync) without a branch.
         // Discovery just confirmed the branch exists — fill it in.

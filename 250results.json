@@ -1,0 +1,1764 @@
+{
+    "_id": {
+        "rule_key": "noClientSignature",
+        "message": "No client signature."
+    },
+    "count": 228.0
+}
+{
+    "_id": {
+        "rule_key": "bookingsOverlap",
+        "message": "Client Overlap"
+    },
+    "count": 129.0
+}
+{
+    "_id": {
+        "rule_key": "billableDurationDiffersFromScheduledDuration",
+        "message": "Billable duration differs from scheduled duration by more than 60 minutes"
+    },
+    "count": 97.0
+}
+{
+    "_id": {
+        "rule_key": "noCaregiverSignature",
+        "message": "No caregiver signature."
+    },
+    "count": 84.0
+}
+{
+    "_id": {
+        "rule_key": "noCheckOut",
+        "message": "No Check-out on this visit"
+    },
+    "count": 76.0
+}
+{
+    "_id": {
+        "rule_key": "noTasksAssignedToVisit",
+        "message": "No Tasks Assigned to Visit"
+    },
+    "count": 56.0
+}
+{
+    "_id": {
+        "rule_key": "unresolvedExpenseReport",
+        "message": "Unresolved expense report attached to visit"
+    },
+    "count": 55.0
+}
+{
+    "_id": {
+        "rule_key": "noCheckIn",
+        "message": "No Check-in on this visit"
+    },
+    "count": 34.0
+}
+{
+    "_id": {
+        "rule_key": "caregiverOverlap",
+        "message": "Caregiver Overlap"
+    },
+    "count": 29.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 12 out of 12 visit tasks are incomplete."
+    },
+    "count": 27.0
+}
+{
+    "_id": {
+        "rule_key": "billableHoursExceedLimit",
+        "message": "Billable Hours exceed the limit"
+    },
+    "count": 12.0
+}
+{
+    "_id": {
+        "rule_key": "payableHoursExceedLimit",
+        "message": "Payable Hours exceed the limit"
+    },
+    "count": 12.0
+}
+{
+    "_id": {
+        "rule_key": "noCheckOut",
+        "message": "Back-to-back visits pending check-out from final visit"
+    },
+    "count": 12.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 8 out of 8 visit tasks are incomplete."
+    },
+    "count": 10.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 15 out of 15 visit tasks are incomplete."
+    },
+    "count": 10.0
+}
+{
+    "_id": {
+        "rule_key": "payableApprovedEndDateDiffersFromScheduledDate",
+        "message": "Payable approved end date differs from scheduled date (Previous Day)"
+    },
+    "count": 10.0
+}
+{
+    "_id": {
+        "rule_key": "billableDurationDiffersFromScheduledDuration",
+        "message": "Billable duration differs from scheduled duration"
+    },
+    "count": 10.0
+}
+{
+    "_id": {
+        "rule_key": "billableApprovedEndDateDiffersFromScheduledDate",
+        "message": "Billable approved end date differs from scheduled date (Previous Day)"
+    },
+    "count": 10.0
+}
+{
+    "_id": {
+        "rule_key": "payableHoursWithNoCaregiverRate",
+        "message": "Visit has payable hours but no caregiver rate"
+    },
+    "count": 9.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 11 out of 11 visit tasks are incomplete."
+    },
+    "count": 8.0
+}
+{
+    "_id": {
+        "rule_key": "missingEvvChangeReason",
+        "message": "Provide an EVV change reason for this past visit update to remain compliant."
+    },
+    "count": 8.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 10 out of 10 visit tasks are incomplete."
+    },
+    "count": 7.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 4 out of 4 visit tasks are incomplete."
+    },
+    "count": 6.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 2 out of 2 visit tasks are incomplete."
+    },
+    "count": 6.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 1 out of 1 visit tasks are incomplete."
+    },
+    "count": 5.0
+}
+{
+    "_id": {
+        "rule_key": "billableApprovedStartDateDiffersFromScheduledDate",
+        "message": "Billable approved start date differs from scheduled date (Previous Day)"
+    },
+    "count": 4.0
+}
+{
+    "_id": {
+        "rule_key": "payableApprovedStartDateDiffersFromScheduledDate",
+        "message": "Payable approved start date differs from scheduled date (Previous Day)"
+    },
+    "count": 4.0
+}
+{
+    "_id": {
+        "rule_key": "unresolvedExpenseReport",
+        "message": "Unresolved expense reports attached to visit"
+    },
+    "count": 4.0
+}
+{
+    "_id": {
+        "rule_key": "billableApprovedEndDateDiffersFromScheduledDate",
+        "message": "Billable approved end date differs from scheduled date (Next Day)"
+    },
+    "count": 4.0
+}
+{
+    "_id": {
+        "rule_key": "payableApprovedEndDateDiffersFromScheduledDate",
+        "message": "Payable approved end date differs from scheduled date (Next Day)"
+    },
+    "count": 4.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 14 out of 14 visit tasks are incomplete."
+    },
+    "count": 3.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 3 out of 3 visit tasks are incomplete."
+    },
+    "count": 3.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 6 out of 6 visit tasks are incomplete."
+    },
+    "count": 3.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 7 out of 7 visit tasks are incomplete."
+    },
+    "count": 2.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 5 out of 9 visit tasks are incomplete."
+    },
+    "count": 2.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 14 out of 15 visit tasks are incomplete."
+    },
+    "count": 2.0
+}
+{
+    "_id": {
+        "rule_key": "noEnterprisePartner",
+        "message": "No assigned payor"
+    },
+    "count": 2.0
+}
+{
+    "_id": {
+        "rule_key": "canceledWithNonZeroBill",
+        "message": "Cancelled visit has billable hours and a client rate"
+    },
+    "count": 2.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 17 out of 17 visit tasks are incomplete."
+    },
+    "count": 2.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 2 out of 9 visit tasks are incomplete."
+    },
+    "count": 2.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 1 out of 9 visit tasks are incomplete."
+    },
+    "count": 2.0
+}
+{
+    "_id": {
+        "rule_key": "canceledWithClientRate",
+        "message": "Verify Canceled Visit"
+    },
+    "count": 2.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 13 out of 13 visit tasks are incomplete."
+    },
+    "count": 2.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 5 out of 12 visit tasks are incomplete."
+    },
+    "count": 2.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 80 minutes at 04/07/2026 04:39pm. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 95 minutes at 04/06/2026 10:35am due to \"Was having issues with app.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 70 minutes at 04/09/2026 09:25am due to \"Baby sitter was late. \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 148 minutes at 04/11/2026 10:28am due to \"system was down WiFi issue \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 66 minutes at 04/09/2026 02:06pm due to \"missed punch \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 134 minutes at 04/05/2026 08:14pm due to \"i time out is 8 thanks \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 132 minutes at 04/12/2026 12:42pm due to \"running late \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 177 minutes at 04/06/2026 11:02am due to \"10am \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 216 minutes at 04/13/2026 04:53pm due to \"I had a family emergency. I had to leave.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 70 minutes at 04/11/2026 02:40pm due to \"ran over mopping\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 94 minutes at 04/14/2026 07:34am. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 1260 minutes at 04/12/2026 08:00am. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 144 minutes at 04/10/2026 10:24pm due to \"making up hours\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 147 minutes at 04/10/2026 09:27pm due to \"we clocked in late because are activity was later in the evening so we clocked out within our scheduled hours\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 106 minutes at 04/09/2026 09:46pm due to \"making up hours missed\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 62 minutes at 04/07/2026 03:57pm due to \"client asked me to leave not feeling good \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 116 minutes at 04/13/2026 07:33am due to \"called last night and asked me to bring her dog in for an emergency vet appointment since it’s not doing good \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 172 minutes at 04/13/2026 09:07am due to \"he didnt know I was coming and was not ready and dont want any service.  no one called him to let him know someone was coming.  \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 203 minutes at 04/12/2026 02:23pm due to \"I never have the same check in time\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "missingRequiredClientFields",
+        "message": "The client is missing the following fields: Authorization Hours"
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 300 minutes at 04/13/2026 04:30pm due to \"forgot to check in \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 75 minutes at 04/13/2026 12:15am due to \"check out late \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 14 out of 33 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 4 out of 16 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 64 minutes at 04/06/2026 10:04am due to \"cooking \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 8 out of 15 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 116 minutes at 04/12/2026 08:26pm due to \"still getting used to working the new app\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 208 minutes at 04/13/2026 12:58pm due to \"I thought pushed clock in came into mark tasks off and couldn’t \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 90 minutes at 04/06/2026 07:30pm. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 68 minutes at 04/10/2026 05:08pm due to \"mom was running late at the tire shop to get her tires fixed. I messaged Kia.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 64 minutes at 04/13/2026 01:04pm due to \".\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 9 out of 9 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 63 minutes at 04/11/2026 12:03pm due to \"my app was acting up it wouldn’t let me clock out first \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 70 minutes at 04/06/2026 08:10pm due to \"I was experiencing trouble using the new app. It wouldn’t allow me to check out unless I have written in all of the task boxes and completed all the signatures \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "noCaregiver",
+        "message": "No Caregiver name"
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 98 minutes at 04/13/2026 07:21pm due to \"I pushed the wrong  button I was not trying g to client k out\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 75 minutes at 04/06/2026 07:45pm due to \"N/A\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 100 minutes at 04/10/2026 01:40pm due to \"i was driving and could use the phone \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 9 out of 11 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 99 minutes at 04/11/2026 09:09pm due to \"phone went dead client came with me to get charger from my house to clock out sorry\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 248 minutes at 04/12/2026 08:08pm due to \"issues with the platform. need to contact the office \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 71 minutes at 04/11/2026 06:48am due to \"lives with client no actual schedule to follow \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 87 minutes at 04/13/2026 11:02am due to \"scheduled time is wrong \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 102 minutes at 04/13/2026 05:42pm due to \"spent a lot of time shopping \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 84 minutes at 04/07/2026 11:24am due to \"I was out grocery shopping .\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 240 minutes at 04/11/2026 08:00pm. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 70 minutes at 04/09/2026 02:49pm due to \"changed time to come early \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 109 minutes at 04/11/2026 12:40pm due to \"caregiver lives with client no set schedule \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 82 minutes at 04/13/2026 04:07pm due to \"they did not change the correct time it's supposed to be 4:07 instead of 5:07 that would go over the time so that's why I'm punching out at 407\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 110 minutes at 04/07/2026 08:09am due to \"John did not need help today\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 80 minutes at 04/13/2026 06:35pm due to \"just started shift \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 61 minutes at 04/11/2026 09:01am due to \"I thought my clock out time for Saturdays was at 9:00\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 93 minutes at 04/12/2026 08:33pm due to \"got back late from the park and getting food with client a\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 152 minutes at 04/09/2026 01:02pm due to \"I had a doctor appointment; the client (my father) was okay with me arriving later.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 75 minutes at 04/10/2026 10:15am. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 82 minutes at 04/11/2026 12:22pm due to \"I broke my phone \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 82 minutes at 04/12/2026 09:22am due to \"caregiver lives with the client. \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 68 minutes at 04/01/2026 08:08pm. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 72 minutes at 04/12/2026 09:42pm due to \"The app keeps giving me a error message \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 186 minutes at 04/06/2026 03:36pm. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 62 minutes at 04/13/2026 06:02pm due to \"she had to finish pooping \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 88 minutes at 04/07/2026 11:28pm due to \"tech problems.  shift worked 5-10\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 720 minutes at 04/06/2026 11:30pm. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 126 minutes at 04/08/2026 08:23pm due to \"Running late with errands \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 71 minutes at 04/11/2026 07:11pm due to \"Took my mom for a ride after shift ended. Forgot to punch out till now.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 64 minutes at 04/12/2026 05:04pm due to \"check in at 10\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 139 minutes at 04/07/2026 08:19pm due to \"traffic \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 5 out of 16 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 135 minutes at 04/12/2026 08:15am due to \"Alice Taylor was not feeling good. She had a sleepless night. Time went over.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 175 minutes at 04/12/2026 09:04am due to \"o\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 84 minutes at 04/12/2026 01:35pm due to \"Client clock in time is incorrect. \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 23 out of 23 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 71 minutes at 04/12/2026 08:11am due to \"late\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 67 minutes at 04/08/2026 10:52am due to \"checking supposed to be 1045\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 76 minutes at 04/09/2026 04:16pm due to \"The nurse came by to check on the client and threw us off schedule.  I still had to assist the client with taking a shower and getting dressed.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 122 minutes at 04/07/2026 09:47am due to \"Because I’m working my normal schedule \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 64 minutes at 04/13/2026 10:04pm due to \"their mother asked me to stay later\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 89 minutes at 04/13/2026 12:29pm due to \"phone difficulties \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 119 minutes at 04/10/2026 06:00pm due to \"schedule is 3pm~11pm... not updated in system.  have been running errands with client and just got settled in \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 107 minutes at 04/10/2026 08:47pm due to \"no one inform of a time change \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 71 minutes at 04/13/2026 05:33pm due to \"tasks finished at clients \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 4 out of 18 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 15 out of 33 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 186 minutes at 04/13/2026 09:06am due to \"Shamari did not want to get up for his appointment, and I arrived later to accommodate his request. \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 296 minutes at 04/13/2026 12:56pm due to \"over slept \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 63 minutes at 04/09/2026 07:56pm due to \"schedule is 8pm~11pm today and hasn't been updated in system \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 241 minutes at 04/07/2026 02:01pm. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 182 minutes at 04/09/2026 11:02am due to \"WiFi issues system was down \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 1410 minutes at 04/08/2026 04:30pm. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 89 minutes at 04/13/2026 07:59pm due to \"ran errand for client\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 62 minutes at 04/13/2026 08:02pm due to \"wouldn’t allow me to clock out without completing the worker note \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 141 minutes at 04/13/2026 08:21am due to \"CLS shift was added to app after check in\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 99 minutes at 04/13/2026 11:39pm due to \"John and I watched a movie late tonight\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 113 minutes at 04/14/2026 09:53am due to \"I was here at 755 am app wasn't working \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 203 minutes at 04/12/2026 02:36pm due to \"Client didn’t much. \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 473 minutes at 04/12/2026 07:23pm due to \"I didn’t check in correctly or something \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 359 minutes at 04/11/2026 02:00am due to \"8 hr shift\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 154 minutes at 04/14/2026 02:34am due to \"worked with client \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 157 minutes at 04/13/2026 05:37pm due to \"It’s storming and I have a ways to travel .\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 62 minutes at 04/07/2026 09:02am due to \"The bullet points at the end should not stop us from clocking out.That's why i'm late.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 1 out of 6 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 205 minutes at 04/13/2026 11:25am due to \"Started helping as soon as I walked in. Completely forgot to sign in. \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 95 minutes at 04/13/2026 05:35pm due to \"Called ofc, client wanted 12-4.  Forgot to sign out due to staying over at my moms.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 171 minutes at 04/10/2026 05:51pm due to \"event started later \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 60 minutes at 04/12/2026 03:00pm due to \"m\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 70 minutes at 04/11/2026 09:27am due to \"started session early\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 1 out of 11 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 367 minutes at 04/06/2026 07:52am. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 109 minutes at 04/13/2026 02:25pm due to \"clock in and out times are incorrect. \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 65 minutes at 04/13/2026 10:05pm due to \"their mother asked me to stay later\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 4 out of 9 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 99 minutes at 04/13/2026 03:20pm due to \"This was the check out time requested by the client  \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "caregiverNoRate",
+        "message": "Caregiver rate field is empty for this visit."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "canceledWithNonZeroPay",
+        "message": "Cancelled visit has payable hours and a caregiver rate"
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 127 minutes at 04/11/2026 09:52am due to \"othe other client cancel for today I call the office to let theme know since yesterday no one answer \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 148 minutes at 04/12/2026 11:31am due to \"10am check in\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 19 out of 19 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 71 minutes at 04/13/2026 01:11pm due to \"had to take client to the doctor and my phone died so I couldn't check in til I got back to the clients house to get my phone charger \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 1 out of 8 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 84 minutes at 04/10/2026 09:24pm due to \"system issues still getting familiar with using the system and completing all the tasks\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 9 out of 12 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 27 out of 27 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 80 minutes at 04/13/2026 05:24pm due to \".\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 60 minutes at 04/13/2026 09:44am due to \"my phone had 9:44 so I punch in \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 165 minutes at 04/10/2026 02:15pm due to \"forgot \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 22 out of 22 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 161 minutes at 04/07/2026 03:48pm due to \"early due previous plans.  \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 174 minutes at 04/10/2026 11:09am due to \"issue with babysitter \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 131 minutes at 04/06/2026 06:11am due to \"Jordan was sleeping, shift started at 6 am.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 4 out of 11 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 76 minutes at 04/13/2026 10:43pm due to \"completed everything and sent home \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 69 minutes at 04/13/2026 10:09pm due to \"keep saying check out failed \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 810 minutes at 04/11/2026 02:30am. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 75 minutes at 04/13/2026 07:15am. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 67 minutes at 04/08/2026 03:52pm due to \"Because shift time is not right. please change in coming weeks. 1045- 345. Are the hours worked due to Jacob's appointment in kzoo at noon\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 720 minutes at 04/06/2026 05:30am. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 67 minutes at 04/13/2026 10:52am due to \"calling out a little bit early client have an appointment\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 124 minutes at 04/12/2026 08:04pm due to \"out running errands for Allison \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 124 minutes at 04/11/2026 12:25pm due to \"first shift canceled for today\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 152 minutes at 04/11/2026 05:32pm due to \"Pick client up from STEP Thrift, too far to check in.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 147 minutes at 04/10/2026 01:27am due to \"needed to make up some hours from prior shifts due to my schedule not being updated \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 62 minutes at 04/12/2026 07:32pm due to \"waited a ride \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 120 minutes at 04/13/2026 08:00pm due to \"had issue with internet connection was not able to clock in exactly at 6pm\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "missingRequiredClientFields",
+        "message": "The client is missing the following fields: Principal Diagnosis"
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 71 minutes at 04/13/2026 05:48pm due to \"not early \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 168 minutes at 04/13/2026 10:18pm due to \"just got done \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "missingGpsReason",
+        "message": "GPS - Out of Fence for Check-in because of I am here"
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 100 minutes at 04/07/2026 06:34pm due to \"client doesn’t have aba so started early \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 214 minutes at 04/11/2026 04:25pm due to \"staff experienced sickness \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 75 minutes at 04/11/2026 01:15pm due to \"I tried to clock in before heading to the store, however it didnt take.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 62 minutes at 04/12/2026 02:57pm due to \"Job was completed and was no longer needed by client \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 131 minutes at 04/06/2026 08:11pm due to \"car trouble \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 231 minutes at 04/13/2026 03:51am due to \"forgot to clock in \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 750 minutes at 04/10/2026 08:30pm. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 247 minutes at 04/11/2026 12:07pm due to \"checked in late\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 120 minutes at 04/13/2026 10:45pm due to \"arrived late and per client won’t be here tomorrow so worked late \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 105 minutes at 04/11/2026 12:15pm. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 153 minutes at 04/13/2026 10:33pm due to \"working with client \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 101 minutes at 04/13/2026 09:41am due to \"was waiting till the client called you guys to let you know what was going on before I clocked in. Wasn’t sure I could come to the hospital to watch her.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 242 minutes at 04/12/2026 08:27pm due to \"still learning the new app\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 63 minutes at 04/12/2026 02:03pm due to \"talking with parents with Tyson \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 116 minutes at 04/12/2026 08:26pm due to \"still learning how to work the new app\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 179 minutes at 04/13/2026 06:29pm due to \"i work my shift I clocked in already when I called my local branch they changed the time  I worked from 3:30 to 6:30\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 172 minutes at 04/14/2026 08:52am due to \"I wasn’t late. I just forgot to clock in because I was actually here earlier. I was here at 5:50 AM.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 106 minutes at 04/10/2026 02:46pm due to \"missed punch \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 72 minutes at 04/12/2026 09:12pm due to \"Technical Issues \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 3 out of 12 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 90 minutes at 04/13/2026 01:30am due to \"app gave me a problem it wasn’t let me clock out \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 64 minutes at 04/13/2026 10:04pm due to \"need more assistance \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 106 minutes at 04/10/2026 09:46am due to \"missed punch \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 172 minutes at 04/11/2026 02:22pm due to \"I thought I checked in \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 70 minutes at 04/13/2026 08:40am due to \"checked in late\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 367 minutes at 04/06/2026 10:52am. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 1 out of 3 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 608 minutes at 04/12/2026 09:51pm due to \"still here Katin needed extra care but forgot to clock out check location did task \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 8 out of 10 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 75 minutes at 04/11/2026 12:15pm due to \"was shopping forgot time\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 144 minutes at 04/06/2026 11:24pm due to \"Same number of hours worked just changed time due to Jordan slept til  6am so Mom asked I work 6am-11 cuz JM will be up late w.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 1 out of 10 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 103 minutes at 04/09/2026 12:43pm due to \"forgot to punch out\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 185 minutes at 04/06/2026 11:35am due to \"appointment went late \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 94 minutes at 04/13/2026 10:04pm due to \"Forgot to punch out \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 79 minutes at 04/08/2026 03:40pm due to \"mom let staff know she was on the way home early \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 196 minutes at 04/11/2026 03:16am. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 116 minutes at 04/12/2026 03:56pm due to \"Next door neighbor stopped by…Esther’s 95  year old boyfriend\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 175 minutes at 04/13/2026 01:55pm due to \"doctors appt mri\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 88 minutes at 04/10/2026 02:01pm due to \"we moved the time up— 2:15\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 5 out of 10 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 94 minutes at 04/13/2026 05:34pm due to \"I was on time, my device was dead. It just cut back on\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 122 minutes at 04/13/2026 07:32pm due to \"Ecls was added during shift by care team working with staff to create permanent schedule\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 720 minutes at 04/13/2026 02:45am. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 87 minutes at 04/12/2026 10:12pm due to \"finished shift \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 78 minutes at 04/10/2026 07:18am. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 720 minutes at 04/13/2026 12:00pm. No reason documented."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckIn",
+        "message": "Early Check-in by 71 minutes at 04/13/2026 02:48pm due to \"Ted allows early clock in if I can come early\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 73 minutes at 04/12/2026 05:43pm due to \".\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "missingGpsReasonOut",
+        "message": "GPS - Out of Fence for Check-out"
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "taskIncomplete",
+        "message": "Incomplete Tasks: 1 out of 2 visit tasks are incomplete."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 70 minutes at 04/13/2026 03:49pm due to \"mom arrived \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "earlyCheckOut",
+        "message": "Early Check-out by 131 minutes at 04/11/2026 04:18pm due to \"we done with everything \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 67 minutes at 04/13/2026 05:07pm due to \"check out is late, because I had to take client to doctor and my phone went dead and had to wait until I returned to client home for chager\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 75 minutes at 04/11/2026 03:15pm due to \"went to store so it told me to clock out at 3:15\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 135 minutes at 04/08/2026 09:15am due to \"This app in not saving my password so I have to wait until someone resets my password to log in \"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckIn",
+        "message": "Late Check-in by 65 minutes at 04/11/2026 10:05am due to \"Miss placed my keys. Then had to stop for gas.\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 130 minutes at 04/11/2026 08:10pm due to \"i off at 8 i didn’t know i had to check back in sorry\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 79 minutes at 04/12/2026 05:19pm due to \"forgot to clock out\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 61 minutes at 04/13/2026 10:01am due to \"on time\"."
+    },
+    "count": 1.0
+}
+{
+    "_id": {
+        "rule_key": "lateCheckOut",
+        "message": "Late Check-out by 108 minutes at 04/12/2026 06:48pm due to \"started late.\"."
+    },
+    "count": 1.0
+}
