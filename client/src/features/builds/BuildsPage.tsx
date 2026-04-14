@@ -72,6 +72,28 @@ function formatDuration(sec: number): string {
 
 type Filter = 'all' | 'building' | 'failed' | 'succeeded' | 'custom'
 
+// ── Deploy target matching ────────────────────────────────
+// Some builds produce images with multiple tags (e.g., master → "master" + "latest")
+const TAG_ALIASES: Record<string, string[]> = {
+  master: ['master', 'latest'],
+}
+
+function getDeployTargetsForBuild(build: BuildCard, allTargets: Record<string, DeployTarget[]>): DeployTarget[] {
+  const tag = build.imageTag || ''
+  const tags = TAG_ALIASES[tag] || [tag]
+  const seen = new Set<string>()
+  const targets: DeployTarget[] = []
+  for (const t of tags) {
+    for (const d of (allTargets[t] || [])) {
+      if (!seen.has(d.pipelineName)) {
+        seen.add(d.pipelineName)
+        targets.push(d)
+      }
+    }
+  }
+  return targets
+}
+
 // ── Commit list with show more ───────────────────────────
 
 function CommitList({ commits }: { commits: Array<{ sha: string; message: string }> }) {
@@ -129,11 +151,22 @@ export function BuildsPage() {
     else if (filter === 'custom') builds = builds.filter(b => b.isCustom)
     if (search) {
       const s = search.toLowerCase()
-      builds = builds.filter(b =>
-        b.branch.toLowerCase().includes(s) ||
-        b.projectName.toLowerCase().includes(s) ||
-        b.jiraKeys.some(k => k.toLowerCase().includes(s))
-      )
+      builds = builds.filter(b => {
+        if (b.branch.toLowerCase().includes(s)) return true
+        if (b.projectName.toLowerCase().includes(s)) return true
+        if (b.jiraKeys.some(k => k.toLowerCase().includes(s))) return true
+        if ((b.account || '').toLowerCase().includes(s)) return true
+        // Search deploy targets — match customer, env, or combined (with or without space)
+        const targets = getDeployTargetsForBuild(b, data.deployTargets)
+        if (targets.some(d =>
+          d.customer.toLowerCase().includes(s) ||
+          d.env.toLowerCase().includes(s) ||
+          `${d.customer} ${d.env}`.toLowerCase().includes(s) ||
+          `${d.customer}${d.env}`.toLowerCase().includes(s) ||
+          d.pipelineName.toLowerCase().includes(s)
+        )) return true
+        return false
+      })
     }
     return builds
   }, [data, filter, search])
@@ -187,7 +220,7 @@ export function BuildsPage() {
         </div>
         <input
           type="text"
-          placeholder="Search branch, project, JIRA key..."
+          placeholder="Search branch, project, JIRA key, environment..."
           value={search}
           onChange={e => setSearch(e.target.value)}
           className="h-8 px-3 text-sm rounded-md border bg-background text-foreground w-64"
@@ -200,7 +233,7 @@ export function BuildsPage() {
           <BuildCardComponent
             key={build.projectName}
             build={build}
-            deployTargets={data.deployTargets[build.imageTag || ''] || []}
+            deployTargets={getDeployTargetsForBuild(build, data.deployTargets)}
             navigate={navigate}
           />
         ))}

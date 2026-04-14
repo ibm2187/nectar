@@ -111,17 +111,39 @@ class PipelineSync extends EventEmitter {
         }
       }
 
+      // Deduplicate: if multiple accounts have the same imageTag (e.g., "jeff"),
+      // keep the one with the most recent build and merge account labels.
+      const byTag = new Map();
+      for (const card of buildCards) {
+        const key = card.imageTag || card.projectName;
+        const existing = byTag.get(key);
+        if (existing) {
+          // Merge: keep the most recent, combine account names
+          if ((card.latestStartTime || '') > (existing.latestStartTime || '')) {
+            const accounts = existing.accounts || [existing.account];
+            if (!accounts.includes(card.account)) accounts.push(card.account);
+            card.accounts = accounts;
+            byTag.set(key, card);
+          } else {
+            if (!existing.accounts) existing.accounts = [existing.account];
+            if (!existing.accounts.includes(card.account)) existing.accounts.push(card.account);
+          }
+        } else {
+          byTag.set(key, card);
+        }
+      }
+      const deduped = Array.from(byTag.values());
+
       // Sort: IN_PROGRESS first, then FAILED, then SUCCEEDED, then rest
       const statusOrder = { IN_PROGRESS: 0, FAILED: 1, SUCCEEDED: 2, STOPPED: 3 };
-      buildCards.sort((a, b) => {
+      deduped.sort((a, b) => {
         const ao = statusOrder[a.latestStatus] ?? 4;
         const bo = statusOrder[b.latestStatus] ?? 4;
         if (ao !== bo) return ao - bo;
-        // Within same status, most recent first
         return (b.latestStartTime || '').localeCompare(a.latestStartTime || '');
       });
 
-      this.buildProjects = buildCards;
+      this.buildProjects = deduped;
 
       // Step 3: Fetch deploy pipeline states (main account)
       const deployTargets = {};
