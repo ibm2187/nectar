@@ -127,6 +127,7 @@ module.exports = function createRoutes(services, config) {
         totalTicketCount: (release.tickets || []).length,
         zohoTicketCount: (release.zohoTickets || []).length,
         zohoTickets: release.zohoTickets || [],
+        pipeline: release.pipeline || null,
         isOverdue: release.jiraReleaseDate && release.jiraReleaseDate < today,
       };
     });
@@ -817,6 +818,19 @@ module.exports = function createRoutes(services, config) {
   router.post('/pr/sync', asyncHandler(async (req, res) => {
     if (!services.prSync) return res.status(503).json({ error: 'PR sync not configured' });
     const results = await services.prSync.run();
+    res.json(results);
+  }));
+
+  // ── Pipeline Sync (AWS CodeBuild + CodePipeline) ──────
+
+  router.get('/pipeline/status', (req, res) => {
+    if (!services.pipelineSync) return res.json({ configured: false });
+    res.json(services.pipelineSync.getStatus());
+  });
+
+  router.post('/pipeline/sync', asyncHandler(async (req, res) => {
+    if (!services.pipelineSync) return res.status(503).json({ error: 'Pipeline sync not configured' });
+    const results = await services.pipelineSync.run();
     res.json(results);
   }));
 
@@ -1852,6 +1866,14 @@ module.exports = function createRoutes(services, config) {
         { key: 'ZOHO_DESK_REFRESH_TOKEN', label: 'OAuth Refresh Token', secret: true },
       ],
     },
+    aws: {
+      label: 'AWS (CodeBuild / CodePipeline)',
+      vars: [
+        { key: 'AWS_ACCESS_KEY_ID', label: 'Access Key ID', secret: false },
+        { key: 'AWS_SECRET_ACCESS_KEY', label: 'Secret Access Key', secret: true },
+        { key: 'AWS_REGION', label: 'Region', secret: false },
+      ],
+    },
   };
 
   /** Read .env file into a Map of key → value */
@@ -2087,9 +2109,20 @@ module.exports = function createRoutes(services, config) {
         case 'zoho': {
           const zohoClient = services.zoho;
           if (!zohoClient || !zohoClient.isConfigured()) throw new Error('Zoho Desk is not configured');
-          // Test by listing 1 ticket — proves OAuth + org ID are valid
           const tickets = await zohoClient.listTickets({ limit: 1 });
           result = { ok: true, detail: `Connected to Zoho Desk (org ${zohoClient.orgId})` };
+          break;
+        }
+        case 'aws': {
+          const accessKey = process.env.AWS_ACCESS_KEY_ID;
+          const region = process.env.AWS_REGION || 'us-east-1';
+          if (!accessKey || !process.env.AWS_SECRET_ACCESS_KEY) throw new Error('AWS credentials not configured');
+          // Test by listing CodeBuild projects
+          const { CodeBuildClient, ListProjectsCommand } = require('@aws-sdk/client-codebuild');
+          const cb = new CodeBuildClient({ region });
+          const resp = await cb.send(new ListProjectsCommand({}));
+          const count = (resp.projects || []).length;
+          result = { ok: true, detail: `Connected to AWS ${region} — ${count} CodeBuild projects found` };
           break;
         }
         default:
