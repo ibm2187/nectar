@@ -14,6 +14,7 @@ import { CompareSelector } from './CompareSelector'
 import type { CompareTarget } from './CompareSelector'
 import { SavedViews } from '../../components/SavedViews'
 import { PrDetailPanel, isCodeStatus, type PrInfo } from '../../components/PrDetailPanel'
+import { getStatusBadgeColor, displayAssignee } from '../../lib/status-colors'
 
 interface Props {
   repo: string
@@ -666,18 +667,18 @@ function TicketRow({ ticket: t, onClickPr }: { ticket: VerifiedTicket; onClickPr
               prCreatedAt: t.pr!.prCreatedAt,
               status: 'open',
             }] : [])}
-            className="text-xs text-primary hover:underline cursor-pointer"
+            className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium border cursor-pointer hover:ring-1 hover:ring-primary/30', getStatusBadgeColor(t.jiraStatus))}
           >
             {t.jiraStatus}
           </button>
         ) : (
-          <span className="text-xs">{t.jiraStatus}</span>
+          <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium border', getStatusBadgeColor(t.jiraStatus))}>{t.jiraStatus}</span>
         )}
       </td>
 
       {/* QA Assignee */}
       <td className="px-3 py-2 align-top hidden md:table-cell">
-        <span className="text-xs text-muted-foreground">{t.qaAssignee || '—'}</span>
+        {(() => { const qa = displayAssignee(t.qaAssignee); return <span className={cn('text-xs', qa.className)}>{qa.text}</span> })()}
       </td>
 
       {/* Cherry-pick PR */}

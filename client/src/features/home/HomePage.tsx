@@ -6,6 +6,7 @@ import type { Release } from '../../api/client'
 import { Card, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
 import { cn } from '../../lib/utils'
+import { STATUS_GROUPS, getStatusBadgeColor, getStatusGroup, displayAssignee, type StatusGroup } from '../../lib/status-colors'
 import { JiraLink } from '../../components/JiraLink'
 import { ZohoImpactBadge } from '../releases/CustomerImpact'
 import { PipelineBadge } from '../releases/PipelineView'
@@ -39,24 +40,6 @@ const VIEW_CONFIG: Record<HomeView, { label: string; description: string; person
 const VIEW_ORDER: HomeView[] = ['dev', 'qa', 'pm', 'support', 'cs']
 
 // ── Status colors (matches TruthView) ────────────────────
-
-const JIRA_STATUS_COLORS: Record<string, string> = {
-  'QA Certified':           'bg-green-500/15 text-green-400 border-green-500/30',
-  'Cherry Picked':          'bg-green-500/15 text-green-400 border-green-500/30',
-  'Done':                   'bg-green-500/15 text-green-400 border-green-500/30',
-  'Closed':                 'bg-green-500/15 text-green-400 border-green-500/30',
-  'Resolved Without Code':  'bg-gray-500/15 text-gray-400 border-gray-500/30',
-  'Ready For Testing':      'bg-blue-500/15 text-blue-400 border-blue-500/30',
-  'In Testing':             'bg-blue-500/15 text-blue-400 border-blue-500/30',
-  'Testing in Branch':      'bg-blue-500/15 text-blue-400 border-blue-500/30',
-  'In Review':              'bg-purple-500/15 text-purple-400 border-purple-500/30',
-  'Development In Progress': 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
-  'In Progress':            'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
-  'Waiting for Cherry Pick': 'bg-orange-500/15 text-orange-400 border-orange-500/30',
-  'Re-verify Bug':          'bg-orange-500/15 text-orange-400 border-orange-500/30',
-  'Blocked':                'bg-red-500/15 text-red-400 border-red-500/30',
-  'Testing Failed':         'bg-red-500/15 text-red-400 border-red-500/30',
-}
 
 const STATE_COLORS: Record<string, string> = {
   planning:    'bg-slate-500/20 text-slate-300',
@@ -95,9 +78,7 @@ function relativeDate(dateStr: string): { label: string; color: string } {
   return { label: `in ${days} days`, color: 'text-muted-foreground' }
 }
 
-function getJiraStatusColor(status: string): string {
-  return JIRA_STATUS_COLORS[status] || 'bg-gray-500/15 text-gray-400 border-gray-500/30'
-}
+// getStatusBadgeColor imported from lib/status-colors
 
 // ── Component ────────────────────────────────────────────
 
@@ -110,6 +91,9 @@ export function HomePage() {
   const [loading, setLoading] = useState(true)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [prPanel, setPrPanel] = useState<{ jiraKey: string; summary: string; prs: PrInfo[]; repo: string } | null>(null)
+  const [statusGroup, setStatusGroup] = useState<StatusGroup>('all')
+  const [repoFilter, setRepoFilter] = useState('')
+  const [ticketSearch, setTicketSearch] = useState('')
 
   // Fetch home data
   useEffect(() => {
@@ -143,18 +127,66 @@ export function HomePage() {
   const collapseAll = () => setCollapsed(new Set(releases.map(r => r.id)))
   const expandAll = () => setCollapsed(new Set())
 
+  // Count tickets per status group
+  const groupCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: 0 }
+    for (const g of STATUS_GROUPS) counts[g.key] = 0
+    for (const r of releases) {
+      for (const t of (r.tickets || [])) {
+        counts.all++
+        const g = getStatusGroup(t.jiraStatus || '')
+        if (counts[g] !== undefined) counts[g]++
+      }
+    }
+    return counts
+  }, [releases])
+
+  // Available repos
+  const repos = useMemo(() => {
+    const set = new Set<string>()
+    for (const r of releases) if (r.repo) set.add(r.repo)
+    return Array.from(set).sort()
+  }, [releases])
+
+  // Apply filters
+  const filteredReleases = useMemo(() => {
+    if (statusGroup === 'all' && !repoFilter && !ticketSearch) return releases
+    const search = ticketSearch.toLowerCase().trim()
+    const groupDef = STATUS_GROUPS.find(g => g.key === statusGroup)
+    const groupStatuses = groupDef && groupDef.statuses.length > 0 ? new Set(groupDef.statuses) : null
+
+    return releases.map(r => {
+      if (repoFilter && r.repo !== repoFilter) return null
+      let tickets = r.tickets || []
+      if (groupStatuses) {
+        tickets = tickets.filter((t: any) => groupStatuses.has(t.jiraStatus || ''))
+      }
+      if (search) {
+        tickets = tickets.filter((t: any) =>
+          (t.key || '').toLowerCase().includes(search) ||
+          (t.summary || '').toLowerCase().includes(search) ||
+          (t.assignee || '').toLowerCase().includes(search) ||
+          (t.qaAssignee || '').toLowerCase().includes(search) ||
+          (t.jiraStatus || '').toLowerCase().includes(search)
+        )
+      }
+      if (tickets.length === 0) return null
+      return { ...r, tickets, ticketCount: tickets.length }
+    }).filter(Boolean) as HomeRelease[]
+  }, [releases, statusGroup, repoFilter, ticketSearch])
+
   // Split releases
   const { overdue, upcoming, unscheduled } = useMemo(() => {
     const overdue: HomeRelease[] = []
     const upcoming: HomeRelease[] = []
     const unscheduled: HomeRelease[] = []
-    for (const r of releases) {
+    for (const r of filteredReleases) {
       if (!r.jiraReleaseDate) unscheduled.push(r)
       else if (r.isOverdue) overdue.push(r)
       else upcoming.push(r)
     }
     return { overdue, upcoming, unscheduled }
-  }, [releases])
+  }, [filteredReleases])
 
   // Filter people for person selector
   const filteredPeople = useMemo(() => {
@@ -227,7 +259,7 @@ export function HomePage() {
           </select>
         )}
 
-        {releases.length > 1 && (
+        {filteredReleases.length > 1 && (
           <div className="flex gap-1 ml-auto">
             <button onClick={expandAll} className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-accent/50">Expand all</button>
             <button onClick={collapseAll} className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-accent/50">Collapse all</button>
@@ -235,11 +267,66 @@ export function HomePage() {
         )}
       </div>
 
+      {/* Status group pills + filters */}
+      {!loading && releases.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5 flex-wrap">
+            {STATUS_GROUPS.map(g => (
+              <button
+                key={g.key}
+                onClick={() => setStatusGroup(g.key)}
+                className={cn(
+                  'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                  statusGroup === g.key ? g.pillActive : g.pillInactive,
+                  groupCounts[g.key] === 0 && g.key !== 'all' && 'opacity-40'
+                )}
+              >
+                {g.label}
+                {groupCounts[g.key] > 0 && (
+                  <span className="ml-1 text-xs opacity-70">{groupCounts[g.key]}</span>
+                )}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              type="text"
+              placeholder="Search tickets..."
+              value={ticketSearch}
+              onChange={e => setTicketSearch(e.target.value)}
+              className="h-8 px-3 text-sm rounded-md border bg-background text-foreground w-48"
+            />
+            {repos.length > 1 && (
+              <select
+                value={repoFilter}
+                onChange={e => setRepoFilter(e.target.value)}
+                className="h-8 px-2 text-sm rounded-md border bg-background text-foreground"
+              >
+                <option value="">All repos</option>
+                {repos.map(r => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            )}
+            {(statusGroup !== 'all' || repoFilter || ticketSearch) && (
+              <button
+                onClick={() => { setStatusGroup('all'); setRepoFilter(''); setTicketSearch('') }}
+                className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-accent/50"
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div className="text-sm text-muted-foreground py-8 text-center">Loading...</div>
-      ) : releases.length === 0 ? (
+      ) : filteredReleases.length === 0 ? (
         <div className="text-sm text-muted-foreground py-8 text-center italic">
-          No releases in scope{person && ` for ${person}`}
+          {releases.length === 0
+            ? `No releases in scope${person ? ` for ${person}` : ''}`
+            : 'No tickets match the current filters'}
         </div>
       ) : (
         <>
@@ -419,8 +506,9 @@ function ReleasePanel({
               <col style={{ width: '30px' }} />
               <col style={{ width: '30px' }} />
               <col />
-              <col style={{ width: '160px' }} />
-              <col style={{ width: '130px' }} />
+              <col style={{ width: '155px' }} />
+              <col style={{ width: '120px' }} />
+              <col style={{ width: '120px' }} />
             </colgroup>
             <thead>
               <tr className="border-b border-border/20 text-left">
@@ -429,13 +517,14 @@ function ReleasePanel({
                 <th className="px-0.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Original PRs">PRs</th>
                 <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Summary</th>
                 <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">Status</th>
-                <th className="px-2 pr-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">
-                  {view === 'dev' ? 'QA' : view === 'qa' ? 'Dev' : 'Assignee'}
-                </th>
+                <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">Dev</th>
+                <th className="px-2 pr-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">QA</th>
               </tr>
             </thead>
             <tbody>
               {r.tickets.slice(0, view === 'pm' ? 50 : 25).map((ticket: any) => {
+                const dev = displayAssignee(ticket.assignee)
+                const qa = displayAssignee(ticket.qaAssignee)
                 return (
                   <tr key={ticket.key} className="border-b border-border/10 hover:bg-accent/20 transition-colors">
                     <td className="pl-4 pr-2 py-1.5 align-middle whitespace-nowrap">
@@ -452,25 +541,24 @@ function ReleasePanel({
                       {ticket.jiraStatus && (
                         <span className={cn(
                           'inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium border',
-                          getJiraStatusColor(ticket.jiraStatus)
+                          getStatusBadgeColor(ticket.jiraStatus)
                         )}>
                           {ticket.jiraStatus}
                         </span>
                       )}
                     </td>
+                    <td className="px-2 py-1.5 align-middle text-right whitespace-nowrap">
+                      <span className={cn('text-xs truncate max-w-[110px] inline-block', dev.className)}>{dev.text}</span>
+                    </td>
                     <td className="px-2 pr-4 py-1.5 align-middle text-right whitespace-nowrap">
-                      <span className="text-xs text-muted-foreground">
-                        {view === 'dev' ? (ticket.qaAssignee || '') :
-                         view === 'qa' ? (ticket.assignee || '') :
-                         (ticket.assignee || '')}
-                      </span>
+                      <span className={cn('text-xs truncate max-w-[110px] inline-block', qa.className)}>{qa.text}</span>
                     </td>
                   </tr>
                 )
               })}
               {r.tickets.length > (view === 'pm' ? 50 : 25) && (
                 <tr>
-                  <td colSpan={6} className="pl-4 py-2 text-xs text-muted-foreground">
+                  <td colSpan={7} className="pl-4 py-2 text-xs text-muted-foreground">
                     +{r.tickets.length - (view === 'pm' ? 50 : 25)} more tickets
                   </td>
                 </tr>

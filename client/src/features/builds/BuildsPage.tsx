@@ -252,7 +252,7 @@ function BuildCardComponent({ build, deployTargets, navigate }: {
   deployTargets: DeployTarget[]
   navigate: (path: string) => void
 }) {
-  const [expanded, setExpanded] = useState(build.latestStatus === 'FAILED' || build.latestStatus === 'IN_PROGRESS')
+  const [expanded, setExpanded] = useState(true)
   const latest = build.builds[0]
   const info = STATUS_CONFIG[build.latestStatus] || STATUS_CONFIG.STOPPED
 
