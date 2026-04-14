@@ -81,6 +81,7 @@ class PipelineSync extends EventEmitter {
           const card = await this._fetchBuildCard(projectName);
           if (card) { card.account = 'Viv'; buildCards.push(card); }
           results.builds++;
+          await new Promise(r => setTimeout(r, 150)); // rate limit
         } catch (err) {
           log.warn(`Pipeline sync: build fetch failed for ${projectName}: ${err.message}`);
           results.errors++;
@@ -100,6 +101,7 @@ class PipelineSync extends EventEmitter {
               const card = await this._fetchBuildCardForRole(roleArn, projectName);
               if (card) { card.account = customer; buildCards.push(card); }
               results.builds++;
+              await new Promise(r => setTimeout(r, 150)); // rate limit
             } catch (err) {
               log.warn(`Pipeline sync: build fetch failed for ${customer}/${projectName}: ${err.message}`);
               results.errors++;
@@ -286,13 +288,18 @@ class PipelineSync extends EventEmitter {
     if (latest.resolvedSourceVersion && parsed.repo === 'webplatform') {
       try {
         const baseSha = previousSuccess?.resolvedSourceVersion || null;
-        if (baseSha) {
+        if (baseSha && baseSha !== latest.resolvedSourceVersion) {
           newCommits = await this.repoManager.log('webplatform', `${baseSha}..${latest.resolvedSourceVersion}`, { limit: 30 });
-        } else {
+        } else if (!baseSha) {
           newCommits = await this.repoManager.log('webplatform', latest.resolvedSourceVersion, { limit: 10 });
         }
+        // If baseSha === latestSha, no new commits (rebuilt same code)
         jiraKeys = JiraClient.extractKeys(newCommits.map(c => c.message).join(' '));
-      } catch { /* branch not fetched yet */ }
+      } catch (err) {
+        log.warn(`Pipeline sync: git log failed for ${projectName} (${latest.resolvedSourceVersion?.slice(0, 10)}): ${err.message}`);
+      }
+    } else {
+      log.info(`Pipeline sync: no commits for ${projectName} — resolvedSourceVersion: ${latest.resolvedSourceVersion}, repo: ${parsed.repo}`);
     }
 
     // Find which deploy targets use this build's image tag
@@ -332,7 +339,24 @@ class PipelineSync extends EventEmitter {
     if (builds.length === 0) return null;
 
     const latest = builds[0];
+    const previousSuccess = builds.find(b => b.status === 'SUCCEEDED' && b.id !== latest.id);
     const imageTag = parsed.version || parsed.branch || parsed.custom || null;
+
+    // Cross-account builds often use the same webplatform repo — try local git
+    let newCommits = [];
+    let jiraKeys = [];
+    if (latest.resolvedSourceVersion && parsed.repo === 'webplatform') {
+      try {
+        const baseSha = previousSuccess?.resolvedSourceVersion || null;
+        if (baseSha && baseSha !== latest.resolvedSourceVersion) {
+          newCommits = await this.repoManager.log('webplatform', `${baseSha}..${latest.resolvedSourceVersion}`, { limit: 30 });
+        } else if (!baseSha) {
+          newCommits = await this.repoManager.log('webplatform', latest.resolvedSourceVersion, { limit: 10 });
+        }
+        // If baseSha === latestSha, no new commits (rebuilt same code)
+        jiraKeys = JiraClient.extractKeys(newCommits.map(c => c.message).join(' '));
+      } catch { /* commits not in local clone */ }
+    }
 
     return {
       projectName,
@@ -351,8 +375,8 @@ class PipelineSync extends EventEmitter {
         durationSec: b.durationSec,
         commitSha: b.resolvedSourceVersion,
       })),
-      newCommits: [], // Cross-account repos not cloned locally
-      jiraKeys: [],
+      newCommits,
+      jiraKeys,
     };
   }
 
