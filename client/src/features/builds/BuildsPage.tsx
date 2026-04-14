@@ -24,6 +24,7 @@ interface BuildCard {
   repo: string
   isCustom: boolean
   imageTag: string | null
+  account: string | null
   latestStatus: string
   latestStartTime: string | null
   builds: BuildInfo[]
@@ -237,6 +238,9 @@ function BuildCardComponent({ build, deployTargets, navigate }: {
         >
           <span className={cn("w-2.5 h-2.5 rounded-full shrink-0", info.dot)} />
           <span className="font-mono font-bold truncate">{displayBranch}</span>
+          {build.account && build.account !== 'Viv' && (
+            <Badge variant="outline" className="text-xs text-cyan-400 border-cyan-500/30 shrink-0">{build.account}</Badge>
+          )}
           {build.isCustom && <Badge variant="outline" className="text-xs text-purple-400 border-purple-500/30 shrink-0">custom</Badge>}
           {build.version && (
             <button

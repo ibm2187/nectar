@@ -74,15 +74,39 @@ class PipelineSync extends EventEmitter {
       // Step 1: Discover projects and deploy mappings (cached after first run)
       await this._ensureDiscovery();
 
-      // Step 2: Fetch builds for each project
+      // Step 2: Fetch builds for main account projects
       const buildCards = [];
       for (const projectName of (this._projectList || [])) {
         try {
           const card = await this._fetchBuildCard(projectName);
-          if (card) buildCards.push(card);
+          if (card) { card.account = 'Viv'; buildCards.push(card); }
           results.builds++;
         } catch (err) {
           log.warn(`Pipeline sync: build fetch failed for ${projectName}: ${err.message}`);
+          results.errors++;
+        }
+      }
+
+      // Step 2b: Fetch builds from cross-account roles
+      const crossAccounts = this.aws.getCrossAccountRoles();
+      for (const { customer, roleArn } of crossAccounts) {
+        try {
+          const projects = await this.aws.listProjectsForRole(roleArn);
+          const ecrProjects = projects.filter(p => p.startsWith('ECR-Build_'));
+          log.info(`Pipeline sync: ${customer} account has ${ecrProjects.length} build projects`);
+
+          for (const projectName of ecrProjects) {
+            try {
+              const card = await this._fetchBuildCardForRole(roleArn, projectName);
+              if (card) { card.account = customer; buildCards.push(card); }
+              results.builds++;
+            } catch (err) {
+              log.warn(`Pipeline sync: build fetch failed for ${customer}/${projectName}: ${err.message}`);
+              results.errors++;
+            }
+          }
+        } catch (err) {
+          log.warn(`Pipeline sync: cross-account failed for ${customer}: ${err.message}`);
           results.errors++;
         }
       }
@@ -99,7 +123,7 @@ class PipelineSync extends EventEmitter {
 
       this.buildProjects = buildCards;
 
-      // Step 3: Fetch deploy pipeline states
+      // Step 3: Fetch deploy pipeline states (main account)
       const deployTargets = {};
       for (const [name, info] of Object.entries(this._deployMap || {})) {
         try {
@@ -116,11 +140,49 @@ class PipelineSync extends EventEmitter {
             env: info.env,
             status: deployStage?.status || null,
             lastUpdated: deployStage?.lastUpdated || null,
+            account: 'Viv',
           });
           results.deploys++;
           await new Promise(r => setTimeout(r, 100));
         } catch (err) {
           log.warn(`Pipeline sync: deploy state failed for ${name}: ${err.message}`);
+        }
+      }
+
+      // Step 3b: Fetch deploy pipelines from cross-accounts
+      const AwsClient = require('../integrations/aws');
+      for (const { customer, roleArn } of crossAccounts) {
+        try {
+          const pipelines = await this.aws.listPipelinesForRole(roleArn);
+          const deployPipelines = pipelines.filter(p => p.startsWith('Deploy-'));
+
+          for (const name of deployPipelines) {
+            try {
+              const config = await this.aws.getPipelineConfigForRole(roleArn, name);
+              const state = await this.aws.getPipelineStateForRole(roleArn, name);
+              const parsed = AwsClient.parsePipelineName(name);
+              const deployStage = state.stages.find(s =>
+                s.stageName === 'Deploy' || s.stageName === 'deploy'
+              ) || state.stages[state.stages.length - 1];
+
+              const tag = config.ecrImageTag || 'unknown';
+              if (!deployTargets[tag]) deployTargets[tag] = [];
+              deployTargets[tag].push({
+                pipelineName: name,
+                customer: parsed?.customer || customer,
+                env: parsed?.env || name,
+                status: deployStage?.status || null,
+                lastUpdated: deployStage?.lastUpdated || null,
+                account: customer,
+              });
+              results.deploys++;
+              await new Promise(r => setTimeout(r, 100));
+            } catch (err) {
+              log.warn(`Pipeline sync: ${customer} deploy failed for ${name}: ${err.message}`);
+            }
+          }
+        } catch (err) {
+          log.warn(`Pipeline sync: ${customer} deploy list failed: ${err.message}`);
         }
       }
 
@@ -233,6 +295,42 @@ class PipelineSync extends EventEmitter {
       })),
       newCommits,
       jiraKeys,
+    };
+  }
+
+  /**
+   * Build a card for a cross-account CodeBuild project.
+   */
+  async _fetchBuildCardForRole(roleArn, projectName) {
+    const AwsClient = require('../integrations/aws');
+    const parsed = AwsClient.parseProjectName(projectName);
+    if (!parsed) return null;
+
+    const builds = await this.aws.getBuildsForProjectInRole(roleArn, projectName, 5);
+    if (builds.length === 0) return null;
+
+    const latest = builds[0];
+    const imageTag = parsed.version || parsed.branch || parsed.custom || null;
+
+    return {
+      projectName,
+      branch: parsed.branch || parsed.custom || projectName,
+      version: parsed.version,
+      repo: parsed.repo,
+      isCustom: !!parsed.custom,
+      imageTag,
+      latestStatus: latest.status,
+      latestStartTime: latest.startTime,
+      builds: builds.map(b => ({
+        buildNumber: b.buildNumber,
+        status: b.status,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        durationSec: b.durationSec,
+        commitSha: b.resolvedSourceVersion,
+      })),
+      newCommits: [], // Cross-account repos not cloned locally
+      jiraKeys: [],
     };
   }
 

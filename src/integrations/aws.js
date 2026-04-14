@@ -2,6 +2,7 @@ const log = require('../core/log');
 
 let CodeBuildClient, ListProjectsCommand, ListBuildsForProjectCommand, BatchGetBuildsCommand;
 let CodePipelineClient, ListPipelinesCommand, GetPipelineStateCommand;
+let STSClient, AssumeRoleCommand;
 
 // Lazy-load AWS SDK (heavy, only import when needed)
 function loadSdk() {
@@ -16,6 +17,10 @@ function loadSdk() {
   CodePipelineClient = cp.CodePipelineClient;
   ListPipelinesCommand = cp.ListPipelinesCommand;
   GetPipelineStateCommand = cp.GetPipelineStateCommand;
+
+  const sts = require('@aws-sdk/client-sts');
+  STSClient = sts.STSClient;
+  AssumeRoleCommand = sts.AssumeRoleCommand;
 }
 
 /**
@@ -33,6 +38,164 @@ class AwsClient {
 
   isConfigured() {
     return !!(this._accessKey && this._secretKey);
+  }
+
+  /**
+   * Parse cross-account role config from env.
+   * Format: "Customer1:arn:aws:iam::123:role/Name,Customer2:arn:aws:iam::456:role/Name"
+   * Returns: [{ customer: 'Customer1', roleArn: 'arn:...' }, ...]
+   */
+  getCrossAccountRoles() {
+    const raw = process.env.AWS_CROSS_ACCOUNT_ROLES || '';
+    if (!raw.trim()) return [];
+    return raw.split(',').map(entry => {
+      const colonIdx = entry.indexOf(':');
+      if (colonIdx < 1) return null;
+      return {
+        customer: entry.substring(0, colonIdx).trim(),
+        roleArn: entry.substring(colonIdx + 1).trim(),
+      };
+    }).filter(Boolean);
+  }
+
+  /**
+   * Assume a cross-account role and return temporary credentials.
+   * Caches credentials for 50 min (roles last 60 min).
+   */
+  async assumeRole(roleArn) {
+    loadSdk();
+    // Check cache
+    const cached = this._roleCredCache && this._roleCredCache[roleArn];
+    if (cached && Date.now() < cached.expiry) return cached.credentials;
+
+    const sts = new STSClient({ region: this.region });
+    const resp = await sts.send(new AssumeRoleCommand({
+      RoleArn: roleArn,
+      RoleSessionName: 'nectar-pipeline-sync',
+      DurationSeconds: 3600,
+    }));
+
+    const credentials = {
+      accessKeyId: resp.Credentials.AccessKeyId,
+      secretAccessKey: resp.Credentials.SecretAccessKey,
+      sessionToken: resp.Credentials.SessionToken,
+    };
+
+    if (!this._roleCredCache) this._roleCredCache = {};
+    this._roleCredCache[roleArn] = {
+      credentials,
+      expiry: Date.now() + 50 * 60 * 1000, // 50 min cache
+    };
+
+    return credentials;
+  }
+
+  /**
+   * Create a CodeBuild client for a cross-account role.
+   */
+  async getCodeBuildForRole(roleArn) {
+    loadSdk();
+    const creds = await this.assumeRole(roleArn);
+    return new CodeBuildClient({
+      region: this.region,
+      credentials: creds,
+    });
+  }
+
+  /**
+   * Create a CodePipeline client for a cross-account role.
+   */
+  async getCodePipelineForRole(roleArn) {
+    loadSdk();
+    const creds = await this.assumeRole(roleArn);
+    return new CodePipelineClient({
+      region: this.region,
+      credentials: creds,
+    });
+  }
+
+  // ── Cross-account operations ───────────────────────────
+
+  async listProjectsForRole(roleArn) {
+    const cb = await this.getCodeBuildForRole(roleArn);
+    const projects = [];
+    let nextToken;
+    do {
+      const resp = await cb.send(new ListProjectsCommand({ nextToken }));
+      projects.push(...(resp.projects || []));
+      nextToken = resp.nextToken;
+    } while (nextToken);
+    return projects;
+  }
+
+  async getBuildsForProjectInRole(roleArn, projectName, limit = 5) {
+    const cb = await this.getCodeBuildForRole(roleArn);
+    const resp = await cb.send(new ListBuildsForProjectCommand({
+      projectName,
+      sortOrder: 'DESCENDING',
+    }));
+    const buildIds = (resp.ids || []).slice(0, limit);
+    if (buildIds.length === 0) return [];
+
+    const detail = await cb.send(new BatchGetBuildsCommand({ ids: buildIds }));
+    return (detail.builds || []).map(b => ({
+      id: b.id,
+      buildNumber: b.buildNumber,
+      status: b.buildStatus,
+      startTime: b.startTime?.toISOString() || null,
+      endTime: b.endTime?.toISOString() || null,
+      durationSec: b.startTime && b.endTime
+        ? Math.round((b.endTime.getTime() - b.startTime.getTime()) / 1000)
+        : null,
+      sourceVersion: b.sourceVersion || null,
+      resolvedSourceVersion: b.resolvedSourceVersion || null,
+      initiator: b.initiator || null,
+    }));
+  }
+
+  async listPipelinesForRole(roleArn) {
+    const cp = await this.getCodePipelineForRole(roleArn);
+    const pipelines = [];
+    let nextToken;
+    do {
+      const resp = await cp.send(new ListPipelinesCommand({ nextToken }));
+      pipelines.push(...(resp.pipelines || []).map(p => p.name));
+      nextToken = resp.nextToken;
+    } while (nextToken);
+    return pipelines;
+  }
+
+  async getPipelineConfigForRole(roleArn, pipelineName) {
+    const cp = await this.getCodePipelineForRole(roleArn);
+    const { GetPipelineCommand } = require('@aws-sdk/client-codepipeline');
+    const resp = await cp.send(new GetPipelineCommand({ name: pipelineName }));
+    const pipeline = resp.pipeline || {};
+    const source = (pipeline.stages || []).find(s => s.name === 'Source');
+    const ecrAction = source?.actions?.find(a => a.configuration?.RepositoryName);
+    return {
+      name: pipelineName,
+      ecrRepo: ecrAction?.configuration?.RepositoryName || null,
+      ecrImageTag: ecrAction?.configuration?.ImageTag || null,
+    };
+  }
+
+  async getPipelineStateForRole(roleArn, pipelineName) {
+    const cp = await this.getCodePipelineForRole(roleArn);
+    const resp = await cp.send(new GetPipelineStateCommand({ name: pipelineName }));
+    return {
+      name: pipelineName,
+      stages: (resp.stageStates || []).map(s => ({
+        stageName: s.stageName,
+        status: s.latestExecution?.status || null,
+        lastUpdated: s.latestExecution?.lastStatusChange?.toISOString() || null,
+        actions: (s.actionStates || []).map(a => ({
+          actionName: a.actionName,
+          status: a.latestExecution?.status || null,
+          lastUpdated: a.latestExecution?.lastStatusChange?.toISOString() || null,
+          externalUrl: a.latestExecution?.externalExecutionUrl || null,
+        })),
+      })),
+    };
   }
 
   _getCodeBuild() {
