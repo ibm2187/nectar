@@ -8,6 +8,7 @@ import { Badge } from '../../components/ui/badge'
 import { cn } from '../../lib/utils'
 import { JiraLink } from '../../components/JiraLink'
 import { ZohoImpactBadge } from '../releases/CustomerImpact'
+import { PipelineBadge } from '../releases/PipelineView'
 import { PrDetailPanel, type PrInfo } from '../../components/PrDetailPanel'
 
 // ── Types ────────────────────────────────────────────────
@@ -392,6 +393,9 @@ function ReleasePanel({
             <span className={cn('text-xs font-medium', dateInfo.color)}>{dateInfo.label}</span>
           </div>
         )}
+
+        {/* Pipeline badge */}
+        <PipelineBadge pipeline={(r as any).pipeline} />
 
         {/* Zoho badge */}
         <ZohoImpactBadge count={r.zohoTicketCount} />

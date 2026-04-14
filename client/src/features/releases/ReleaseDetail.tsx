@@ -10,6 +10,7 @@ import { Card, CardContent } from '../../components/ui/card'
 import { timeAgo, cn } from '../../lib/utils'
 import { TruthView } from './TruthView'
 import { CustomerImpact } from './CustomerImpact'
+import { PipelineView } from './PipelineView'
 import { NectarLoader } from '../../components/NectarLoader'
 import { CompareSelector } from './CompareSelector'
 import type { CompareTarget } from './CompareSelector'
@@ -520,6 +521,16 @@ export function ReleaseDetail() {
           </div>
         )}
       </CollapsibleSection>
+
+      {/* Pipeline — Build + Deploy status */}
+      {release.repo === 'webplatform' && (
+        <CollapsibleSection
+          title={`Pipeline${(release as any).pipeline?.latest ? ` — Build #${(release as any).pipeline.latest.buildNumber} ${(release as any).pipeline.latest.status}` : ''}`}
+          defaultOpen={!!(release as any).pipeline?.latest}
+        >
+          <PipelineView pipeline={(release as any).pipeline || null} />
+        </CollapsibleSection>
+      )}
 
       {/* Truth view — JIRA + Git + PR reconciliation */}
       {release.repo && (

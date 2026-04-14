@@ -275,6 +275,11 @@ function createWebServer(services, config) {
       broadcast({ type: 'pr:sync-completed', results, releases: releases.list() })
     );
   }
+  if (services.pipelineSync) {
+    services.pipelineSync.on('sync:completed', (results) =>
+      broadcast({ type: 'pipeline:sync-completed', results, releases: releases.list() })
+    );
+  }
   if (envPoller) {
     envPoller.on('poll:completed', (results) =>
       broadcast({

@@ -109,6 +109,13 @@ const zohoSync = new ZohoSync(releases, zoho, config);
 const PrSync = require('./core/pr-sync');
 const prSync = new PrSync(releases, github, config);
 
+const AwsClient = require('./integrations/aws');
+const aws = new AwsClient();
+if (aws.isConfigured()) log.info(`AWS client configured (region: ${aws.region})`);
+
+const PipelineSync = require('./core/pipeline-sync');
+const pipelineSync = new PipelineSync(releases, aws, repoManager, config);
+
 
 const CustomerStore = require('./core/customer-store');
 const customerStore = new CustomerStore();
@@ -180,6 +187,7 @@ const services = {
   datadog, datadogPoller,
   zoho, zohoSync,
   prSync,
+  aws, pipelineSync,
 };
 const webServer = createWebServer(services, config);
 
@@ -203,6 +211,9 @@ const webServer = createWebServer(services, config);
 
   // Start PR sync (finds GitHub PRs linked to JIRA issues)
   prSync.start();
+
+  // Start pipeline sync (CodeBuild + CodePipeline status)
+  pipelineSync.start();
 
   // Run initial webplatform scan to seed customers/environments
   try {
