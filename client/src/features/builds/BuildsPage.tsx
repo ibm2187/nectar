@@ -71,6 +71,37 @@ function formatDuration(sec: number): string {
 
 type Filter = 'all' | 'building' | 'failed' | 'succeeded' | 'custom'
 
+// ── Commit list with show more ───────────────────────────
+
+function CommitList({ commits }: { commits: Array<{ sha: string; message: string }> }) {
+  const [showAll, setShowAll] = useState(false)
+  const visible = showAll ? commits : commits.slice(0, 5)
+
+  return (
+    <div>
+      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+        {commits.length} commit{commits.length !== 1 ? 's' : ''} since last success
+      </h4>
+      <div className="space-y-0.5">
+        {visible.map(c => (
+          <div key={c.sha} className="flex items-start gap-2 text-xs">
+            <span className="font-mono text-muted-foreground shrink-0">{c.sha.slice(0, 7)}</span>
+            <span className="truncate">{c.message}</span>
+          </div>
+        ))}
+      </div>
+      {commits.length > 5 && !showAll && (
+        <button
+          onClick={() => setShowAll(true)}
+          className="text-xs text-primary hover:underline mt-1"
+        >
+          Show {commits.length - 5} more
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ── Page ─────────────────────────────────────────────────
 
 export function BuildsPage() {
@@ -191,131 +222,130 @@ function BuildCardComponent({ build, deployTargets, navigate }: {
   const latest = build.builds[0]
   const info = STATUS_CONFIG[build.latestStatus] || STATUS_CONFIG.STOPPED
 
-  // Clean branch name for display
   const displayBranch = build.branch
     .replace('releases/', '')
     .replace('ECR-Build_viv-', '')
 
   return (
-    <Card className={cn('overflow-hidden', build.latestStatus === 'FAILED' && 'border-red-500/20')}>
-      <div className="flex">
-        {/* Left: Build info */}
-        <div className="flex-1 min-w-0">
-          {/* Header */}
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="w-full flex items-center gap-3 px-4 py-3 hover:bg-accent/20 transition-colors text-left"
-          >
-            <span className={cn("w-2.5 h-2.5 rounded-full shrink-0", info.dot)} />
-            <span className="font-mono font-bold truncate">{displayBranch}</span>
-            {build.isCustom && <Badge variant="outline" className="text-xs text-purple-400 border-purple-500/30 shrink-0">custom</Badge>}
-            {build.version && (
-              <button
-                onClick={(e) => { e.stopPropagation(); navigate(`/releases/webplatform:${build.version}`) }}
-                className="text-xs text-primary hover:underline shrink-0"
-              >
-                release {build.version}
-              </button>
-            )}
-            <span className={cn("text-xs shrink-0", info.color)}>{info.label}</span>
-            {latest?.durationSec && <span className="text-xs text-muted-foreground shrink-0">{formatDuration(latest.durationSec)}</span>}
-            {latest?.startTime && <span className="text-xs text-muted-foreground shrink-0">{timeAgo(latest.startTime)}</span>}
-            <span className="text-xs text-muted-foreground ml-auto shrink-0">{expanded ? '▾' : '▸'}</span>
-          </button>
-
-          {/* Expanded: commits + build history */}
-          {expanded && (
-            <div className="px-4 pb-3 space-y-3">
-              {/* JIRA keys */}
-              {build.jiraKeys.length > 0 && (
-                <div>
-                  <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                    {build.jiraKeys.length} JIRA ticket{build.jiraKeys.length !== 1 ? 's' : ''} in latest build
-                  </h4>
-                  <div className="flex flex-wrap gap-1.5">
-                    {build.jiraKeys.map(key => (
-                      <JiraLink key={key} jiraKey={key} className="text-xs" />
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Commits */}
-              {build.newCommits.length > 0 && (
-                <div>
-                  <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                    {build.newCommits.length} commit{build.newCommits.length !== 1 ? 's' : ''} since last success
-                  </h4>
-                  <div className="space-y-0.5 max-h-32 overflow-y-auto">
-                    {build.newCommits.slice(0, 15).map(c => (
-                      <div key={c.sha} className="flex items-start gap-2 text-xs">
-                        <span className="font-mono text-muted-foreground shrink-0">{c.sha.slice(0, 7)}</span>
-                        <span className="truncate">{c.message}</span>
-                      </div>
-                    ))}
-                    {build.newCommits.length > 15 && (
-                      <span className="text-xs text-muted-foreground">+{build.newCommits.length - 15} more</span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Build history */}
-              {build.builds.length > 1 && (
-                <div>
-                  <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Build History</h4>
-                  <div className="flex items-center gap-1">
-                    {build.builds.map(b => {
-                      const bi = STATUS_CONFIG[b.status] || STATUS_CONFIG.STOPPED
-                      return (
-                        <div
-                          key={b.buildNumber}
-                          className={cn(
-                            "w-7 h-7 rounded flex items-center justify-center text-[10px] font-medium border",
-                            b.status === 'SUCCEEDED' ? 'bg-green-500/15 border-green-500/30 text-green-400' :
-                            b.status === 'FAILED' ? 'bg-red-500/15 border-red-500/30 text-red-400' :
-                            b.status === 'IN_PROGRESS' ? 'bg-blue-500/15 border-blue-500/30 text-blue-400' :
-                            'bg-gray-500/15 border-gray-500/30 text-gray-400'
-                          )}
-                          title={`#${b.buildNumber}: ${bi.label}${b.startTime ? ` — ${timeAgo(b.startTime)}` : ''}`}
-                        >
-                          #{b.buildNumber}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
+    <div className="flex items-stretch gap-0">
+      {/* Build card */}
+      <Card className={cn('flex-1 min-w-0 overflow-hidden', build.latestStatus === 'FAILED' && 'border-red-500/20')}>
+        {/* Header */}
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="w-full flex items-center gap-3 px-4 py-3 hover:bg-accent/20 transition-colors text-left"
+        >
+          <span className={cn("w-2.5 h-2.5 rounded-full shrink-0", info.dot)} />
+          <span className="font-mono font-bold truncate">{displayBranch}</span>
+          {build.isCustom && <Badge variant="outline" className="text-xs text-purple-400 border-purple-500/30 shrink-0">custom</Badge>}
+          {build.version && (
+            <button
+              onClick={(e) => { e.stopPropagation(); navigate(`/releases/webplatform:${build.version}`) }}
+              className="text-xs text-primary hover:underline shrink-0"
+            >
+              release
+            </button>
           )}
-        </div>
+          <span className={cn("text-xs shrink-0", info.color)}>{info.label}</span>
+          {latest?.durationSec && <span className="text-xs text-muted-foreground shrink-0">{formatDuration(latest.durationSec)}</span>}
+          {latest?.startTime && <span className="text-xs text-muted-foreground shrink-0">{timeAgo(latest.startTime)}</span>}
+          <span className="text-xs text-muted-foreground ml-auto shrink-0">{expanded ? '▾' : '▸'}</span>
+        </button>
 
-        {/* Right: Deploy targets */}
-        {deployTargets.length > 0 && (
-          <div className="w-56 shrink-0 border-l border-border/30 bg-accent/5 px-3 py-3">
-            <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Deploys to</h4>
-            <div className="space-y-1">
-              {deployTargets.map(d => {
-                const di = DEPLOY_STATUS[d.status || ''] || { color: 'text-muted-foreground', dot: 'bg-gray-500' }
-                return (
-                  <div key={d.pipelineName} className="flex items-center gap-2">
-                    <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", di.dot)} />
-                    <span className="text-xs flex-1 truncate">{d.customer} {d.env}</span>
-                    <span className={cn("text-[10px] shrink-0", di.color)}>
-                      {d.status === 'Succeeded' ? '✓' : d.status === 'Failed' ? '✗' : d.status === 'InProgress' ? '...' : '—'}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-            {deployTargets.length > 0 && (
-              <div className="text-[10px] text-muted-foreground mt-2 pt-1 border-t border-border/20">
-                {deployTargets.filter(d => d.status === 'Succeeded').length}/{deployTargets.length} deployed
+        {/* Expanded: commits + build history */}
+        {expanded && (
+          <div className="px-4 pb-3 space-y-3 border-t border-border/20">
+            {/* JIRA keys */}
+            {build.jiraKeys.length > 0 && (
+              <div className="pt-2">
+                <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+                  {build.jiraKeys.length} JIRA ticket{build.jiraKeys.length !== 1 ? 's' : ''}
+                </h4>
+                <div className="flex flex-wrap gap-1.5">
+                  {build.jiraKeys.map(key => (
+                    <JiraLink key={key} jiraKey={key} className="text-xs" />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Commits — show 5, then "show more" */}
+            {build.newCommits.length > 0 && (
+              <CommitList commits={build.newCommits} />
+            )}
+
+            {/* Build history — small dots, not numbered badges */}
+            {build.builds.length > 1 && (
+              <div>
+                <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">History</h4>
+                <div className="flex items-center gap-1">
+                  {build.builds.map(b => (
+                    <div
+                      key={b.buildNumber}
+                      className={cn(
+                        "w-3 h-3 rounded-sm shrink-0",
+                        b.status === 'SUCCEEDED' ? 'bg-green-500' :
+                        b.status === 'FAILED' ? 'bg-red-500' :
+                        b.status === 'IN_PROGRESS' ? 'bg-blue-500 animate-pulse' :
+                        'bg-gray-500'
+                      )}
+                      title={`#${b.buildNumber}: ${b.status}${b.startTime ? ` — ${timeAgo(b.startTime)}` : ''}`}
+                    />
+                  ))}
+                </div>
               </div>
             )}
           </div>
         )}
+      </Card>
+
+      {/* Arrow connector with build time */}
+      <div className="flex items-center justify-center shrink-0 w-44 px-3">
+        <div className="flex flex-col items-center w-full">
+          {latest?.durationSec && (
+            <span className="text-[10px] text-muted-foreground/50 mb-1.5">{formatDuration(latest.durationSec)}</span>
+          )}
+          <div className="w-full flex items-center">
+            <div className="flex-1 h-0.5 bg-muted-foreground/25 rounded-full" />
+            <div className="w-0 h-0 border-t-[6px] border-t-transparent border-b-[6px] border-b-transparent border-l-[10px] border-l-muted-foreground/25 shrink-0" />
+          </div>
+          {build.latestStatus === 'IN_PROGRESS' && (
+            <span className="text-[10px] text-blue-400/60 mt-1.5">ETA ~20 min</span>
+          )}
+        </div>
       </div>
-    </Card>
+
+      {/* Deploy card — always shows */}
+      <Card className="w-52 shrink-0 overflow-hidden">
+        <div className="px-3 py-3 h-full flex flex-col">
+          <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Deploys to</h4>
+          {deployTargets.length > 0 ? (
+            <>
+              <div className="space-y-1.5 flex-1">
+                {deployTargets.map(d => {
+                  const di = DEPLOY_STATUS[d.status || ''] || { color: 'text-muted-foreground', dot: 'bg-gray-500' }
+                  return (
+                    <div key={d.pipelineName} className="flex items-center gap-2">
+                      <span className={cn("w-2 h-2 rounded-full shrink-0", di.dot)} />
+                      <span className="text-xs flex-1 truncate">{d.customer} {d.env}</span>
+                      <span className={cn("text-[10px] shrink-0", di.color)}>
+                        {d.status === 'Succeeded' ? '✓' : d.status === 'Failed' ? '✗' : d.status === 'InProgress' ? '...' : '—'}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="text-[10px] text-muted-foreground mt-2 pt-1.5 border-t border-border/20">
+                {deployTargets.filter(d => d.status === 'Succeeded').length}/{deployTargets.length} deployed
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex items-center justify-center">
+              <span className="text-xs text-muted-foreground/40 italic">No deploy targets configured</span>
+            </div>
+          )}
+        </div>
+      </Card>
+    </div>
   )
 }

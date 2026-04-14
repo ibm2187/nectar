@@ -146,7 +146,8 @@ class PipelineSync extends EventEmitter {
    * Only runs once (cached).
    */
   async _ensureDiscovery() {
-    if (this._projectList) return;
+    // Re-discover if previous discovery found no deploy mappings (likely a network failure)
+    if (this._projectList && Object.keys(this._deployMap || {}).length > 0) return;
 
     const AwsClient = require('../integrations/aws');
 
