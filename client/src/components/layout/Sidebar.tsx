@@ -18,6 +18,7 @@ const links: ReadonlyArray<{
   permKey?: PermKey
 }> = [
   { to: '/', label: 'Home', icon: '🏠' },
+  { to: '/builds', label: 'Builds', icon: '🔨' },
   { to: '/releases', label: 'Releases', icon: '📦', permKey: 'releases' },
   { to: '/roadmap', label: 'Roadmap', icon: '🗺', permKey: 'roadmap' },
   { to: '/tickets', label: 'Tickets', icon: '🎯', permKey: 'tickets' },

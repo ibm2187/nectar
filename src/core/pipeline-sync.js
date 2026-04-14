@@ -3,16 +3,16 @@ const log = require('./log');
 const JiraClient = require('../integrations/jira');
 
 /**
- * AWS Pipeline sync — polls CodeBuild + CodePipeline and maps
- * build/deploy status to Nectar releases.
+ * AWS Pipeline sync — polls CodeBuild + CodePipeline and builds a unified
+ * view of all CI/CD activity for the Builds page.
  *
- * Unified model: each release has a "pipeline" with:
- *   - build: { status, buildNumber, startTime, endTime, duration, commitSha, commits[], jiraKeys[] }
- *   - deploys: [{ name, customer, env, status, lastUpdated }]
+ * Data model stored on release manager as `_pipelineData`:
+ *   builds: [{ projectName, branch, status, builds[], newCommits[], jiraKeys[] }]
+ *   deployTargets: { imageTag → [{ pipelineName, customer, env, status, lastUpdated }] }
  *
  * Events:
  *   sync:started
- *   sync:completed ({ builds, deploys, releasesUpdated, durationMs })
+ *   sync:completed ({ ... })
  */
 class PipelineSync extends EventEmitter {
   constructor(releases, aws, repoManager, config) {
@@ -25,10 +25,12 @@ class PipelineSync extends EventEmitter {
     this._running = false;
     this.lastRun = null;
     this.lastResults = null;
-    // Cache: project name → parsed release info
-    this._projectMap = null;
-    // Cache: pipeline name → parsed deploy info
-    this._pipelineMap = null;
+
+    // Cached data — exposed to API
+    this.buildProjects = [];   // full list of build cards
+    this.deployTargets = {};   // imageTag → deploy pipeline states
+    this._projectList = null;  // raw project names
+    this._deployMap = null;    // pipelineName → { ecrRepo, imageTag, customer, env }
   }
 
   start() {
@@ -37,10 +39,9 @@ class PipelineSync extends EventEmitter {
       return;
     }
 
-    const interval = (this.config.polling && this.config.polling.pipelineSync) || 3 * 60 * 1000; // 3 min
+    const interval = (this.config.polling && this.config.polling.pipelineSync) || 3 * 60 * 1000;
     log.info(`Pipeline sync started (polling every ${interval / 60000}m)`);
 
-    // Initial sync after short delay
     setTimeout(() => {
       this.run().catch(err => log.error('Pipeline sync error:', err.message));
     }, 15000);
@@ -67,35 +68,63 @@ class PipelineSync extends EventEmitter {
     const startTime = Date.now();
     this.emit('sync:started');
 
-    const results = {
-      buildsChecked: 0,
-      deploysChecked: 0,
-      releasesUpdated: 0,
-      errors: 0,
-    };
+    const results = { builds: 0, deploys: 0, errors: 0 };
 
     try {
-      // Step 1: Discover CodeBuild projects → map to releases
-      await this._ensureProjectMap();
+      // Step 1: Discover projects and deploy mappings (cached after first run)
+      await this._ensureDiscovery();
 
-      // Step 2: For each active release, fetch build status
-      const activeReleases = this.releases.list().filter(r =>
-        r.state !== 'done' && !r.jiraArchived && r.repo === 'webplatform'
-      );
-
-      for (const release of activeReleases) {
+      // Step 2: Fetch builds for each project
+      const buildCards = [];
+      for (const projectName of (this._projectList || [])) {
         try {
-          const updated = await this._syncReleasePipeline(release);
-          if (updated) results.releasesUpdated++;
-          results.buildsChecked++;
+          const card = await this._fetchBuildCard(projectName);
+          if (card) buildCards.push(card);
+          results.builds++;
         } catch (err) {
+          log.warn(`Pipeline sync: build fetch failed for ${projectName}: ${err.message}`);
           results.errors++;
-          log.warn(`Pipeline sync: failed for ${release.version}: ${err.message}`);
         }
       }
 
-      // Deploy status comes from Nectar's environment poller (which envs run which version)
-      // — not from CodePipeline, which tracks deployment actions not release-specific state.
+      // Sort: IN_PROGRESS first, then FAILED, then SUCCEEDED, then rest
+      const statusOrder = { IN_PROGRESS: 0, FAILED: 1, SUCCEEDED: 2, STOPPED: 3 };
+      buildCards.sort((a, b) => {
+        const ao = statusOrder[a.latestStatus] ?? 4;
+        const bo = statusOrder[b.latestStatus] ?? 4;
+        if (ao !== bo) return ao - bo;
+        // Within same status, most recent first
+        return (b.latestStartTime || '').localeCompare(a.latestStartTime || '');
+      });
+
+      this.buildProjects = buildCards;
+
+      // Step 3: Fetch deploy pipeline states
+      const deployTargets = {};
+      for (const [name, info] of Object.entries(this._deployMap || {})) {
+        try {
+          const state = await this.aws.getPipelineState(name);
+          const deployStage = state.stages.find(s =>
+            s.stageName === 'Deploy' || s.stageName === 'deploy'
+          ) || state.stages[state.stages.length - 1];
+
+          const tag = info.imageTag || 'unknown';
+          if (!deployTargets[tag]) deployTargets[tag] = [];
+          deployTargets[tag].push({
+            pipelineName: name,
+            customer: info.customer,
+            env: info.env,
+            status: deployStage?.status || null,
+            lastUpdated: deployStage?.lastUpdated || null,
+          });
+          results.deploys++;
+          await new Promise(r => setTimeout(r, 100));
+        } catch (err) {
+          log.warn(`Pipeline sync: deploy state failed for ${name}: ${err.message}`);
+        }
+      }
+
+      this.deployTargets = deployTargets;
 
     } catch (err) {
       results.errors++;
@@ -107,100 +136,92 @@ class PipelineSync extends EventEmitter {
     this.lastResults = results;
     this._running = false;
 
-    log.info(`Pipeline sync complete: ${results.buildsChecked} builds, ${results.deploysChecked} deploys, ${results.releasesUpdated} releases updated in ${results.durationMs}ms`);
+    log.info(`Pipeline sync complete: ${results.builds} builds, ${results.deploys} deploys in ${results.durationMs}ms`);
     this.emit('sync:completed', results);
-
     return results;
   }
 
   /**
-   * Build the CodeBuild project → release mapping (cached).
+   * Discover CodeBuild projects and CodePipeline → ECR mappings.
+   * Only runs once (cached).
    */
-  async _ensureProjectMap() {
-    if (this._projectMap) return;
+  async _ensureDiscovery() {
+    if (this._projectList) return;
 
-    try {
-      const projects = await this.aws.listProjects();
-      this._projectMap = new Map();
-      const AwsClient = require('../integrations/aws');
+    const AwsClient = require('../integrations/aws');
 
-      for (const name of projects) {
-        const parsed = AwsClient.parseProjectName(name);
-        if (parsed && parsed.version) {
-          this._projectMap.set(parsed.version, name);
+    // CodeBuild projects
+    const projects = await this.aws.listProjects();
+    // Filter to ECR-Build_ projects only
+    this._projectList = projects.filter(p => p.startsWith('ECR-Build_'));
+    log.info(`Pipeline sync: found ${this._projectList.length} build projects`);
+
+    // CodePipeline → ECR mapping
+    const pipelines = await this.aws.listPipelines();
+    const deployPipelines = pipelines.filter(p => p.startsWith('Deploy-'));
+    this._deployMap = {};
+
+    for (const name of deployPipelines) {
+      try {
+        const config = await this.aws.getPipelineConfig(name);
+        const parsed = AwsClient.parsePipelineName(name);
+        if (parsed && config.ecrImageTag) {
+          this._deployMap[name] = {
+            ...parsed,
+            ecrRepo: config.ecrRepo,
+            imageTag: config.ecrImageTag,
+          };
         }
+        await new Promise(r => setTimeout(r, 100));
+      } catch (err) {
+        log.warn(`Pipeline sync: failed to read config for ${name}: ${err.message}`);
       }
-      // Log which active releases have matching projects
-      const activeVersions = this.releases.list()
-        .filter(r => r.state !== 'done' && !r.jiraArchived && r.repo === 'webplatform')
-        .map(r => r.version);
-      const matched = activeVersions.filter(v => this._projectMap.has(v));
-      const unmatched = activeVersions.filter(v => !this._projectMap.has(v));
-      log.info(`Pipeline sync: mapped ${this._projectMap.size} CodeBuild projects to releases (${matched.length} active matched, ${unmatched.length} unmatched: ${unmatched.slice(0, 5).join(', ')}${unmatched.length > 5 ? '...' : ''})`);
-    } catch (err) {
-      log.error('Pipeline sync: failed to list CodeBuild projects:', err.message);
-      this._projectMap = new Map();
     }
+
+    log.info(`Pipeline sync: mapped ${Object.keys(this._deployMap).length} deploy pipelines`);
   }
 
   /**
-   * Sync build + commit data for a single release.
+   * Build a card for a single CodeBuild project.
    */
-  async _syncReleasePipeline(release) {
-    // Try exact match first, then strip customer suffix (e.g., 4.1.0.4-ck → 4.1.0.4)
-    let projectName = this._projectMap.get(release.version);
-    if (!projectName) {
-      const baseVersion = release.version.replace(/-[a-z]+$/i, '');
-      if (baseVersion !== release.version) {
-        projectName = this._projectMap.get(baseVersion);
-      }
-    }
-    if (!projectName) return false;
+  async _fetchBuildCard(projectName) {
+    const AwsClient = require('../integrations/aws');
+    const parsed = AwsClient.parseProjectName(projectName);
+    if (!parsed) return null;
 
-    // Get recent builds
     const builds = await this.aws.getBuildsForProject(projectName, 5);
-    if (builds.length === 0) return false;
+    if (builds.length === 0) return null;
 
     const latest = builds[0];
-    const previous = builds.find(b => b.status === 'SUCCEEDED' && b.id !== latest.id);
+    const previousSuccess = builds.find(b => b.status === 'SUCCEEDED' && b.id !== latest.id);
 
-    // Get new commits since last successful build using local git
+    // Get new commits from local git
     let newCommits = [];
     let jiraKeys = [];
-    if (latest.resolvedSourceVersion) {
-      const baseSha = previous?.resolvedSourceVersion || null;
+    if (latest.resolvedSourceVersion && parsed.repo === 'webplatform') {
       try {
+        const baseSha = previousSuccess?.resolvedSourceVersion || null;
         if (baseSha) {
-          // Commits between last successful build and current
-          newCommits = await this.repoManager.log(
-            'webplatform',
-            `${baseSha}..${latest.resolvedSourceVersion}`,
-            { limit: 50 }
-          );
+          newCommits = await this.repoManager.log('webplatform', `${baseSha}..${latest.resolvedSourceVersion}`, { limit: 30 });
         } else {
-          // No previous build — just show last few commits on the branch
-          newCommits = await this.repoManager.log(
-            'webplatform',
-            latest.resolvedSourceVersion,
-            { limit: 10 }
-          );
+          newCommits = await this.repoManager.log('webplatform', latest.resolvedSourceVersion, { limit: 10 });
         }
-        // Extract JIRA keys from commit messages
-        const allText = newCommits.map(c => c.message).join(' ');
-        jiraKeys = JiraClient.extractKeys(allText);
-      } catch (err) {
-        // Git operation failed — branch might not be fetched yet
-        log.warn(`Pipeline sync: git log failed for ${release.version}: ${err.message}`);
-      }
+        jiraKeys = JiraClient.extractKeys(newCommits.map(c => c.message).join(' '));
+      } catch { /* branch not fetched yet */ }
     }
 
-    // Store on release
-    const key = this.releases._key(release.repo, release.version);
-    const rel = this.releases.releases.get(key);
-    if (!rel) return false;
+    // Find which deploy targets use this build's image tag
+    const imageTag = parsed.version || parsed.branch || parsed.custom || null;
 
-    rel.pipeline = {
+    return {
       projectName,
+      branch: parsed.branch || parsed.custom || projectName,
+      version: parsed.version,
+      repo: parsed.repo,
+      isCustom: !!parsed.custom,
+      imageTag,
+      latestStatus: latest.status,
+      latestStartTime: latest.startTime,
       builds: builds.map(b => ({
         buildNumber: b.buildNumber,
         status: b.status,
@@ -208,93 +229,21 @@ class PipelineSync extends EventEmitter {
         endTime: b.endTime,
         durationSec: b.durationSec,
         commitSha: b.resolvedSourceVersion,
-        initiator: b.initiator,
       })),
-      latest: {
-        buildNumber: latest.buildNumber,
-        status: latest.status,
-        startTime: latest.startTime,
-        endTime: latest.endTime,
-        durationSec: latest.durationSec,
-        commitSha: latest.resolvedSourceVersion,
-      },
       newCommits,
       jiraKeys,
-      syncedAt: new Date().toISOString(),
     };
-
-    this.releases._debounceSave();
-    return true;
   }
 
   /**
-   * Sync CodePipeline deploy states.
-   * Stores a global deploy status map, and also attaches to releases.
+   * Get the full builds page data for the API.
    */
-  async _syncDeploys(results) {
-    try {
-      if (!this._pipelineMap) {
-        const pipelines = await this.aws.listPipelines();
-        const AwsClient = require('../integrations/aws');
-        this._pipelineMap = new Map();
-        for (const name of pipelines) {
-          const parsed = AwsClient.parsePipelineName(name);
-          if (parsed) {
-            this._pipelineMap.set(name, parsed);
-          }
-        }
-        log.info(`Pipeline sync: mapped ${this._pipelineMap.size} deploy pipelines`);
-      }
-
-      // Fetch state for each deploy pipeline
-      const deployStates = [];
-      for (const [name, parsed] of this._pipelineMap) {
-        try {
-          const state = await this.aws.getPipelineState(name);
-          const sourceStage = state.stages.find(s => s.stageName === 'Source');
-          const deployStage = state.stages.find(s =>
-            s.stageName === 'Deploy' || s.stageName === 'deploy'
-          ) || state.stages[state.stages.length - 1];
-
-          deployStates.push({
-            pipelineName: name,
-            customer: parsed.customer,
-            env: parsed.env,
-            status: deployStage?.status || null,
-            lastUpdated: deployStage?.lastUpdated || sourceStage?.lastUpdated || null,
-            sourceStatus: sourceStage?.status || null,
-            stages: state.stages,
-          });
-          results.deploysChecked++;
-
-          // Small delay between API calls
-          await new Promise(r => setTimeout(r, 100));
-        } catch (err) {
-          log.warn(`Pipeline sync: failed to get state for ${name}: ${err.message}`);
-        }
-      }
-
-      // Store deploy states globally on all active webplatform releases
-      const activeReleases = this.releases.list().filter(r =>
-        r.state !== 'done' && !r.jiraArchived && r.repo === 'webplatform'
-      );
-      for (const release of activeReleases) {
-        const key = this.releases._key(release.repo, release.version);
-        const rel = this.releases.releases.get(key);
-        if (rel) {
-          if (!rel.pipeline) rel.pipeline = {};
-          rel.pipeline.deploys = deployStates;
-          rel.pipeline.deploySyncedAt = new Date().toISOString();
-        }
-      }
-
-      if (deployStates.length > 0) {
-        this.releases._debounceSave();
-      }
-    } catch (err) {
-      results.errors++;
-      log.error('Pipeline sync: deploy sync failed:', err.message);
-    }
+  getBuildsPageData() {
+    return {
+      builds: this.buildProjects,
+      deployTargets: this.deployTargets,
+      lastRun: this.lastRun,
+    };
   }
 
   getStatus() {
@@ -303,8 +252,8 @@ class PipelineSync extends EventEmitter {
       lastRun: this.lastRun,
       lastResults: this.lastResults,
       configured: this.aws.isConfigured(),
-      projectCount: this._projectMap?.size || 0,
-      pipelineCount: this._pipelineMap?.size || 0,
+      projectCount: this._projectList?.length || 0,
+      deployCount: Object.keys(this._deployMap || {}).length,
     };
   }
 }

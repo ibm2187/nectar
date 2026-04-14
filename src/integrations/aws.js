@@ -114,6 +114,24 @@ class AwsClient {
   }
 
   /**
+   * Get the full pipeline config (stages, actions, sources).
+   * Used to discover ECR image tag → deploy target mapping.
+   */
+  async getPipelineConfig(pipelineName) {
+    const cp = this._getCodePipeline();
+    const { GetPipelineCommand } = require('@aws-sdk/client-codepipeline');
+    const resp = await cp.send(new GetPipelineCommand({ name: pipelineName }));
+    const pipeline = resp.pipeline || {};
+    const source = (pipeline.stages || []).find(s => s.name === 'Source');
+    const ecrAction = source?.actions?.find(a => a.configuration?.RepositoryName);
+    return {
+      name: pipelineName,
+      ecrRepo: ecrAction?.configuration?.RepositoryName || null,
+      ecrImageTag: ecrAction?.configuration?.ImageTag || null,
+    };
+  }
+
+  /**
    * Get the current state of a pipeline (stages + actions).
    */
   async getPipelineState(pipelineName) {

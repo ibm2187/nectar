@@ -1,0 +1,321 @@
+import { useEffect, useState, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { apiFetch } from '../../api/client'
+import { Card } from '../../components/ui/card'
+import { Badge } from '../../components/ui/badge'
+import { JiraLink } from '../../components/JiraLink'
+import { cn, timeAgo } from '../../lib/utils'
+
+// ── Types ────────────────────────────────────────────────
+
+interface BuildInfo {
+  buildNumber: number
+  status: string
+  startTime: string | null
+  endTime: string | null
+  durationSec: number | null
+  commitSha: string | null
+}
+
+interface BuildCard {
+  projectName: string
+  branch: string
+  version: string | null
+  repo: string
+  isCustom: boolean
+  imageTag: string | null
+  latestStatus: string
+  latestStartTime: string | null
+  builds: BuildInfo[]
+  newCommits: Array<{ sha: string; message: string }>
+  jiraKeys: string[]
+}
+
+interface DeployTarget {
+  pipelineName: string
+  customer: string
+  env: string
+  status: string | null
+  lastUpdated: string | null
+}
+
+interface BuildsPageData {
+  builds: BuildCard[]
+  deployTargets: Record<string, DeployTarget[]>
+  lastRun: string | null
+}
+
+// ── Status styling ───────────────────────────────────────
+
+const STATUS_CONFIG: Record<string, { label: string; color: string; dot: string; border: string }> = {
+  IN_PROGRESS: { label: 'Building',  color: 'text-blue-400',   dot: 'bg-blue-500 animate-pulse', border: 'border-blue-500/30' },
+  FAILED:      { label: 'Failed',    color: 'text-red-400',    dot: 'bg-red-500',                border: 'border-red-500/30' },
+  SUCCEEDED:   { label: 'Succeeded', color: 'text-green-400',  dot: 'bg-green-500',              border: 'border-green-500/30' },
+  STOPPED:     { label: 'Stopped',   color: 'text-gray-400',   dot: 'bg-gray-500',               border: 'border-gray-500/30' },
+}
+
+const DEPLOY_STATUS: Record<string, { color: string; dot: string }> = {
+  Succeeded:  { color: 'text-green-400', dot: 'bg-green-500' },
+  InProgress: { color: 'text-blue-400',  dot: 'bg-blue-500 animate-pulse' },
+  Failed:     { color: 'text-red-400',   dot: 'bg-red-500' },
+}
+
+function formatDuration(sec: number): string {
+  if (sec < 60) return `${sec}s`
+  const min = Math.floor(sec / 60)
+  const s = sec % 60
+  return s > 0 ? `${min}m ${s}s` : `${min}m`
+}
+
+// ── Filter type ──────────────────────────────────────────
+
+type Filter = 'all' | 'building' | 'failed' | 'succeeded' | 'custom'
+
+// ── Page ─────────────────────────────────────────────────
+
+export function BuildsPage() {
+  const [data, setData] = useState<BuildsPageData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState<Filter>('all')
+  const [search, setSearch] = useState('')
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    setLoading(true)
+    apiFetch<BuildsPageData>('/pipeline/builds')
+      .then(setData)
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const filtered = useMemo(() => {
+    if (!data) return []
+    let builds = data.builds
+    if (filter === 'building') builds = builds.filter(b => b.latestStatus === 'IN_PROGRESS')
+    else if (filter === 'failed') builds = builds.filter(b => b.latestStatus === 'FAILED')
+    else if (filter === 'succeeded') builds = builds.filter(b => b.latestStatus === 'SUCCEEDED')
+    else if (filter === 'custom') builds = builds.filter(b => b.isCustom)
+    if (search) {
+      const s = search.toLowerCase()
+      builds = builds.filter(b =>
+        b.branch.toLowerCase().includes(s) ||
+        b.projectName.toLowerCase().includes(s) ||
+        b.jiraKeys.some(k => k.toLowerCase().includes(s))
+      )
+    }
+    return builds
+  }, [data, filter, search])
+
+  const counts = useMemo(() => {
+    if (!data) return { building: 0, failed: 0, succeeded: 0 }
+    return {
+      building: data.builds.filter(b => b.latestStatus === 'IN_PROGRESS').length,
+      failed: data.builds.filter(b => b.latestStatus === 'FAILED').length,
+      succeeded: data.builds.filter(b => b.latestStatus === 'SUCCEEDED').length,
+    }
+  }, [data])
+
+  if (loading) return <div className="text-sm text-muted-foreground py-8 text-center">Loading builds...</div>
+  if (!data || data.builds.length === 0) return <div className="text-sm text-muted-foreground py-8 text-center italic">No build data available. Pipeline sync may not have run yet.</div>
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-bold">Builds</h1>
+        <div className="flex items-center gap-3 text-sm">
+          {counts.building > 0 && <span className="text-blue-400 font-medium">{counts.building} building</span>}
+          {counts.failed > 0 && <span className="text-red-400 font-medium">{counts.failed} failed</span>}
+          <span className="text-green-400">{counts.succeeded} succeeded</span>
+          {data.lastRun && <span className="text-xs text-muted-foreground">synced {timeAgo(data.lastRun)}</span>}
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
+          {([
+            ['all', 'All'],
+            ['building', `Building${counts.building ? ` (${counts.building})` : ''}`],
+            ['failed', `Failed${counts.failed ? ` (${counts.failed})` : ''}`],
+            ['succeeded', 'Succeeded'],
+            ['custom', 'Custom'],
+          ] as [Filter, string][]).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setFilter(key)}
+              className={cn(
+                'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                filter === key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <input
+          type="text"
+          placeholder="Search branch, project, JIRA key..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="h-8 px-3 text-sm rounded-md border bg-background text-foreground w-64"
+        />
+      </div>
+
+      {/* Build cards */}
+      <div className="space-y-3">
+        {filtered.map(build => (
+          <BuildCardComponent
+            key={build.projectName}
+            build={build}
+            deployTargets={data.deployTargets[build.imageTag || ''] || []}
+            navigate={navigate}
+          />
+        ))}
+        {filtered.length === 0 && (
+          <div className="text-sm text-muted-foreground py-8 text-center italic">No builds match the current filter</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Build card with deploy targets ───────────────────────
+
+function BuildCardComponent({ build, deployTargets, navigate }: {
+  build: BuildCard
+  deployTargets: DeployTarget[]
+  navigate: (path: string) => void
+}) {
+  const [expanded, setExpanded] = useState(build.latestStatus === 'FAILED' || build.latestStatus === 'IN_PROGRESS')
+  const latest = build.builds[0]
+  const info = STATUS_CONFIG[build.latestStatus] || STATUS_CONFIG.STOPPED
+
+  // Clean branch name for display
+  const displayBranch = build.branch
+    .replace('releases/', '')
+    .replace('ECR-Build_viv-', '')
+
+  return (
+    <Card className={cn('overflow-hidden', build.latestStatus === 'FAILED' && 'border-red-500/20')}>
+      <div className="flex">
+        {/* Left: Build info */}
+        <div className="flex-1 min-w-0">
+          {/* Header */}
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="w-full flex items-center gap-3 px-4 py-3 hover:bg-accent/20 transition-colors text-left"
+          >
+            <span className={cn("w-2.5 h-2.5 rounded-full shrink-0", info.dot)} />
+            <span className="font-mono font-bold truncate">{displayBranch}</span>
+            {build.isCustom && <Badge variant="outline" className="text-xs text-purple-400 border-purple-500/30 shrink-0">custom</Badge>}
+            {build.version && (
+              <button
+                onClick={(e) => { e.stopPropagation(); navigate(`/releases/webplatform:${build.version}`) }}
+                className="text-xs text-primary hover:underline shrink-0"
+              >
+                release {build.version}
+              </button>
+            )}
+            <span className={cn("text-xs shrink-0", info.color)}>{info.label}</span>
+            {latest?.durationSec && <span className="text-xs text-muted-foreground shrink-0">{formatDuration(latest.durationSec)}</span>}
+            {latest?.startTime && <span className="text-xs text-muted-foreground shrink-0">{timeAgo(latest.startTime)}</span>}
+            <span className="text-xs text-muted-foreground ml-auto shrink-0">{expanded ? '▾' : '▸'}</span>
+          </button>
+
+          {/* Expanded: commits + build history */}
+          {expanded && (
+            <div className="px-4 pb-3 space-y-3">
+              {/* JIRA keys */}
+              {build.jiraKeys.length > 0 && (
+                <div>
+                  <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+                    {build.jiraKeys.length} JIRA ticket{build.jiraKeys.length !== 1 ? 's' : ''} in latest build
+                  </h4>
+                  <div className="flex flex-wrap gap-1.5">
+                    {build.jiraKeys.map(key => (
+                      <JiraLink key={key} jiraKey={key} className="text-xs" />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Commits */}
+              {build.newCommits.length > 0 && (
+                <div>
+                  <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+                    {build.newCommits.length} commit{build.newCommits.length !== 1 ? 's' : ''} since last success
+                  </h4>
+                  <div className="space-y-0.5 max-h-32 overflow-y-auto">
+                    {build.newCommits.slice(0, 15).map(c => (
+                      <div key={c.sha} className="flex items-start gap-2 text-xs">
+                        <span className="font-mono text-muted-foreground shrink-0">{c.sha.slice(0, 7)}</span>
+                        <span className="truncate">{c.message}</span>
+                      </div>
+                    ))}
+                    {build.newCommits.length > 15 && (
+                      <span className="text-xs text-muted-foreground">+{build.newCommits.length - 15} more</span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Build history */}
+              {build.builds.length > 1 && (
+                <div>
+                  <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Build History</h4>
+                  <div className="flex items-center gap-1">
+                    {build.builds.map(b => {
+                      const bi = STATUS_CONFIG[b.status] || STATUS_CONFIG.STOPPED
+                      return (
+                        <div
+                          key={b.buildNumber}
+                          className={cn(
+                            "w-7 h-7 rounded flex items-center justify-center text-[10px] font-medium border",
+                            b.status === 'SUCCEEDED' ? 'bg-green-500/15 border-green-500/30 text-green-400' :
+                            b.status === 'FAILED' ? 'bg-red-500/15 border-red-500/30 text-red-400' :
+                            b.status === 'IN_PROGRESS' ? 'bg-blue-500/15 border-blue-500/30 text-blue-400' :
+                            'bg-gray-500/15 border-gray-500/30 text-gray-400'
+                          )}
+                          title={`#${b.buildNumber}: ${bi.label}${b.startTime ? ` — ${timeAgo(b.startTime)}` : ''}`}
+                        >
+                          #{b.buildNumber}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Right: Deploy targets */}
+        {deployTargets.length > 0 && (
+          <div className="w-56 shrink-0 border-l border-border/30 bg-accent/5 px-3 py-3">
+            <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Deploys to</h4>
+            <div className="space-y-1">
+              {deployTargets.map(d => {
+                const di = DEPLOY_STATUS[d.status || ''] || { color: 'text-muted-foreground', dot: 'bg-gray-500' }
+                return (
+                  <div key={d.pipelineName} className="flex items-center gap-2">
+                    <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", di.dot)} />
+                    <span className="text-xs flex-1 truncate">{d.customer} {d.env}</span>
+                    <span className={cn("text-[10px] shrink-0", di.color)}>
+                      {d.status === 'Succeeded' ? '✓' : d.status === 'Failed' ? '✗' : d.status === 'InProgress' ? '...' : '—'}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+            {deployTargets.length > 0 && (
+              <div className="text-[10px] text-muted-foreground mt-2 pt-1 border-t border-border/20">
+                {deployTargets.filter(d => d.status === 'Succeeded').length}/{deployTargets.length} deployed
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
+  )
+}
