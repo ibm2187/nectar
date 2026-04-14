@@ -30,7 +30,7 @@ function makeMockReleases(releaseList) {
   };
 }
 
-function makeMockAws(opts = {}) {
+function makeMockAws(opts = {}, crossAccounts = []) {
   const projects = opts.projects || ['ECR-Build_viv-release-4_3_0'];
   const builds = opts.builds || [{
     id: 'ECR-Build_viv-release-4_3_0:1',
@@ -60,6 +60,7 @@ function makeMockAws(opts = {}) {
 
   return {
     isConfigured: () => true,
+    getCrossAccountRoles: () => crossAccounts,
     listProjects: vi.fn(async () => projects),
     getBuildsForProject: vi.fn(async () => builds.map(b => ({
       id: b.id,

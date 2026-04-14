@@ -1877,6 +1877,7 @@ module.exports = function createRoutes(services, config) {
         { key: 'AWS_ACCESS_KEY_ID', label: 'Access Key ID', secret: false },
         { key: 'AWS_SECRET_ACCESS_KEY', label: 'Secret Access Key', secret: true },
         { key: 'AWS_REGION', label: 'Region', secret: false },
+        { key: 'AWS_CROSS_ACCOUNT_ROLES', label: 'Cross-Account Roles (Customer:ARN,...)', secret: false },
       ],
     },
   };
