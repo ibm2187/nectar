@@ -118,9 +118,7 @@ export function IntegrationsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [expandedBuckets, setExpandedBuckets] = useState<Set<Bucket>>(
-    new Set(['everywhere-on', 'mixed'])
-  )
+  const [activeBucket, setActiveBucket] = useState<Bucket | 'all'>('all')
   const [panel, setPanel] = useState<{ customerName: string; integrationType: string; envs: EnvDetailItem[] } | null>(null)
 
   const customersMap = useWsStore(s => s.customers)
@@ -180,14 +178,10 @@ export function IntegrationsPage() {
     return result
   }, [filtered])
 
-  function toggleBucket(b: Bucket) {
-    setExpandedBuckets(prev => {
-      const next = new Set(prev)
-      if (next.has(b)) next.delete(b)
-      else next.add(b)
-      return next
-    })
-  }
+  const displayItems = useMemo(() => {
+    if (activeBucket === 'all') return filtered
+    return filtered.filter(i => i.bucket === activeBucket)
+  }, [filtered, activeBucket])
 
   if (loading) {
     return <NectarLoader size="lg" message="Aggregating integrations..." className="mt-32" />
@@ -220,88 +214,68 @@ export function IntegrationsPage() {
           <Button variant="outline" size="sm" onClick={load}>Refresh</Button>
         </div>
 
-        {/* Bucket summary pills */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      </div>
+
+      {/* Bucket tabs + search */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
+          <button
+            onClick={() => setActiveBucket('all')}
+            className={cn(
+              'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+              activeBucket === 'all' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            All ({filtered.length})
+          </button>
           {BUCKET_ORDER.map(b => {
             const meta = BUCKET_META[b]
             const count = bucketed[b].length
-            const total = data.stats.buckets[b]
             return (
               <button
                 key={b}
-                type="button"
-                onClick={() => toggleBucket(b)}
+                onClick={() => setActiveBucket(b)}
                 className={cn(
-                  "rounded-lg border border-l-4 p-3 text-left transition-all hover:bg-accent/30",
-                  meta.accent,
-                  count === 0 && "opacity-50"
+                  'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                  activeBucket === b ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                  count === 0 && 'opacity-40'
                 )}
               >
-                <div className="flex items-baseline gap-2">
-                  <span className={cn("text-2xl font-bold", meta.color)}>{count}</span>
-                  {count !== total && (
-                    <span className="text-xs text-muted-foreground">of {total}</span>
-                  )}
-                </div>
-                <div className={cn("text-xs uppercase tracking-wider font-semibold", meta.color)}>{meta.label}</div>
-                <div className="text-xs text-muted-foreground mt-1">{meta.subtitle}</div>
+                <span className={cn(activeBucket === b && meta.color)}>{meta.label}</span>
+                {count > 0 && <span className="ml-1 text-xs text-muted-foreground">{count}</span>}
               </button>
             )
           })}
         </div>
-      </div>
 
-      {/* Filters */}
-      <div className="flex items-center gap-2 flex-wrap">
         <Input
           placeholder="Search integrations, customers, or environments..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className="max-w-sm"
+          className="max-w-sm h-8"
         />
       </div>
 
-      {/* Bucket sections */}
-      {BUCKET_ORDER.map(bucket => {
-        const items = bucketed[bucket]
-        if (items.length === 0) return null
-        const meta = BUCKET_META[bucket]
-        const expanded = expandedBuckets.has(bucket)
-
-        return (
-          <div key={bucket}>
-            <button
-              type="button"
-              onClick={() => toggleBucket(bucket)}
-              className={cn("w-full flex items-center gap-2 mb-2 text-left hover:opacity-80")}
-            >
-              <span className="text-sm">{expanded ? '▾' : '▸'}</span>
-              <h3 className={cn("text-sm font-semibold uppercase tracking-wider", meta.color)}>{meta.label}</h3>
-              <span className="text-xs text-muted-foreground">{items.length}</span>
-              <div className="flex-1 h-px bg-border ml-2"></div>
-              <span className="text-xs text-muted-foreground italic">{meta.subtitle}</span>
-            </button>
-
-            {expanded && (
-              <Card>
-                <CardContent className="p-0">
-                  <div className="divide-y divide-border/50">
-                    {items.map(integ => (
-                      <IntegrationRow
-                        key={integ.type}
-                        integration={integ}
-                        customers={data.customers}
-                        customerNames={customerNames}
-                        onClickCustomer={(customerName, envs) => setPanel({ customerName, integrationType: integ.type, envs })}
-                      />
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
+      {/* Single unified table */}
+      <Card>
+        <CardContent className="p-0">
+          <div className="divide-y divide-border/50">
+            {displayItems.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground italic">No integrations match the current filter</div>
+            ) : (
+              displayItems.map(integ => (
+                <IntegrationRow
+                  key={integ.type}
+                  integration={integ}
+                  customers={data.customers}
+                  customerNames={customerNames}
+                  onClickCustomer={(customerName, envs) => setPanel({ customerName, integrationType: integ.type, envs })}
+                />
+              ))
             )}
           </div>
-        )
-      })}
+        </CardContent>
+      </Card>
 
       <EnvDetailPanel
         open={!!panel}

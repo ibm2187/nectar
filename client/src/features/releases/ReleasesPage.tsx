@@ -109,10 +109,8 @@ export function ReleasesPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const defaultView = typeof window !== 'undefined' && window.innerWidth < 768 ? 'agenda' : 'calendar'
-  const viewMode = (searchParams.get('view') as ViewMode) || defaultView
-  const defaultZoom = typeof window !== 'undefined' && window.innerWidth < 768 ? 'day' : 'week'
-  const zoom = (searchParams.get('zoom') as ZoomLevel) || defaultZoom
+  const viewMode = (searchParams.get('view') as ViewMode) || 'agenda'
+  const zoom = (searchParams.get('zoom') as ZoomLevel) || 'day'
   const offsetParam = parseInt(searchParams.get('offset') || '0', 10)
 
   const [releases, setReleases] = useState<Release[]>([])
