@@ -261,7 +261,7 @@ function BuildCardComponent({ build, deployTargets, navigate }: {
     .replace('ECR-Build_viv-', '')
 
   return (
-    <div className="flex items-stretch gap-0">
+    <div className="flex flex-col md:flex-row md:items-stretch gap-2 md:gap-0">
       {/* Build card */}
       <Card className={cn('flex-1 min-w-0 overflow-hidden', build.latestStatus === 'FAILED' && 'border-red-500/20')}>
         {/* Header */}
@@ -336,8 +336,8 @@ function BuildCardComponent({ build, deployTargets, navigate }: {
         )}
       </Card>
 
-      {/* Arrow connector with build time */}
-      <div className="flex items-center justify-center shrink-0 w-44 px-3">
+      {/* Arrow connector with build time — hidden on mobile */}
+      <div className="hidden md:flex items-center justify-center shrink-0 w-44 px-3">
         <div className="flex flex-col items-center w-full">
           {latest?.durationSec && (
             <span className="text-[10px] text-muted-foreground/50 mb-1.5">{formatDuration(latest.durationSec)}</span>
@@ -353,7 +353,7 @@ function BuildCardComponent({ build, deployTargets, navigate }: {
       </div>
 
       {/* Deploy card — always shows */}
-      <Card className="w-52 shrink-0 overflow-hidden">
+      <Card className="w-full md:w-52 shrink-0 overflow-hidden">
         <div className="px-3 py-3 h-full flex flex-col">
           <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Deploys to</h4>
           {deployTargets.length > 0 ? (
