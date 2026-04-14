@@ -73,6 +73,11 @@ function makeMockAws(opts = {}) {
       initiator: b.initiator,
     }))),
     listPipelines: vi.fn(async () => pipelines),
+    getPipelineConfig: vi.fn(async (name) => ({
+      name,
+      ecrRepo: 'viv-custom',
+      ecrImageTag: 'master',
+    })),
     getPipelineState: vi.fn(async (name) => ({
       name,
       stages: pipelineState.stageStates.map(s => ({
@@ -111,66 +116,62 @@ describe('PipelineSync', () => {
     sync = new PipelineSync(releases, aws, repoManager, {});
   });
 
-  it('maps CodeBuild projects to releases', async () => {
+  it('discovers CodeBuild projects', async () => {
     await sync.run();
     expect(aws.listProjects).toHaveBeenCalled();
-    expect(sync._projectMap.has('4.3.0')).toBe(true);
+    expect(sync._projectList).toContain('ECR-Build_viv-release-4_3_0');
   });
 
-  it('fetches build status for active webplatform releases', async () => {
+  it('fetches builds for each project', async () => {
     await sync.run();
     expect(aws.getBuildsForProject).toHaveBeenCalledWith('ECR-Build_viv-release-4_3_0', 5);
   });
 
-  it('skips done releases', async () => {
-    const results = await sync.run();
-    // Only 4.3.0 should be checked (4.2.0 is done, ios is not webplatform)
-    expect(results.buildsChecked).toBe(1);
-  });
-
-  it('stores pipeline data on the release', async () => {
+  it('stores build data on the sync service', async () => {
     await sync.run();
-    const release = releases.releases.get('webplatform:4.3.0');
-    expect(release.pipeline).toBeTruthy();
-    expect(release.pipeline.latest.status).toBe('SUCCEEDED');
-    expect(release.pipeline.latest.buildNumber).toBe(1);
-    expect(release.pipeline.latest.commitSha).toBe('abc123');
+    expect(sync.buildProjects.length).toBeGreaterThan(0);
+    const card = sync.buildProjects.find(b => b.version === '4.3.0');
+    expect(card).toBeTruthy();
+    expect(card.latestStatus).toBe('SUCCEEDED');
+    expect(card.builds[0].commitSha).toBe('abc123');
   });
 
   it('gets new commits from local git', async () => {
     await sync.run();
-    const release = releases.releases.get('webplatform:4.3.0');
-    expect(release.pipeline.newCommits).toHaveLength(2);
-    expect(release.pipeline.jiraKeys).toContain('DEV-45329');
-    expect(release.pipeline.jiraKeys).toContain('DEV-45718');
+    const card = sync.buildProjects.find(b => b.version === '4.3.0');
+    expect(card.newCommits).toHaveLength(2);
+    expect(card.jiraKeys).toContain('DEV-45329');
+    expect(card.jiraKeys).toContain('DEV-45718');
   });
 
-  it('does not fetch deploy pipelines (deploy status comes from env poller)', async () => {
+  it('fetches deploy pipeline configs for ECR mapping', async () => {
     await sync.run();
-    expect(aws.listPipelines).not.toHaveBeenCalled();
+    expect(aws.listPipelines).toHaveBeenCalled();
+    expect(aws.getPipelineConfig).toHaveBeenCalled();
   });
 
-  it('calls debounceSave', async () => {
+  it('provides builds page data via getBuildsPageData', async () => {
     await sync.run();
-    expect(releases._debounceSave).toHaveBeenCalled();
+    const data = sync.getBuildsPageData();
+    expect(data.builds.length).toBeGreaterThan(0);
+    expect(data.deployTargets).toBeTruthy();
+    expect(data.lastRun).toBeTruthy();
   });
 
   it('handles AWS errors gracefully', async () => {
     aws.listProjects = vi.fn(async () => { throw new Error('AWS down'); });
     sync = new PipelineSync(releases, aws, repoManager, {});
     const results = await sync.run();
-    // Errors are caught internally — sync completes without crashing
-    expect(results.releasesUpdated).toBe(0);
-    // getBuildsForProject should not have been called since project map is empty
-    expect(aws.getBuildsForProject).not.toHaveBeenCalled();
+    expect(results.errors).toBeGreaterThan(0);
+    expect(sync.buildProjects).toHaveLength(0);
   });
 
-  it('handles missing CodeBuild project for a release', async () => {
-    aws = makeMockAws({ projects: [] }); // no projects
+  it('handles empty project list', async () => {
+    aws = makeMockAws({ projects: [] });
     sync = new PipelineSync(releases, aws, repoManager, {});
     const results = await sync.run();
-    expect(results.buildsChecked).toBe(1);
-    expect(results.releasesUpdated).toBe(0);
+    expect(results.builds).toBe(0);
+    expect(sync.buildProjects).toHaveLength(0);
   });
 
   it('emits sync:completed', async () => {
@@ -192,11 +193,12 @@ describe('PipelineSync', () => {
     expect(aws.listProjects).toHaveBeenCalledTimes(1);
   });
 
-  it('getStatus reports project count', async () => {
+  it('getStatus reports project and deploy counts', async () => {
     await sync.run();
     const status = sync.getStatus();
     expect(status.configured).toBe(true);
-    expect(status.projectCount).toBe(1);
+    expect(status.projectCount).toBeGreaterThan(0);
+    expect(status.deployCount).toBeGreaterThanOrEqual(0);
   });
 
   it('handles FAILED build status', async () => {
@@ -218,10 +220,9 @@ describe('PipelineSync', () => {
     sync = new PipelineSync(releases, aws, repoManager, {});
     await sync.run();
 
-    const release = releases.releases.get('webplatform:4.3.0');
-    expect(release.pipeline.latest.status).toBe('FAILED');
-    expect(release.pipeline.builds).toHaveLength(2);
-    // Should still compute commits between succeeded and failed
+    const card = sync.buildProjects.find(b => b.version === '4.3.0');
+    expect(card.latestStatus).toBe('FAILED');
+    expect(card.builds).toHaveLength(2);
     expect(repoManager.log).toHaveBeenCalled();
   });
 
@@ -237,7 +238,7 @@ describe('PipelineSync', () => {
     sync = new PipelineSync(releases, aws, repoManager, {});
     await sync.run();
 
-    const release = releases.releases.get('webplatform:4.3.0');
-    expect(release.pipeline.latest.status).toBe('IN_PROGRESS');
+    const card = sync.buildProjects.find(b => b.version === '4.3.0');
+    expect(card.latestStatus).toBe('IN_PROGRESS');
   });
 });

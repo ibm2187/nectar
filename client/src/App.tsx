@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { AppShell } from './components/layout/AppShell'
 import { HomePage } from './features/home/HomePage'
+import { BuildsPage } from './features/builds/BuildsPage'
 import { ReleasesPage } from './features/releases/ReleasesPage'
 import { ReleaseDetail } from './features/releases/ReleaseDetail'
 import { FeaturesPage } from './features/features/FeaturesPage'
@@ -76,6 +77,7 @@ export default function App() {
             </AuthGuard>
           }>
             <Route path="/" element={<HomePage />} />
+            <Route path="/builds" element={<BuildsPage />} />
             <Route path="/releases" element={<PermissionGuard permKey="releases"><ReleasesPage /></PermissionGuard>} />
             <Route path="/features" element={<PermissionGuard permKey="features"><FeaturesPage /></PermissionGuard>} />
             <Route path="/integrations" element={<PermissionGuard permKey="integrations"><IntegrationsPage /></PermissionGuard>} />

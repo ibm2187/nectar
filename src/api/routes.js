@@ -828,6 +828,11 @@ module.exports = function createRoutes(services, config) {
     res.json(services.pipelineSync.getStatus());
   });
 
+  router.get('/pipeline/builds', (req, res) => {
+    if (!services.pipelineSync) return res.json({ builds: [], deployTargets: {}, lastRun: null });
+    res.json(services.pipelineSync.getBuildsPageData());
+  });
+
   router.post('/pipeline/sync', asyncHandler(async (req, res) => {
     if (!services.pipelineSync) return res.status(503).json({ error: 'Pipeline sync not configured' });
     const results = await services.pipelineSync.run();
