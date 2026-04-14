@@ -70,15 +70,14 @@ class JiraSync extends EventEmitter {
     for (const repoName of previouslySharing) {
       if (activeSharing.has(repoName)) continue; // still sharing, skip
 
-      let cleaned = 0;
-      for (const release of this.releases.list()) {
-        if (release.repo !== repoName) continue;
-        const before = release.tickets.length;
-        release.tickets = release.tickets.filter(t => t.source !== 'jira');
-        cleaned += before - release.tickets.length;
-      }
-      if (cleaned > 0) {
-        log.info(`Migration: removed ${cleaned} stale jira-synced tickets from ${repoName} releases (sharesVersionsWith removed)`);
+      // Remove all releases for this repo entirely
+      const toDelete = this.releases.list().filter(r => r.repo === repoName);
+      if (toDelete.length > 0) {
+        for (const release of toDelete) {
+          const key = this.releases._key(release.repo, release.version);
+          this.releases.releases.delete(key);
+        }
+        log.info(`Migration: removed ${toDelete.length} bluesummit releases (repo no longer shares versions)`);
         this.releases._debounceSave();
       }
     }
