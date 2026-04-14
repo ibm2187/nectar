@@ -81,7 +81,7 @@ class PipelineSync extends EventEmitter {
           const card = await this._fetchBuildCard(projectName);
           if (card) { card.account = 'Viv'; buildCards.push(card); }
           results.builds++;
-          await new Promise(r => setTimeout(r, 150)); // rate limit
+          await new Promise(r => setTimeout(r, 300)); // rate limit
         } catch (err) {
           log.warn(`Pipeline sync: build fetch failed for ${projectName}: ${err.message}`);
           results.errors++;
@@ -93,7 +93,7 @@ class PipelineSync extends EventEmitter {
       for (const { customer, roleArn } of crossAccounts) {
         try {
           const projects = await this.aws.listProjectsForRole(roleArn);
-          const ecrProjects = projects.filter(p => p.startsWith('ECR-Build_'));
+          const ecrProjects = projects.filter(p => p.startsWith('ECR-Build_') && !p.match(/release-3_/));
           log.info(`Pipeline sync: ${customer} account has ${ecrProjects.length} build projects`);
 
           for (const projectName of ecrProjects) {
@@ -101,7 +101,7 @@ class PipelineSync extends EventEmitter {
               const card = await this._fetchBuildCardForRole(roleArn, projectName);
               if (card) { card.account = customer; buildCards.push(card); }
               results.builds++;
-              await new Promise(r => setTimeout(r, 150)); // rate limit
+              await new Promise(r => setTimeout(r, 300)); // rate limit
             } catch (err) {
               log.warn(`Pipeline sync: build fetch failed for ${customer}/${projectName}: ${err.message}`);
               results.errors++;
@@ -239,8 +239,13 @@ class PipelineSync extends EventEmitter {
 
     // CodeBuild projects
     const projects = await this.aws.listProjects();
-    // Filter to ECR-Build_ projects only
-    this._projectList = projects.filter(p => p.startsWith('ECR-Build_'));
+    // Filter to ECR-Build_ projects, skip ancient versions (3.x)
+    this._projectList = projects.filter(p => {
+      if (!p.startsWith('ECR-Build_')) return false;
+      // Skip very old releases (3.x.x) to reduce API calls
+      if (p.match(/release-3_/)) return false;
+      return true;
+    });
     log.info(`Pipeline sync: found ${this._projectList.length} build projects`);
 
     // CodePipeline → ECR mapping
