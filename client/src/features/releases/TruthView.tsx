@@ -237,7 +237,7 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
     })
 
     return rows
-  }, [activeTickets, filter, search, sortKey, sortDir])
+  }, [activeTickets, filter, jiraStatusGroup, search, sortKey, sortDir])
 
   if (loading && !truth && !impact) {
     return (
