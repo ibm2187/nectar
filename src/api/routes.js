@@ -817,8 +817,34 @@ module.exports = function createRoutes(services, config) {
   // ── Release Truth ──────────────────────────────────────
 
   router.get('/releases/:repo/:version/truth', asyncHandler(async (req, res) => {
-    const truth = await releaseTruth.compute(req.params.repo, req.params.version);
-    res.json(truth);
+    const { repo, version } = req.params;
+    const refresh = req.query.refresh === 'true';
+
+    // If refresh requested, clear cache and trigger fresh computation
+    if (refresh) {
+      releaseTruth.clearCached(repo, version);
+      releaseTruth.trigger(repo, version);
+      return res.json({ status: 'computing' });
+    }
+
+    // Check for cached/in-progress result
+    const cached = releaseTruth.getCached(repo, version);
+
+    switch (cached.status) {
+      case 'ready':
+        return res.json({ status: 'ready', result: cached.result, computedAt: cached.computedAt });
+      case 'computing':
+        // Return stale result if available while recomputing
+        return res.json({ status: 'computing', result: cached.result, computedAt: cached.computedAt });
+      case 'error':
+        // Return error + stale result if available; client can retry
+        return res.json({ status: 'error', error: cached.error, result: cached.result, computedAt: cached.computedAt });
+      case 'none':
+      default:
+        // No cache — trigger computation and tell client to poll
+        releaseTruth.trigger(repo, version);
+        return res.json({ status: 'computing' });
+    }
   }));
 
   // Deployment impact — diff between target release and current prod version
