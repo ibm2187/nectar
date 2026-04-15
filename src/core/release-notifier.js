@@ -24,6 +24,11 @@ class ReleaseNotifier {
       return;
     }
 
+    if (process.env.NODE_ENV !== 'production') {
+      log.info('Release notifier: scheduled notifications disabled (not production). Manual notify still works.');
+      return;
+    }
+
     // Schedule: 9 AM and 2 PM ET on weekdays
     const schedules = [
       '0 9 * * 1-5',   // 9 AM Mon-Fri
