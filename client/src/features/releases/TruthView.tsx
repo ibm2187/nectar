@@ -443,7 +443,7 @@ export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
               <colgroup>
                 <col className="w-28" />
                 <col />{/* title takes remaining */}
-                <col className="w-36" />
+                <col className="w-44" />
                 <col className="w-16" />
                 <col className="w-10" />
                 <col className="w-24" />
@@ -672,12 +672,12 @@ function TicketRow({ ticket: t, prs, version, onClickPr }: { ticket: VerifiedTic
               prCreatedAt: t.pr!.prCreatedAt,
               status: 'open',
             }] : [])}
-            className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium border cursor-pointer hover:ring-1 hover:ring-primary/30', getStatusBadgeColor(t.jiraStatus))}
+            className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium border cursor-pointer hover:ring-1 hover:ring-primary/30 whitespace-nowrap', getStatusBadgeColor(t.jiraStatus))}
           >
             {t.jiraStatus}
           </button>
         ) : (
-          <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium border', getStatusBadgeColor(t.jiraStatus))}>{t.jiraStatus}</span>
+          <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium border whitespace-nowrap', getStatusBadgeColor(t.jiraStatus))}>{t.jiraStatus}</span>
         )}
       </td>
 
