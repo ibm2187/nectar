@@ -96,8 +96,21 @@ function getDeployTargetsForBuild(build: BuildCard, allTargets: Record<string, D
 
 // ── Build history with expandable JIRA keys ──────────────
 
-function BuildHistory({ builds, projectName }: { builds: BuildInfo[]; projectName: string }) {
+function BuildHistory({ builds, projectName, searchTerm }: { builds: BuildInfo[]; projectName: string; searchTerm: string }) {
+  // Auto-expand the build that matches the search term
+  const autoExpand = useMemo(() => {
+    if (!searchTerm) return null
+    const s = searchTerm.toLowerCase()
+    for (const b of builds) {
+      if ((b as any).jiraKeys?.some((k: string) => k.toLowerCase().includes(s))) {
+        return b.buildNumber
+      }
+    }
+    return null
+  }, [builds, searchTerm])
+
   const [selectedBuild, setSelectedBuild] = useState<number | null>(null)
+  const active = autoExpand ?? selectedBuild
 
   return (
     <div>
@@ -114,7 +127,7 @@ function BuildHistory({ builds, projectName }: { builds: BuildInfo[]; projectNam
               b.status === 'FAILED' ? 'bg-red-500/10 border-red-500/30' :
               b.status === 'IN_PROGRESS' ? 'bg-blue-500/10 border-blue-500/30' :
               'bg-gray-500/10 border-gray-500/30',
-              selectedBuild === b.buildNumber && 'ring-1 ring-primary/50'
+              active === b.buildNumber && 'ring-1 ring-primary/50'
             )}
           >
             <span className={cn(
@@ -133,8 +146,8 @@ function BuildHistory({ builds, projectName }: { builds: BuildInfo[]; projectNam
       </div>
 
       {/* Expanded build detail */}
-      {selectedBuild && (() => {
-        const b = builds.find(x => x.buildNumber === selectedBuild)
+      {active && (() => {
+        const b = builds.find(x => x.buildNumber === active)
         if (!b) return null
         const keys = (b as any).jiraKeys || []
         return (
@@ -315,6 +328,7 @@ export function BuildsPage() {
             build={build}
             deployTargets={getDeployTargetsForBuild(build, data.deployTargets)}
             navigate={navigate}
+            searchTerm={search}
           />
         ))}
         {filtered.length === 0 && (
@@ -327,10 +341,11 @@ export function BuildsPage() {
 
 // ── Build card with deploy targets ───────────────────────
 
-function BuildCardComponent({ build, deployTargets, navigate }: {
+function BuildCardComponent({ build, deployTargets, navigate, searchTerm }: {
   build: BuildCard
   deployTargets: DeployTarget[]
   navigate: (path: string) => void
+  searchTerm: string
 }) {
   const [expanded, setExpanded] = useState(true)
   const latest = build.builds[0]
@@ -393,7 +408,7 @@ function BuildCardComponent({ build, deployTargets, navigate }: {
 
             {/* Build history */}
             {build.builds.length > 1 && (
-              <BuildHistory builds={build.builds} projectName={build.projectName} />
+              <BuildHistory builds={build.builds} projectName={build.projectName} searchTerm={searchTerm} />
             )}
           </div>
         )}
