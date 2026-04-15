@@ -444,8 +444,8 @@ export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
                 <col className="w-28" />
                 <col />{/* title takes remaining */}
                 <col className="w-44" />
-                <col className="w-16" />
-                <col className="w-10" />
+                <col className="w-24" />
+                <col className="w-12" />
                 <col className="w-24" />
                 <col className="w-24" />
                 <col className="w-16" />
