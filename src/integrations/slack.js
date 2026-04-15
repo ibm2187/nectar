@@ -165,7 +165,7 @@ class SlackNotifier {
    * e.g., "4.1.0.5-ck" → "#4-1-0-5-ck"
    */
   static releaseChannelName(version) {
-    return '#release-' + version.replace(/\./g, '-');
+    return '#releases-' + version.replace(/\./g, '-');
   }
 
   /**
