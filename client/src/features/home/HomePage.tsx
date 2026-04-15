@@ -506,8 +506,8 @@ function ReleasePanel({
               <col style={{ width: '100px' }} />
               <col />
               <col style={{ width: '155px' }} />
-              <col style={{ width: '30px' }} />
-              <col style={{ width: '30px' }} />
+              <col style={{ width: '75px' }} />
+              <col style={{ width: '35px' }} />
               <col style={{ width: '120px' }} />
               <col style={{ width: '120px' }} />
             </colgroup>
@@ -516,7 +516,7 @@ function ReleasePanel({
                 <th className="pl-4 pr-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Key</th>
                 <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Summary</th>
                 <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">Status</th>
-                <th className="px-0.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Cherry-Pick PRs">CPs</th>
+                <th className="px-1 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Cherry-Pick PRs">Cherry Pick</th>
                 <th className="px-0.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Original PRs">PRs</th>
                 <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">Dev</th>
                 <th className="px-2 pr-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">QA</th>

@@ -444,8 +444,8 @@ export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
                 <col className="w-28" />
                 <col />{/* title takes remaining */}
                 <col className="w-36" />
-                <col className="w-8" />
-                <col className="w-8" />
+                <col className="w-20" />
+                <col className="w-12" />
                 <col className="w-28" />
                 <col className="w-16" />
                 <col className="w-24" />
@@ -456,8 +456,8 @@ export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
                   <SortHeader label="Key"        active={sortKey === 'key'}        dir={sortDir} onClick={() => setSort('key')} />
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Title</th>
                   <SortHeader label="JIRA Status" active={sortKey === 'jiraStatus'} dir={sortDir} onClick={() => setSort('jiraStatus')} />
-                  <th className="px-1 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell" title="Cherry-Pick PRs">CPs</th>
-                  <th className="px-1 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell" title="Original PRs">PRs</th>
+                  <th className="px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">Cherry Pick</th>
+                  <th className="px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">PRs</th>
                   <SortHeader label="QA"          active={sortKey === 'qaAssignee'} dir={sortDir} onClick={() => setSort('qaAssignee')} className="hidden md:table-cell" />
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">Branch</th>
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Deployed</th>
@@ -698,7 +698,7 @@ function TicketRow({ ticket: t, prs, version, onClickPr }: { ticket: VerifiedTic
         const cpOpen = cps.some((p: any) => p.status === 'open')
         return (
           <>
-            <td className="px-1 py-2 align-top text-center hidden md:table-cell">
+            <td className="px-2 py-2 align-top text-center hidden md:table-cell">
               {cpMerged ? (
                 <button type="button" onClick={() => onClickPr(allPrs)} className="cursor-pointer hover:opacity-80"><span className="text-green-400 text-sm">✓</span></button>
               ) : cpOpen ? (
@@ -707,7 +707,7 @@ function TicketRow({ ticket: t, prs, version, onClickPr }: { ticket: VerifiedTic
                 <span className="text-muted-foreground/20 text-sm">—</span>
               )}
             </td>
-            <td className="px-1 py-2 align-top text-center hidden md:table-cell">
+            <td className="px-2 py-2 align-top text-center hidden md:table-cell">
               {originals.length > 0 ? (
                 <button type="button" onClick={() => onClickPr(allPrs)}
                   className="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold bg-blue-500/20 text-blue-400 cursor-pointer hover:bg-blue-500/30"
