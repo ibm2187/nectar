@@ -446,10 +446,11 @@ export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
                 <col className="w-36" />
                 <col className="w-16" />
                 <col className="w-10" />
-                <col className="w-28" />
+                <col className="w-24" />
+                <col className="w-24" />
                 <col className="w-16" />
                 <col className="w-24" />
-                <col className="w-56" />
+                <col className="w-48" />
               </colgroup>
               <thead className="sticky top-0 bg-background z-10">
                 <tr className="border-b text-left">
@@ -458,6 +459,7 @@ export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
                   <SortHeader label="JIRA Status" active={sortKey === 'jiraStatus'} dir={sortDir} onClick={() => setSort('jiraStatus')} />
                   <th className="px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">Cherry Pick</th>
                   <th className="px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">PRs</th>
+                  <SortHeader label="Dev"         active={sortKey === 'assignee'}   dir={sortDir} onClick={() => setSort('assignee')} className="hidden md:table-cell" />
                   <SortHeader label="QA"          active={sortKey === 'qaAssignee'} dir={sortDir} onClick={() => setSort('qaAssignee')} className="hidden md:table-cell" />
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">Branch</th>
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Deployed</th>
@@ -467,7 +469,7 @@ export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-3 py-8 text-center text-sm text-muted-foreground italic">
+                    <td colSpan={10} className="px-3 py-8 text-center text-sm text-muted-foreground italic">
                       No tickets match the current filter
                     </td>
                   </tr>
@@ -649,7 +651,6 @@ function TicketRow({ ticket: t, prs, version, onClickPr }: { ticket: VerifiedTic
         <div className="text-foreground line-clamp-2" title={t.summary}>{t.summary}</div>
         <div className="text-xs text-muted-foreground mt-0.5 truncate">
           {t.type && <span>{t.type}</span>}
-          {t.assignee && <span>{t.type ? ' · ' : ''}{t.assignee}</span>}
           {t.component && (
             <span className="inline-flex items-center ml-1.5 px-1.5 py-px rounded text-[10px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
               {t.component}
@@ -678,11 +679,6 @@ function TicketRow({ ticket: t, prs, version, onClickPr }: { ticket: VerifiedTic
         ) : (
           <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium border', getStatusBadgeColor(t.jiraStatus))}>{t.jiraStatus}</span>
         )}
-      </td>
-
-      {/* QA Assignee */}
-      <td className="px-3 py-2 align-top hidden md:table-cell">
-        {(() => { const qa = displayAssignee(t.qaAssignee); return <span className={cn('text-xs truncate max-w-[100px] inline-block', qa.className)}>{qa.text}</span> })()}
       </td>
 
       {/* CPs + PRs */}
@@ -719,6 +715,16 @@ function TicketRow({ ticket: t, prs, version, onClickPr }: { ticket: VerifiedTic
           </>
         )
       })()}
+
+      {/* Dev Assignee */}
+      <td className="px-3 py-2 align-top hidden md:table-cell">
+        {(() => { const dev = displayAssignee(t.assignee); return <span className={cn('text-xs truncate max-w-[90px] inline-block', dev.className)}>{dev.text}</span> })()}
+      </td>
+
+      {/* QA Assignee */}
+      <td className="px-3 py-2 align-top hidden md:table-cell">
+        {(() => { const qa = displayAssignee(t.qaAssignee); return <span className={cn('text-xs truncate max-w-[90px] inline-block', qa.className)}>{qa.text}</span> })()}
+      </td>
 
       {/* On Branch */}
       <td className="px-3 py-2 align-top text-center hidden md:table-cell">
