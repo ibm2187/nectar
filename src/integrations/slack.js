@@ -188,6 +188,8 @@ class SlackNotifier {
    */
   async notifyReleaseStatus(release, statusData) {
     const channel = SlackNotifier.releaseChannelName(release.version);
+    // Always retry release channels — don't let the bad channel cache block them
+    if (this._badChannels) this._badChannels.delete(channel);
     const { tickets, groupCounts, blockedTickets, nectarUrl } = statusData;
 
     const totalNotDone = (groupCounts.total || 0) - (groupCounts.done || 0);
@@ -243,6 +245,7 @@ class SlackNotifier {
    */
   async notifyReleaseDeployment(version, envName, customerName, previousVersion) {
     const channel = SlackNotifier.releaseChannelName(version);
+    if (this._badChannels) this._badChannels.delete(channel);
     const lines = [
       `🚀 *${version}* deployed to *${customerName} ${envName}*`,
       previousVersion ? `Previously running: ${previousVersion}` : null,
