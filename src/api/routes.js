@@ -162,10 +162,10 @@ module.exports = function createRoutes(services, config) {
     const channel = SlackNotifier.releaseChannelName(release.version);
 
     try {
-      await services.releaseNotifier.notifyRelease(release);
-      res.json({ ok: true, channel, version: release.version });
+      const result = await services.releaseNotifier.notifyRelease(release);
+      res.json({ ok: result?.ok || false, channel, version: release.version, error: result?.error || null });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err.message, channel });
     }
   }));
 

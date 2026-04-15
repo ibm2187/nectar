@@ -312,8 +312,11 @@ export function ReleaseDetail() {
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={assessRisk}>Risk</Button>
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={async () => {
             try {
-              await apiFetch(`/releases/${version}/notify`, { method: 'POST' })
-            } catch { /* silent */ }
+              const res = await apiFetch<{ ok: boolean; channel: string }>(`/releases/${version}/notify`, { method: 'POST' })
+              if (res.ok) alert(`Posted to ${res.channel}`)
+            } catch (err) {
+              alert(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
+            }
           }}>Notify Channel</Button>
           {/* Presentation button */}
           {taskLoading || (task && (task.status === 'pending' || task.status === 'in-progress')) ? (

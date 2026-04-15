@@ -44,20 +44,23 @@ class SlackNotifier {
   // ── Send messages ───────────────────────────────────────
 
   async postMessage(channel, text, blocks = null) {
-    if (!this.ready) return;
+    if (!this.ready) return { ok: false, error: 'Slack not connected' };
     // Skip bogus channels (failed once, don't retry every time)
-    if (this._badChannels && this._badChannels.has(channel)) return;
+    if (this._badChannels && this._badChannels.has(channel)) return { ok: false, error: `Channel ${channel} previously failed` };
     try {
       const opts = { channel, text };
       if (blocks) opts.blocks = blocks;
       await this.app.client.chat.postMessage(opts);
+      return { ok: true };
     } catch (err) {
       if (err.message.includes('channel_not_found') || err.message.includes('not_in_channel')) {
         if (!this._badChannels) this._badChannels = new Set();
         this._badChannels.add(channel);
         log.warn(`Slack: disabled notifications to ${channel} (${err.data?.error || err.message})`);
+        return { ok: false, error: `Channel ${channel} not found` };
       } else {
         log.error(`Slack postMessage to ${channel} failed:`, err.message);
+        return { ok: false, error: err.message };
       }
     }
   }
@@ -231,7 +234,8 @@ class SlackNotifier {
       lines.push(`🔗 <${nectarUrl}|View in Nectar>`);
     }
 
-    return this.postMessage(channel, lines.join('\n'));
+    const result = await this.postMessage(channel, lines.join('\n'));
+    return { ...result, channel };
   }
 
   /**

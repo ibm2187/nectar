@@ -109,7 +109,7 @@ class ReleaseNotifier {
     const nectarBaseUrl = process.env.NECTAR_URL || 'https://nectar.vivtechnologies.com';
     const releaseKey = release.repo ? `${release.repo}:${release.version}` : release.version;
 
-    await this.slack.notifyReleaseStatus(release, {
+    const result = await this.slack.notifyReleaseStatus(release, {
       tickets,
       groupCounts,
       blockedTickets,
@@ -118,7 +118,13 @@ class ReleaseNotifier {
       nectarUrl: `${nectarBaseUrl}/releases/${releaseKey}`,
     });
 
-    log.info(`Release notifier: posted status for ${release.version} to ${SlackNotifier.releaseChannelName(release.version)}`);
+    const channel = SlackNotifier.releaseChannelName(release.version);
+    if (result?.ok) {
+      log.info(`Release notifier: posted status for ${release.version} to ${channel}`);
+    } else {
+      log.warn(`Release notifier: failed to post for ${release.version} to ${channel}: ${result?.error || 'unknown'}`);
+    }
+    return result;
   }
 }
 
