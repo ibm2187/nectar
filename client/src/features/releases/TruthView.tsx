@@ -14,7 +14,7 @@ import { CompareSelector } from './CompareSelector'
 import type { CompareTarget } from './CompareSelector'
 import { SavedViews } from '../../components/SavedViews'
 import { PrDetailPanel, isCodeStatus, type PrInfo } from '../../components/PrDetailPanel'
-import { getStatusBadgeColor, displayAssignee } from '../../lib/status-colors'
+import { STATUS_GROUPS, getStatusBadgeColor, displayAssignee, type StatusGroup } from '../../lib/status-colors'
 
 interface Props {
   repo: string
@@ -68,6 +68,7 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
   const mode: ViewMode = (searchParams.get('view') as ViewMode | null)
     || (cmpVersion ? 'impact' : 'full')
   const filter: FilterKey = (searchParams.get('filter') as FilterKey | null) || 'all'
+  const jiraStatusGroup: StatusGroup = (searchParams.get('statusGroup') as StatusGroup | null) || 'all'
   const search = searchParams.get('q') || ''
   const sortKey: SortKey = (searchParams.get('sort') as SortKey | null) || 'health'
   const sortDir: SortDir = (searchParams.get('dir') as SortDir | null) || 'asc'
@@ -189,6 +190,18 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
 
     if (filter !== 'all') {
       rows = rows.filter(t => t.healthCategory === filter)
+    }
+
+    // JIRA status group filter
+    if (jiraStatusGroup !== 'all') {
+      const groupDef = STATUS_GROUPS.find(g => g.key === jiraStatusGroup)
+      if (jiraStatusGroup === 'not-done') {
+        const doneStatuses = new Set(STATUS_GROUPS.find(g => g.key === 'done')?.statuses || [])
+        rows = rows.filter(t => !doneStatuses.has(t.jiraStatus))
+      } else if (groupDef && groupDef.statuses.length > 0) {
+        const statuses = new Set(groupDef.statuses)
+        rows = rows.filter(t => statuses.has(t.jiraStatus))
+      }
     }
 
     if (search) {
@@ -338,6 +351,32 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
                 >
                   <div className="text-2xl font-bold">{count}</div>
                   <div className="text-xs uppercase tracking-wider opacity-80">{p.label}</div>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* JIRA status group filters */}
+          <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5 mb-4 flex-wrap">
+            {STATUS_GROUPS.map(g => {
+              const count = g.key === 'all' ? activeTickets.length
+                : g.key === 'not-done'
+                  ? activeTickets.filter(t => !STATUS_GROUPS.find(sg => sg.key === 'done')?.statuses.includes(t.jiraStatus)).length
+                  : g.statuses.length > 0
+                    ? activeTickets.filter(t => g.statuses.includes(t.jiraStatus)).length
+                    : 0
+              return (
+                <button
+                  key={g.key}
+                  onClick={() => updateParams({ statusGroup: jiraStatusGroup === g.key ? null : g.key })}
+                  className={cn(
+                    'px-3 py-1 text-xs font-medium rounded-md transition-colors',
+                    jiraStatusGroup === g.key ? g.pillActive : g.pillInactive,
+                    count === 0 && g.key !== 'all' && 'opacity-40'
+                  )}
+                >
+                  {g.label}
+                  {count > 0 && <span className="ml-1 opacity-70">{count}</span>}
                 </button>
               )
             })}

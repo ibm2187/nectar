@@ -129,13 +129,15 @@ export function HomePage() {
 
   // Count tickets per status group
   const groupCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: 0 }
+    const counts: Record<string, number> = { all: 0, 'not-done': 0 }
     for (const g of STATUS_GROUPS) counts[g.key] = 0
+    const doneStatuses = new Set(STATUS_GROUPS.find(g => g.key === 'done')?.statuses || [])
     for (const r of releases) {
       for (const t of (r.tickets || [])) {
         counts.all++
         const g = getStatusGroup(t.jiraStatus || '')
         if (counts[g] !== undefined) counts[g]++
+        if (!doneStatuses.has(t.jiraStatus || '')) counts['not-done']++
       }
     }
     return counts
@@ -154,12 +156,18 @@ export function HomePage() {
     const search = ticketSearch.toLowerCase().trim()
     const groupDef = STATUS_GROUPS.find(g => g.key === statusGroup)
     const groupStatuses = groupDef && groupDef.statuses.length > 0 ? new Set(groupDef.statuses) : null
+    // "Not Done" = exclude Done statuses
+    const doneStatuses = statusGroup === 'not-done'
+      ? new Set(STATUS_GROUPS.find(g => g.key === 'done')?.statuses || [])
+      : null
 
     return releases.map(r => {
       if (repoFilter && r.repo !== repoFilter) return null
       let tickets = r.tickets || []
       if (groupStatuses) {
         tickets = tickets.filter((t: any) => groupStatuses.has(t.jiraStatus || ''))
+      } else if (doneStatuses) {
+        tickets = tickets.filter((t: any) => !doneStatuses.has(t.jiraStatus || ''))
       }
       if (search) {
         tickets = tickets.filter((t: any) =>

@@ -13,7 +13,7 @@
  *   Gray    = Unknown / unrecognized
  */
 
-export type StatusGroup = 'all' | 'in-dev' | 'blocked' | 'ready-for-qa' | 'in-qa' | 'done'
+export type StatusGroup = 'all' | 'not-done' | 'in-dev' | 'blocked' | 'ready-for-qa' | 'in-qa' | 'done'
 
 export interface StatusGroupDef {
   key: StatusGroup
@@ -29,6 +29,11 @@ export const STATUS_GROUPS: StatusGroupDef[] = [
     key: 'all', label: 'All', color: '', statuses: [],
     pillActive: 'bg-background text-foreground shadow-sm',
     pillInactive: 'text-muted-foreground hover:text-foreground',
+  },
+  {
+    key: 'not-done', label: 'Not Done', color: 'text-orange-400', statuses: [],
+    pillActive: 'bg-orange-500/15 text-orange-400 shadow-sm',
+    pillInactive: 'text-muted-foreground hover:text-orange-400',
   },
   {
     key: 'in-dev', label: 'In Dev', color: 'text-yellow-400', statuses: [
@@ -81,6 +86,7 @@ export function getStatusGroup(jiraStatus: string): StatusGroup {
 // Badge colors — aligned with groups
 const BADGE_COLORS: Record<StatusGroup, string> = {
   'all':          'bg-gray-500/15 text-gray-400 border-gray-500/30',
+  'not-done':     'bg-orange-500/15 text-orange-400 border-orange-500/30',
   'in-dev':       'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
   'blocked':      'bg-red-500/15 text-red-400 border-red-500/30',
   'ready-for-qa': 'bg-blue-500/15 text-blue-400 border-blue-500/30',
