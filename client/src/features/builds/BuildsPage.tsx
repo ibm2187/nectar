@@ -311,23 +311,36 @@ function BuildCardComponent({ build, deployTargets, navigate }: {
               <CommitList commits={build.newCommits} />
             )}
 
-            {/* Build history — small dots, not numbered badges */}
+            {/* Build history */}
             {build.builds.length > 1 && (
               <div>
                 <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">History</h4>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   {build.builds.map(b => (
                     <div
                       key={b.buildNumber}
                       className={cn(
-                        "w-3 h-3 rounded-sm shrink-0",
-                        b.status === 'SUCCEEDED' ? 'bg-green-500' :
-                        b.status === 'FAILED' ? 'bg-red-500' :
-                        b.status === 'IN_PROGRESS' ? 'bg-blue-500 animate-pulse' :
-                        'bg-gray-500'
+                        "flex flex-col items-center gap-0.5 px-1.5 py-1 rounded border cursor-default min-w-[40px]",
+                        b.status === 'SUCCEEDED' ? 'bg-green-500/10 border-green-500/30' :
+                        b.status === 'FAILED' ? 'bg-red-500/10 border-red-500/30' :
+                        b.status === 'IN_PROGRESS' ? 'bg-blue-500/10 border-blue-500/30' :
+                        'bg-gray-500/10 border-gray-500/30'
                       )}
-                      title={`#${b.buildNumber}: ${b.status}${b.startTime ? ` — ${timeAgo(b.startTime)}` : ''}`}
-                    />
+                      title={`#${b.buildNumber}: ${b.status}${b.startTime ? ` — ${timeAgo(b.startTime)}` : ''}${b.durationSec ? ` — ${formatDuration(b.durationSec)}` : ''}${(b as any).jiraKeys?.length ? `\nJIRA: ${(b as any).jiraKeys.join(', ')}` : ''}`}
+                    >
+                      <span className={cn(
+                        "text-[10px] font-semibold",
+                        b.status === 'SUCCEEDED' ? 'text-green-400' :
+                        b.status === 'FAILED' ? 'text-red-400' :
+                        b.status === 'IN_PROGRESS' ? 'text-blue-400' :
+                        'text-gray-400'
+                      )}>
+                        #{b.buildNumber}
+                      </span>
+                      <span className="text-[9px] text-muted-foreground">
+                        {b.startTime ? timeAgo(b.startTime) : '—'}
+                      </span>
+                    </div>
                   ))}
                 </div>
               </div>
