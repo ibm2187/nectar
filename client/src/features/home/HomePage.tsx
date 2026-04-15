@@ -90,6 +90,7 @@ export function HomePage() {
   const [people, setPeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [expandedTickets, setExpandedTickets] = useState<Set<string>>(new Set())
   const [prPanel, setPrPanel] = useState<{ jiraKey: string; summary: string; prs: PrInfo[]; repo: string; version: string } | null>(null)
   const [statusGroup, setStatusGroup] = useState<StatusGroup>('not-done')
   const [repoFilter, setRepoFilter] = useState('')
@@ -110,6 +111,7 @@ export function HomePage() {
         setReleases(rels)
         setPeople(ppl)
         setCollapsed(new Set()) // reset collapse state on data change
+        setExpandedTickets(new Set())
       })
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -126,6 +128,15 @@ export function HomePage() {
 
   const collapseAll = () => setCollapsed(new Set(releases.map(r => r.id)))
   const expandAll = () => setCollapsed(new Set())
+
+  const toggleExpandTickets = (id: string) => {
+    setExpandedTickets(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   // Count tickets per status group
   const groupCounts = useMemo(() => {
@@ -352,6 +363,8 @@ export function HomePage() {
                   navigate={navigate}
                   collapsed={collapsed}
                   onToggle={toggleCollapse}
+                  expandedTickets={expandedTickets}
+                  onToggleExpandTickets={toggleExpandTickets}
                   onClickPr={(jiraKey, summary, prs, repo, version) => setPrPanel({ jiraKey, summary, prs, repo, version })}
                 />
               )}
@@ -364,6 +377,8 @@ export function HomePage() {
                   navigate={navigate}
                   collapsed={collapsed}
                   onToggle={toggleCollapse}
+                  expandedTickets={expandedTickets}
+                  onToggleExpandTickets={toggleExpandTickets}
                   onClickPr={(jiraKey, summary, prs, repo, version) => setPrPanel({ jiraKey, summary, prs, repo, version })}
                 />
               )}
@@ -377,6 +392,8 @@ export function HomePage() {
                   navigate={navigate}
                   collapsed={collapsed}
                   onToggle={toggleCollapse}
+                  expandedTickets={expandedTickets}
+                  onToggleExpandTickets={toggleExpandTickets}
                   onClickPr={(jiraKey, summary, prs, repo, version) => setPrPanel({ jiraKey, summary, prs, repo, version })}
                 />
               )}
@@ -401,7 +418,7 @@ export function HomePage() {
 // ── Release group ────────────────────────────────────────
 
 function ReleaseGroup({
-  title, titleColor, releases, view, person, navigate, collapsed, onToggle, onClickPr,
+  title, titleColor, releases, view, person, navigate, collapsed, onToggle, expandedTickets, onToggleExpandTickets, onClickPr,
 }: {
   title: string
   titleColor?: string
@@ -411,6 +428,8 @@ function ReleaseGroup({
   navigate: (path: string, opts?: any) => void
   collapsed: Set<string>
   onToggle: (id: string) => void
+  expandedTickets: Set<string>
+  onToggleExpandTickets: (id: string) => void
   onClickPr: (jiraKey: string, summary: string, prs: PrInfo[], repo: string, version: string) => void
 }) {
   return (
@@ -428,6 +447,8 @@ function ReleaseGroup({
             navigate={navigate}
             isCollapsed={collapsed.has(release.id)}
             onToggle={() => onToggle(release.id)}
+            allTicketsExpanded={expandedTickets.has(release.id)}
+            onToggleAllTickets={() => onToggleExpandTickets(release.id)}
             onClickPr={onClickPr}
           />
         ))}
@@ -439,7 +460,7 @@ function ReleaseGroup({
 // ── Release panel with collapsible tickets ───────────────
 
 function ReleasePanel({
-  release: r, view, person, navigate, isCollapsed, onToggle, onClickPr,
+  release: r, view, person, navigate, isCollapsed, onToggle, allTicketsExpanded, onToggleAllTickets, onClickPr,
 }: {
   release: HomeRelease
   view: HomeView
@@ -447,6 +468,8 @@ function ReleasePanel({
   navigate: (path: string, opts?: any) => void
   isCollapsed: boolean
   onToggle: () => void
+  allTicketsExpanded: boolean
+  onToggleAllTickets: () => void
   onClickPr: (jiraKey: string, summary: string, prs: PrInfo[], repo: string, version: string) => void
 }) {
   const releaseKey = r.repo ? `${r.repo}:${r.version}` : r.version
@@ -533,48 +556,63 @@ function ReleasePanel({
               </tr>
             </thead>
             <tbody>
-              {r.tickets.slice(0, view === 'pm' ? 50 : 25).map((ticket: any) => {
-                const dev = displayAssignee(ticket.assignee)
-                const qa = displayAssignee(ticket.qaAssignee)
+              {(() => {
+                const limit = view === 'pm' ? 50 : 25
+                const hasMore = r.tickets.length > limit
+                const visibleTickets = (hasMore && !allTicketsExpanded) ? r.tickets.slice(0, limit) : r.tickets
+                const hiddenCount = r.tickets.length - limit
                 return (
-                  <tr key={ticket.key} className="border-b border-border/10 hover:bg-accent/20 transition-colors">
-                    <td className="pl-4 pr-2 py-1.5 align-middle whitespace-nowrap">
-                      <JiraLink jiraKey={ticket.key} className="text-xs" />
-                    </td>
-                    <td className="px-2 py-1.5 align-middle">
-                      <div className="text-foreground truncate" title={ticket.summary}>{ticket.summary}</div>
-                    </td>
-                    <td className="px-2 py-1.5 align-middle text-right whitespace-nowrap">
-                      {ticket.jiraStatus && (
-                        <span className={cn(
-                          'inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium border',
-                          getStatusBadgeColor(ticket.jiraStatus)
-                        )}>
-                          {ticket.jiraStatus}
-                        </span>
-                      )}
-                    </td>
-                    <PrCountCells
-                      prs={ticket.prs || []}
-                      onClick={() => onClickPr(ticket.key, ticket.summary, ticket.prs || [], r.repo || 'webplatform', r.version)}
-                    />
-                    <BuildStatusCell build={ticket.build} />
-                    <td className="px-2 py-1.5 align-middle text-right whitespace-nowrap">
-                      <span className={cn('text-xs truncate max-w-[110px] inline-block', dev.className)}>{dev.text}</span>
-                    </td>
-                    <td className="px-2 pr-4 py-1.5 align-middle text-right whitespace-nowrap">
-                      <span className={cn('text-xs truncate max-w-[110px] inline-block', qa.className)}>{qa.text}</span>
-                    </td>
-                  </tr>
+                  <>
+                    {visibleTickets.map((ticket: any) => {
+                      const dev = displayAssignee(ticket.assignee)
+                      const qa = displayAssignee(ticket.qaAssignee)
+                      return (
+                        <tr key={ticket.key} className="border-b border-border/10 hover:bg-accent/20 transition-colors">
+                          <td className="pl-4 pr-2 py-1.5 align-middle whitespace-nowrap">
+                            <JiraLink jiraKey={ticket.key} className="text-xs" />
+                          </td>
+                          <td className="px-2 py-1.5 align-middle">
+                            <div className="text-foreground truncate" title={ticket.summary}>{ticket.summary}</div>
+                          </td>
+                          <td className="px-2 py-1.5 align-middle text-right whitespace-nowrap">
+                            {ticket.jiraStatus && (
+                              <span className={cn(
+                                'inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium border',
+                                getStatusBadgeColor(ticket.jiraStatus)
+                              )}>
+                                {ticket.jiraStatus}
+                              </span>
+                            )}
+                          </td>
+                          <PrCountCells
+                            prs={ticket.prs || []}
+                            onClick={() => onClickPr(ticket.key, ticket.summary, ticket.prs || [], r.repo || 'webplatform', r.version)}
+                          />
+                          <BuildStatusCell build={ticket.build} />
+                          <td className="px-2 py-1.5 align-middle text-right whitespace-nowrap">
+                            <span className={cn('text-xs truncate max-w-[110px] inline-block', dev.className)}>{dev.text}</span>
+                          </td>
+                          <td className="px-2 pr-4 py-1.5 align-middle text-right whitespace-nowrap">
+                            <span className={cn('text-xs truncate max-w-[110px] inline-block', qa.className)}>{qa.text}</span>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    {hasMore && (
+                      <tr>
+                        <td colSpan={8} className="pl-4 py-1">
+                          <button
+                            onClick={onToggleAllTickets}
+                            className="text-xs text-blue-400 hover:text-blue-300 hover:underline cursor-pointer"
+                          >
+                            {allTicketsExpanded ? `Show fewer tickets` : `+${hiddenCount} more tickets`}
+                          </button>
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 )
-              })}
-              {r.tickets.length > (view === 'pm' ? 50 : 25) && (
-                <tr>
-                  <td colSpan={8} className="pl-4 py-2 text-xs text-muted-foreground">
-                    +{r.tickets.length - (view === 'pm' ? 50 : 25)} more tickets
-                  </td>
-                </tr>
-              )}
+              })()}
             </tbody>
           </table>
         </div>

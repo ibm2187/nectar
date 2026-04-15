@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
@@ -132,22 +132,41 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
   const [truth, setTruth] = useState<ReleaseTruthReport | null>(null)
   const [impact, setImpact] = useState<DeploymentImpactReport | null>(null)
   const [loading, setLoading] = useState(false)
+  const [computing, setComputing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [prPanel, setPrPanel] = useState<{ jiraKey: string; summary: string; prs: PrInfo[] } | null>(null)
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  async function loadTruth() {
-    setLoading(true)
-    setError(null)
+  // Poll for truth result — triggers background computation, then polls until ready
+  const pollTruth = useCallback(async (refresh = false) => {
+    if (pollRef.current) { clearTimeout(pollRef.current); pollRef.current = null }
     try {
-      const data = await apiFetch<ReleaseTruthReport>(
-        `/releases/${encodeURIComponent(repo)}/${encodeURIComponent(version)}/truth`
+      const qs = refresh ? '?refresh=true' : ''
+      const data = await apiFetch<{ status: string; result?: ReleaseTruthReport; error?: string; computedAt?: string }>(
+        `/releases/${encodeURIComponent(repo)}/${encodeURIComponent(version)}/truth${qs}`
       )
-      setTruth(data)
+      if (data.status === 'ready') {
+        setTruth(data.result!)
+        setComputing(false)
+        setLoading(false)
+        setError(null)
+      } else if (data.status === 'computing') {
+        setComputing(true)
+        if (!truth && !data.result) setLoading(true) // only show loader if no data yet
+        if (data.result) setTruth(data.result) // show stale data while recomputing
+        pollRef.current = setTimeout(() => pollTruth(), 2000)
+      } else if (data.status === 'error') {
+        setError(data.error || 'Computation failed')
+        if (data.result) setTruth(data.result) // show stale data
+        setComputing(false)
+        setLoading(false)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load truth')
+      setComputing(false)
+      setLoading(false)
     }
-    setLoading(false)
-  }
+  }, [repo, version, truth])
 
   async function loadImpact() {
     if (!prodVersion) return
@@ -158,7 +177,6 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
         `/releases/${encodeURIComponent(repo)}/${encodeURIComponent(version)}/impact?prodVersion=${encodeURIComponent(prodVersion)}`
       )
       setImpact(data)
-      // Also store the full truth from the impact response so Full View doesn't need a separate fetch
       setTruth(data.targetTruth)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load impact')
@@ -166,12 +184,21 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
     setLoading(false)
   }
 
-  function load() {
+  function load(refresh = false) {
     if (mode === 'impact' && prodVersion) loadImpact()
-    else loadTruth()
+    else {
+      setLoading(true)
+      setError(null)
+      pollTruth(refresh)
+    }
   }
 
   useEffect(() => { load() }, [repo, version, mode, prodVersion])
+
+  // Cleanup poll on unmount
+  useEffect(() => {
+    return () => { if (pollRef.current) clearTimeout(pollRef.current) }
+  }, [])
 
   // Active data depends on mode
   const activeTickets: VerifiedTicket[] = mode === 'impact' && impact
@@ -249,12 +276,12 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
     )
   }
 
-  if (error) {
+  if (error && !truth) {
     return (
       <Card>
         <CardContent className="p-6 text-center">
           <p className="text-sm text-destructive">{error}</p>
-          <Button variant="outline" size="sm" onClick={loadTruth} className="mt-2">Retry</Button>
+          <Button variant="outline" size="sm" onClick={() => load(true)} className="mt-2">Retry</Button>
         </CardContent>
       </Card>
     )
@@ -315,8 +342,8 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
                   }
                 </Button>
               )}
-              <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-                {loading ? <><NectarSpinner className="mr-1" /> Computing...</> : 'Refresh'}
+              <Button variant="outline" size="sm" onClick={() => load(true)} disabled={loading || computing}>
+                {computing ? <><NectarSpinner className="mr-1" /> Computing...</> : 'Refresh'}
               </Button>
             </div>
           </div>

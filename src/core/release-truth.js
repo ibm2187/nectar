@@ -86,9 +86,82 @@ class ReleaseTruth {
     this.github = github;
     this.jira = jira;
     this.config = config;
+    this._cache = new Map();    // key → { result, computedAt }
+    this._inflight = new Set(); // keys currently computing
+    this._errors = new Map();   // key → { error, at }
   }
 
+  /**
+   * Get cached truth result for a release.
+   * Returns { status, result?, error?, computedAt? }
+   */
+  getCached(repo, version) {
+    const key = `${repo}:${version}`;
+    if (this._inflight.has(key)) {
+      // Return stale cache alongside computing status if available
+      const cached = this._cache.get(key);
+      return { status: 'computing', result: cached?.result || null, computedAt: cached?.computedAt || null };
+    }
+    const err = this._errors.get(key);
+    if (err) {
+      const cached = this._cache.get(key);
+      return { status: 'error', error: err.error, result: cached?.result || null, computedAt: cached?.computedAt || null };
+    }
+    const cached = this._cache.get(key);
+    if (cached) {
+      return { status: 'ready', result: cached.result, computedAt: cached.computedAt };
+    }
+    return { status: 'none' };
+  }
+
+  /**
+   * Trigger background truth computation. Returns immediately.
+   * Deduplicates — won't start a second computation if one is already running.
+   */
+  trigger(repo, version) {
+    const key = `${repo}:${version}`;
+    if (this._inflight.has(key)) return; // already running
+
+    this._inflight.add(key);
+    this._errors.delete(key);
+
+    this._computeInner(repo, version)
+      .then(result => {
+        this._cache.set(key, { result, computedAt: new Date().toISOString() });
+        this._inflight.delete(key);
+        this._errors.delete(key);
+        log.info(`Truth computed: ${key} (${result.durationMs}ms, ${result.rollup.planned} tickets)`);
+      })
+      .catch(err => {
+        this._inflight.delete(key);
+        this._errors.set(key, { error: err.message, at: new Date().toISOString() });
+        log.error(`Truth computation failed: ${key}: ${err.message}`);
+      });
+  }
+
+  /**
+   * Clear cached result for a release (used before refresh).
+   */
+  clearCached(repo, version) {
+    const key = `${repo}:${version}`;
+    this._cache.delete(key);
+    this._errors.delete(key);
+  }
+
+  /**
+   * Synchronous compute — used internally by computeImpact and task input gathering.
+   * Uses cache when available, otherwise runs the full computation.
+   */
   async compute(repo, version) {
+    const key = `${repo}:${version}`;
+    const cached = this._cache.get(key);
+    if (cached) return cached.result;
+    const result = await this._computeInner(repo, version);
+    this._cache.set(key, { result, computedAt: new Date().toISOString() });
+    return result;
+  }
+
+  async _computeInner(repo, version) {
     const release = this.releases.get(version, repo);
     if (!release) throw new Error(`Release ${repo}:${version} not found`);
 
