@@ -17,6 +17,13 @@ export function timeAgo(iso: string | null): string {
   return `${days}d ago`
 }
 
+export function formatDuration(sec: number): string {
+  if (sec < 60) return `${sec}s`
+  const min = Math.floor(sec / 60)
+  const s = sec % 60
+  return s > 0 ? `${min}m ${s}s` : `${min}m`
+}
+
 export function riskLabel(score: number): string {
   if (score <= 30) return 'LOW'
   if (score <= 60) return 'MED'

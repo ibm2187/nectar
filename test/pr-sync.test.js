@@ -194,6 +194,93 @@ describe('PrSync', () => {
     expect(github._paginate.mock.calls.length).toBeLessThanOrEqual(2); // open + closed
   });
 
+  it('indexes PRs by head branch for findPRByBranch lookup', async () => {
+    const openPr = makeGitHubPr(25600, { title: 'Fix DEV-100' });
+    openPr.head = { ref: 'eric/foo' };
+    const mergedPr = makeGitHubPr(25601, {
+      title: 'Release DEV-101',
+      state: 'closed',
+      merged_at: '2026-04-13T15:00:00Z',
+    });
+    mergedPr.head = { ref: 'releases/4.2.0' };
+
+    github = {
+      isConfigured: () => true,
+      _paginate: vi.fn(async (path) => {
+        if (path.includes('state=open')) return [openPr];
+        if (path.includes('state=closed')) return [mergedPr];
+        return [];
+      }),
+    };
+    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    await sync.run();
+
+    const found = sync.findPRByBranch('eric/foo');
+    expect(found).not.toBeNull();
+    expect(found.prNumber).toBe(25600);
+    expect(found.prUrl).toBeTruthy();
+    expect(found.status).toBe('open');
+    expect(found.headBranch).toBe('eric/foo');
+
+    const mergedFound = sync.findPRByBranch('releases/4.2.0');
+    expect(mergedFound).not.toBeNull();
+    expect(mergedFound.status).toBe('merged');
+    expect(mergedFound.headBranch).toBe('releases/4.2.0');
+
+    expect(sync.findPRByBranch('unknown')).toBeNull();
+    expect(sync.findPRByBranch(null)).toBeNull();
+    expect(sync.findPRByBranch(undefined)).toBeNull();
+  });
+
+  it('indexes PRs without JIRA keys by head branch', async () => {
+    const pr = makeGitHubPr(25700, { title: 'Update README', body: 'Just docs' });
+    pr.head = { ref: 'chore/docs' };
+    github = {
+      isConfigured: () => true,
+      _paginate: vi.fn(async (path) => {
+        if (path.includes('state=open')) return [pr];
+        return [];
+      }),
+    };
+    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    await sync.run();
+
+    const found = sync.findPRByBranch('chore/docs');
+    expect(found).not.toBeNull();
+    expect(found.prNumber).toBe(25700);
+    expect(found.prUrl).toBeTruthy();
+    expect(found.status).toBe('open');
+    expect(found.headBranch).toBe('chore/docs');
+  });
+
+  it('prefers open PR over closed PR when sharing a head branch', async () => {
+    const closedPr = makeGitHubPr(50, {
+      title: 'DEV-300 old',
+      state: 'closed',
+      merged_at: null,
+    });
+    closedPr.head = { ref: 'eric/shared' };
+    const openPr = makeGitHubPr(60, { title: 'DEV-301 new' });
+    openPr.head = { ref: 'eric/shared' };
+
+    github = {
+      isConfigured: () => true,
+      _paginate: vi.fn(async (path) => {
+        if (path.includes('state=open')) return [openPr];
+        // Closed PRs come from the closed-state fetch after the open ones
+        if (path.includes('state=closed')) return [closedPr];
+        return [];
+      }),
+    };
+    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    await sync.run();
+
+    const found = sync.findPRByBranch('eric/shared');
+    expect(found).not.toBeNull();
+    expect(found.prNumber).toBe(60);
+    expect(found.status).toBe('open');
+  });
+
   it('getStatus reports cache size', async () => {
     github = makeMockGithub([makeGitHubPr(25500, { title: 'Fix DEV-100' })]);
     sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });

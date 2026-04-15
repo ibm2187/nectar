@@ -27,6 +27,7 @@ function makeMockReleases(releaseList) {
     releases: map,
     _key: (repo, version) => `${repo}:${version}`,
     _debounceSave: vi.fn(),
+    get: (version, repo = 'webplatform') => map.get(`${repo}:${version}`) || null,
   };
 }
 
@@ -76,8 +77,8 @@ function makeMockAws(opts = {}, crossAccounts = []) {
     listPipelines: vi.fn(async () => pipelines),
     getPipelineConfig: vi.fn(async (name) => ({
       name,
-      ecrRepo: 'viv-custom',
-      ecrImageTag: 'master',
+      ecrRepo: 'viv-release',
+      ecrImageTag: '4.3.0',
     })),
     getPipelineState: vi.fn(async (name) => ({
       name,
@@ -154,7 +155,8 @@ describe('PipelineSync', () => {
   it('provides builds page data via getBuildsPageData', async () => {
     await sync.run();
     const data = sync.getBuildsPageData();
-    expect(data.builds.length).toBeGreaterThan(0);
+    expect(Array.isArray(data.customers)).toBe(true);
+    expect(data.customers.length).toBeGreaterThan(0);
     expect(data.deployTargets).toBeTruthy();
     expect(data.lastRun).toBeTruthy();
   });
@@ -225,6 +227,293 @@ describe('PipelineSync', () => {
     expect(card.latestStatus).toBe('FAILED');
     expect(card.builds).toHaveLength(2);
     expect(repoManager.log).toHaveBeenCalled();
+  });
+
+  describe('getBuildsPageData customer grouping', () => {
+    function makeCard(overrides = {}) {
+      return {
+        projectName: 'ECR-Build_viv-master',
+        branch: 'master',
+        account: 'Viv',
+        latestStatus: 'SUCCEEDED',
+        latestStartTime: '2026-04-10T00:00:00Z',
+        builds: [],
+        newCommits: [],
+        jiraKeys: [],
+        ecrRepo: 'viv-master',
+        imageTag: 'master',
+        ...overrides,
+      };
+    }
+
+    it('groups Viv builds under the viv customer', () => {
+      sync.buildProjects = [makeCard()];
+      sync.deployTargets = { master: [{ pipelineName: 'Deploy-Viv_Dev03', account: 'Viv' }] };
+      const data = sync.getBuildsPageData();
+      const viv = data.customers.find(c => c.key === 'viv');
+      expect(viv).toBeTruthy();
+      expect(viv.allBuilds).toHaveLength(1);
+    });
+
+    it('groups cross-account builds under their customer key', () => {
+      sync.buildProjects = [makeCard({
+        projectName: 'ECR-Build_viv-release-ck',
+        account: 'ck',
+        ecrRepo: 'viv-release-ck',
+        imageTag: '4.3.0',
+        branch: 'releases/4.3.0',
+      })];
+      sync.deployTargets = { '4.3.0': [{ pipelineName: 'Deploy-CK_QA', account: 'ck' }] };
+      const data = sync.getBuildsPageData();
+      const ck = data.customers.find(c => c.key === 'ck');
+      expect(ck).toBeTruthy();
+      expect(ck.allBuilds).toHaveLength(1);
+    });
+
+    it('omits customers with no builds', () => {
+      sync.buildProjects = [makeCard()];
+      sync.deployTargets = { master: [{ pipelineName: 'Deploy-Viv_Dev03', account: 'Viv' }] };
+      const data = sync.getBuildsPageData();
+      expect(data.customers).toHaveLength(1);
+      expect(data.customers[0].key).toBe('viv');
+    });
+
+    it('customer entries include label, key, account, allBuilds, pinnedBuild, recentBuilds fields', () => {
+      sync.buildProjects = [makeCard()];
+      sync.deployTargets = { master: [{ pipelineName: 'Deploy-Viv_Dev03', account: 'Viv' }] };
+      const data = sync.getBuildsPageData();
+      const viv = data.customers[0];
+      expect(viv).toHaveProperty('key');
+      expect(viv).toHaveProperty('label');
+      expect(viv).toHaveProperty('account');
+      expect(viv).toHaveProperty('allBuilds');
+      expect(viv).toHaveProperty('pinnedBuild');
+      expect(viv).toHaveProperty('recentBuilds');
+      expect(viv).not.toHaveProperty('pipelineCounts');
+      expect(viv).not.toHaveProperty('activeReleaseVersion');
+    });
+
+    it('returns customers in CUSTOMER_ORDER with viv first', () => {
+      sync.buildProjects = [
+        makeCard({
+          projectName: 'ECR-Build_viv-release-bayada',
+          account: 'bayada',
+          ecrRepo: 'viv-release-bayada',
+          imageTag: '4.3.0',
+        }),
+        makeCard(),
+      ];
+      sync.deployTargets = {
+        master: [{ pipelineName: 'Deploy-Viv_Dev03', account: 'Viv' }],
+        '4.3.0': [{ pipelineName: 'Deploy-Bayada_Uat', account: 'bayada' }],
+      };
+      const data = sync.getBuildsPageData();
+      expect(data.customers.map(c => c.key)).toEqual(['viv', 'bayada']);
+    });
+  });
+
+  describe('getBuildsPageData pinning', () => {
+    function makeCard(overrides = {}) {
+      return {
+        projectName: 'proj',
+        branch: 'master',
+        account: 'Viv',
+        latestStatus: 'SUCCEEDED',
+        latestStartTime: '2026-04-10T00:00:00Z',
+        builds: [], newCommits: [], jiraKeys: [],
+        ecrRepo: 'viv-master', imageTag: 'master',
+        ...overrides,
+      };
+    }
+
+    it('pins the viv-master build for viv', () => {
+      sync.buildProjects = [
+        makeCard({ projectName: 'A', ecrRepo: 'viv-custom', branch: 'eric/foo', imageTag: 'foo' }),
+        makeCard({ projectName: 'B', ecrRepo: 'viv-master', branch: 'master', imageTag: 'master' }),
+      ];
+      sync.deployTargets = {
+        foo: [{ pipelineName: 'Deploy-Viv_Foo', account: 'Viv' }],
+        master: [{ pipelineName: 'Deploy-Viv_Dev03', account: 'Viv' }],
+      };
+      const data = sync.getBuildsPageData();
+      const viv = data.customers.find(c => c.key === 'viv');
+      expect(viv.pinnedBuild?.projectName).toBe('B');
+    });
+
+    it('falls back to most recent viv-release-<customer> build when no version match', () => {
+      sync.buildProjects = [
+        makeCard({ projectName: 'older', account: 'ck', ecrRepo: 'viv-release-ck', imageTag: '4.1.0', latestStartTime: '2026-04-10T00:00:00Z' }),
+        makeCard({ projectName: 'newer', account: 'ck', ecrRepo: 'viv-release-ck', imageTag: '4.2.0', latestStartTime: '2026-04-12T00:00:00Z' }),
+      ];
+      sync.deployTargets = {
+        '4.1.0': [{ pipelineName: 'Deploy-CK_Older', account: 'ck' }],
+        '4.2.0': [{ pipelineName: 'Deploy-CK_Newer', account: 'ck' }],
+      };
+      const data = sync.getBuildsPageData();
+      const ck = data.customers.find(c => c.key === 'ck');
+      expect(ck.pinnedBuild?.projectName).toBe('newer');
+    });
+
+    it('pinnedBuild is null when there are no matching cards', () => {
+      sync.buildProjects = [
+        makeCard({ projectName: 'custom', account: 'ck', ecrRepo: 'viv-custom', imageTag: 'foo', branch: 'eric/foo' }),
+      ];
+      sync.deployTargets = { foo: [{ pipelineName: 'Deploy-CK_Foo', account: 'ck' }] };
+      const data = sync.getBuildsPageData();
+      const ck = data.customers.find(c => c.key === 'ck');
+      expect(ck.pinnedBuild).toBeNull();
+    });
+  });
+
+  describe('getBuildsPageData recent list', () => {
+    function makeCard(overrides = {}) {
+      return {
+        projectName: 'proj', branch: 'releases/4.3.0', account: 'ck',
+        latestStatus: 'SUCCEEDED', latestStartTime: '2026-04-10T00:00:00Z',
+        builds: [], newCommits: [], jiraKeys: [],
+        ecrRepo: 'viv-release-ck', imageTag: '4.3.0',
+        ...overrides,
+      };
+    }
+
+    it('recentBuilds excludes the pinned build and is sorted by latestStartTime desc, capped at 4', () => {
+      sync.buildProjects = [
+        makeCard({ projectName: 'pinned', imageTag: '4.3.0', latestStartTime: '2026-04-15T00:00:00Z' }),
+        makeCard({ projectName: 'c1', ecrRepo: 'viv-custom', imageTag: 'a', latestStartTime: '2026-04-01T00:00:00Z' }),
+        makeCard({ projectName: 'c2', ecrRepo: 'viv-custom', imageTag: 'b', latestStartTime: '2026-04-02T00:00:00Z' }),
+        makeCard({ projectName: 'c3', ecrRepo: 'viv-custom', imageTag: 'c', latestStartTime: '2026-04-03T00:00:00Z' }),
+        makeCard({ projectName: 'c4', ecrRepo: 'viv-custom', imageTag: 'd', latestStartTime: '2026-04-04T00:00:00Z' }),
+        makeCard({ projectName: 'c5', ecrRepo: 'viv-custom', imageTag: 'e', latestStartTime: '2026-04-05T00:00:00Z' }),
+        makeCard({ projectName: 'c6', ecrRepo: 'viv-custom', imageTag: 'f', latestStartTime: '2026-04-06T00:00:00Z' }),
+      ];
+      sync.deployTargets = {
+        '4.3.0': [{ pipelineName: 'Deploy-CK_Pin', account: 'ck' }],
+        a: [{ pipelineName: 'Deploy-CK_a', account: 'ck' }],
+        b: [{ pipelineName: 'Deploy-CK_b', account: 'ck' }],
+        c: [{ pipelineName: 'Deploy-CK_c', account: 'ck' }],
+        d: [{ pipelineName: 'Deploy-CK_d', account: 'ck' }],
+        e: [{ pipelineName: 'Deploy-CK_e', account: 'ck' }],
+        f: [{ pipelineName: 'Deploy-CK_f', account: 'ck' }],
+      };
+      const data = sync.getBuildsPageData();
+      const ck = data.customers.find(c => c.key === 'ck');
+      expect(ck.pinnedBuild?.projectName).toBe('pinned');
+      expect(ck.recentBuilds.map(b => b.projectName)).toEqual(['c6', 'c5', 'c4', 'c3']);
+    });
+  });
+
+  describe('getBuildsPageData PR enrichment', () => {
+    function makeCard(overrides = {}) {
+      return {
+        projectName: 'p', branch: 'eric/foo', account: 'Viv',
+        latestStatus: 'SUCCEEDED', latestStartTime: '2026-04-10T00:00:00Z',
+        builds: [], newCommits: [], jiraKeys: [],
+        ecrRepo: 'viv-custom', imageTag: 'foo',
+        ...overrides,
+      };
+    }
+
+    const vivFooTargets = { foo: [{ pipelineName: 'Deploy-Viv_Foo', account: 'Viv' }] };
+
+    it('enriches cards with prUrl from pr-sync.findPRByBranch', () => {
+      sync.setPrSync({
+        findPRByBranch: vi.fn().mockReturnValue({ prUrl: 'https://github.com/mavencare/webplatform/pull/42' }),
+      });
+      sync.buildProjects = [makeCard()];
+      sync.deployTargets = vivFooTargets;
+      const data = sync.getBuildsPageData();
+      const card = data.customers[0].allBuilds[0];
+      expect(card.prUrl).toBe('https://github.com/mavencare/webplatform/pull/42');
+    });
+
+    it('falls back to githubBranchUrl when pr-sync returns null', () => {
+      sync.setPrSync({ findPRByBranch: vi.fn().mockReturnValue(null) });
+      sync.buildProjects = [makeCard({ branch: 'some/branch' })];
+      sync.deployTargets = vivFooTargets;
+      const data = sync.getBuildsPageData();
+      const card = data.customers[0].allBuilds[0];
+      expect(card.prUrl).toBeNull();
+      expect(card.githubBranchUrl).toBe('https://github.com/mavencare/webplatform/tree/some%2Fbranch');
+    });
+
+    it('works without a pr-sync wired in', () => {
+      sync.buildProjects = [makeCard({ branch: 'a/b' })];
+      sync.deployTargets = vivFooTargets;
+      const data = sync.getBuildsPageData();
+      const card = data.customers[0].allBuilds[0];
+      expect(card.prUrl).toBeNull();
+      expect(card.githubBranchUrl).toBe('https://github.com/mavencare/webplatform/tree/a%2Fb');
+    });
+  });
+
+  it('sources real branch from CodeBuild sourceVersion (strips refs/heads/)', async () => {
+    aws = makeMockAws({
+      projects: ['ECR-Build_viv-release-4_3_0'],
+      builds: [{
+        id: 'b:1', buildNumber: 1, buildStatus: 'SUCCEEDED',
+        startTime: new Date('2026-04-13T10:00:00Z'),
+        endTime: new Date('2026-04-13T10:25:00Z'),
+        sourceVersion: 'refs/heads/some-real-branch',
+        resolvedSourceVersion: 'abc123',
+        initiator: 'webhook',
+      }],
+    });
+    sync = new PipelineSync(releases, aws, repoManager, {});
+    await sync.run();
+    const card = sync.buildProjects[0];
+    expect(card.branch).toBe('some-real-branch');
+  });
+
+  describe('getBuildsPageData customer-account filter', () => {
+    function makeCard(overrides = {}) {
+      return {
+        projectName: 'proj', branch: 'master', account: 'ck',
+        latestStatus: 'SUCCEEDED', latestStartTime: '2026-04-10T00:00:00Z',
+        builds: [], newCommits: [], jiraKeys: [],
+        ecrRepo: 'viv-release-ck', imageTag: 'has-targets',
+        ...overrides,
+      };
+    }
+
+    it('excludes cards with no deploy targets in the customer\'s account', () => {
+      sync.buildProjects = [
+        makeCard({ projectName: 'has', imageTag: 'has-targets' }),
+        makeCard({ projectName: 'no', imageTag: 'no-targets' }),
+      ];
+      sync.deployTargets = {
+        'has-targets': [{ pipelineName: 'Deploy-CK_Uat', account: 'ck' }],
+      };
+      const data = sync.getBuildsPageData();
+      const ck = data.customers.find(c => c.key === 'ck');
+      expect(ck.allBuilds.map(b => b.projectName)).toEqual(['has']);
+    });
+
+    it('respects TAG_ALIASES for master/latest', () => {
+      sync.buildProjects = [makeCard({
+        projectName: 'viv-master', account: 'Viv', ecrRepo: 'viv-master', imageTag: 'master', branch: 'master',
+      })];
+      sync.deployTargets = {
+        latest: [{ pipelineName: 'Deploy-Viv_Dev03', account: 'Viv' }],
+      };
+      const data = sync.getBuildsPageData();
+      const viv = data.customers.find(c => c.key === 'viv');
+      expect(viv).toBeTruthy();
+      expect(viv.allBuilds).toHaveLength(1);
+    });
+
+    it('pinned build skips empty builds and picks the most recent with targets', () => {
+      sync.buildProjects = [
+        makeCard({ projectName: 'older', imageTag: '4.1.0', latestStartTime: '2026-04-10T00:00:00Z' }),
+        makeCard({ projectName: 'newer', imageTag: '4.2.0', latestStartTime: '2026-04-12T00:00:00Z' }),
+      ];
+      sync.deployTargets = {
+        '4.1.0': [{ pipelineName: 'Deploy-CK_Older', account: 'ck' }],
+        // newer has no matching target — should be excluded
+      };
+      const data = sync.getBuildsPageData();
+      const ck = data.customers.find(c => c.key === 'ck');
+      expect(ck.pinnedBuild?.projectName).toBe('older');
+    });
   });
 
   it('handles IN_PROGRESS build', async () => {

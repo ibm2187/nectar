@@ -2,6 +2,21 @@ const { EventEmitter } = require('events');
 const log = require('./log');
 const JiraClient = require('../integrations/jira');
 
+const CUSTOMER_LABELS = {
+  viv: 'Viv',
+  ck: 'Comfort Keepers',
+  bayada: 'Bayada',
+  tribute: 'Tribute',
+  lumen: 'Lumen',
+  haven: 'Haven',
+  qualitycare: 'Quality Care',
+};
+const CUSTOMER_ORDER = ['viv', 'ck', 'bayada', 'tribute', 'lumen', 'haven', 'qualitycare'];
+
+// Some build projects produce images tagged multiple ways (e.g. master → 'master' + 'latest').
+// Mirrors client/src/features/builds/shared.ts.
+const TAG_ALIASES = { master: ['master', 'latest'] };
+
 /**
  * AWS Pipeline sync — polls CodeBuild + CodePipeline and builds a unified
  * view of all CI/CD activity for the Builds page.
@@ -31,6 +46,11 @@ class PipelineSync extends EventEmitter {
     this.deployTargets = {};   // imageTag → deploy pipeline states
     this._projectList = null;  // raw project names
     this._deployMap = null;    // pipelineName → { ecrRepo, imageTag, customer, env }
+    this.prSync = null;
+  }
+
+  setPrSync(prSync) {
+    this.prSync = prSync;
   }
 
   start() {
@@ -113,28 +133,8 @@ class PipelineSync extends EventEmitter {
         }
       }
 
-      // Deduplicate: if multiple accounts have the same imageTag (e.g., "jeff"),
-      // keep the one with the most recent build and merge account labels.
-      const byTag = new Map();
-      for (const card of buildCards) {
-        const key = card.imageTag || card.projectName;
-        const existing = byTag.get(key);
-        if (existing) {
-          // Merge: keep the most recent, combine account names
-          if ((card.latestStartTime || '') > (existing.latestStartTime || '')) {
-            const accounts = existing.accounts || [existing.account];
-            if (!accounts.includes(card.account)) accounts.push(card.account);
-            card.accounts = accounts;
-            byTag.set(key, card);
-          } else {
-            if (!existing.accounts) existing.accounts = [existing.account];
-            if (!existing.accounts.includes(card.account)) existing.accounts.push(card.account);
-          }
-        } else {
-          byTag.set(key, card);
-        }
-      }
-      const deduped = Array.from(byTag.values());
+      // Each CodeBuild project is its own card — no cross-account dedup.
+      const deduped = buildCards;
 
       // Sort: IN_PROGRESS first, then FAILED, then SUCCEEDED, then rest
       const statusOrder = { IN_PROGRESS: 0, FAILED: 1, SUCCEEDED: 2, STOPPED: 3 };
@@ -148,16 +148,19 @@ class PipelineSync extends EventEmitter {
       this.buildProjects = deduped;
 
       // Store buildByJiraKey on matching releases
-      for (const card of deduped) {
-        if (!card.version || !card.buildByJiraKey) continue;
-        // Find the release for this build's version
-        const release = this.releases.get(card.version, card.repo);
-        if (release) {
-          release.buildByJiraKey = card.buildByJiraKey;
-          release.buildSyncedAt = new Date().toISOString();
+      try {
+        for (const card of deduped) {
+          if (!card.version || !card.buildByJiraKey) continue;
+          const release = this.releases.get?.(card.version, card.repo);
+          if (release) {
+            release.buildByJiraKey = card.buildByJiraKey;
+            release.buildSyncedAt = new Date().toISOString();
+          }
         }
+        this.releases._debounceSave?.();
+      } catch (err) {
+        log.warn(`Pipeline sync: failed to write buildByJiraKey: ${err.message}`);
       }
-      this.releases._debounceSave();
 
       // Step 3: Fetch deploy pipeline states (main account)
       const deployTargets = {};
@@ -177,6 +180,7 @@ class PipelineSync extends EventEmitter {
             status: deployStage?.status || null,
             lastUpdated: deployStage?.lastUpdated || null,
             account: 'Viv',
+            ecrRepo: info.ecrRepo || null,
           });
           results.deploys++;
           await new Promise(r => setTimeout(r, 100));
@@ -210,6 +214,7 @@ class PipelineSync extends EventEmitter {
                 status: deployStage?.status || null,
                 lastUpdated: deployStage?.lastUpdated || null,
                 account: customer,
+                ecrRepo: config.ecrRepo || null,
               });
               results.deploys++;
               await new Promise(r => setTimeout(r, 100));
@@ -354,13 +359,22 @@ class PipelineSync extends EventEmitter {
 
     const imageTag = parsed.version || parsed.branch || parsed.custom || null;
 
+    // Prefer the real branch from CodeBuild over parsed.branch (parseProjectName
+    // only guesses from the project name). `sourceVersion` is the ref requested
+    // at build time — strip `refs/heads/` if present.
+    const rawSourceVersion = latest?.sourceVersion || previousSuccess?.sourceVersion || null;
+    const realBranch = rawSourceVersion
+      ? rawSourceVersion.replace(/^refs\/heads\//, '')
+      : (parsed.branch || parsed.custom || projectName);
+
     return {
       projectName,
-      branch: parsed.branch || parsed.custom || projectName,
+      branch: realBranch,
       version: parsed.version,
       repo: parsed.repo,
       isCustom: !!parsed.custom,
       imageTag,
+      ecrRepo: parsed.ecrRepo || null,
       latestStatus: latest.status,
       latestStartTime: latest.startTime,
       builds: enrichedBuilds.map(b => ({
@@ -393,41 +407,86 @@ class PipelineSync extends EventEmitter {
     const previousSuccess = builds.find(b => b.status === 'SUCCEEDED' && b.id !== latest.id);
     const imageTag = parsed.version || parsed.branch || parsed.custom || null;
 
-    // Cross-account builds often use the same webplatform repo — try local git
-    let newCommits = [];
-    let jiraKeys = [];
-    if (latest.resolvedSourceVersion && parsed.repo === 'webplatform') {
-      try {
-        const baseSha = previousSuccess?.resolvedSourceVersion || null;
-        if (baseSha && baseSha !== latest.resolvedSourceVersion) {
-          newCommits = await this.repoManager.log('webplatform', `${baseSha}..${latest.resolvedSourceVersion}`, { limit: 30 });
-        } else if (!baseSha) {
-          newCommits = await this.repoManager.log('webplatform', latest.resolvedSourceVersion, { limit: 10 });
-        }
-        // If baseSha === latestSha, no new commits (rebuilt same code)
-        jiraKeys = JiraClient.extractKeys(newCommits.map(c => c.message).join(' '));
-      } catch { /* commits not in local clone */ }
-    }
+    const rawSourceVersion = latest?.sourceVersion || previousSuccess?.sourceVersion || null;
+    const realBranch = rawSourceVersion
+      ? rawSourceVersion.replace(/^refs\/heads\//, '')
+      : (parsed.branch || parsed.custom || projectName);
 
-    return {
-      projectName,
-      branch: parsed.branch || parsed.custom || projectName,
-      version: parsed.version,
-      repo: parsed.repo,
-      isCustom: !!parsed.custom,
-      imageTag,
-      latestStatus: latest.status,
-      latestStartTime: latest.startTime,
-      builds: builds.map(b => ({
+    // Compute JIRA keys per build by diffing consecutive commit SHAs.
+    // Mirrors _fetchBuildCard. Cross-account builds often share the webplatform
+    // repo so the local git clone usually has the commits.
+    const enrichedBuilds = [];
+    for (let i = 0; i < builds.length; i++) {
+      const b = builds[i];
+      let buildJiraKeys = [];
+      let buildCommits = [];
+
+      if (b.resolvedSourceVersion && parsed.repo === 'webplatform') {
+        const olderBuild = builds.slice(i + 1).find(
+          ob => ob.resolvedSourceVersion && ob.resolvedSourceVersion !== b.resolvedSourceVersion,
+        );
+        const baseSha = olderBuild?.resolvedSourceVersion || null;
+        try {
+          if (baseSha) {
+            buildCommits = await this.repoManager.log('webplatform', `${baseSha}..${b.resolvedSourceVersion}`, { limit: 30 });
+          } else if (i === builds.length - 1) {
+            buildCommits = await this.repoManager.log('webplatform', b.resolvedSourceVersion, { limit: 10 });
+          }
+          buildJiraKeys = JiraClient.extractKeys(buildCommits.map(c => c.message).join(' '));
+        } catch { /* commits not in local clone */ }
+      }
+
+      enrichedBuilds.push({
         buildNumber: b.buildNumber,
         status: b.status,
         startTime: b.startTime,
         endTime: b.endTime,
         durationSec: b.durationSec,
         commitSha: b.resolvedSourceVersion,
+        jiraKeys: buildJiraKeys,
+        commits: buildCommits,
+      });
+    }
+
+    const newCommits = enrichedBuilds[0]?.commits || [];
+    const jiraKeys = enrichedBuilds[0]?.jiraKeys || [];
+
+    // Reverse index: JIRA key → build info (latest build containing it wins)
+    const buildByJiraKey = {};
+    for (let i = enrichedBuilds.length - 1; i >= 0; i--) {
+      const b = enrichedBuilds[i];
+      for (const key of b.jiraKeys) {
+        buildByJiraKey[key] = {
+          buildNumber: b.buildNumber,
+          status: b.status,
+          startTime: b.startTime,
+          branch: realBranch,
+        };
+      }
+    }
+
+    return {
+      projectName,
+      branch: realBranch,
+      version: parsed.version,
+      repo: parsed.repo,
+      isCustom: !!parsed.custom,
+      imageTag,
+      ecrRepo: parsed.ecrRepo || null,
+      latestStatus: latest.status,
+      latestStartTime: latest.startTime,
+      builds: enrichedBuilds.map(b => ({
+        buildNumber: b.buildNumber,
+        status: b.status,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        durationSec: b.durationSec,
+        commitSha: b.commitSha,
+        jiraKeys: b.jiraKeys,
       })),
       newCommits,
       jiraKeys,
+      buildByJiraKey,
     };
   }
 
@@ -435,11 +494,105 @@ class PipelineSync extends EventEmitter {
    * Get the full builds page data for the API.
    */
   getBuildsPageData() {
+    const customers = this._groupByCustomer(this.buildProjects);
     return {
-      builds: this.buildProjects,
+      customers,
       deployTargets: this.deployTargets,
       lastRun: this.lastRun,
     };
+  }
+
+  _pickPinned(customerKey, cards) {
+    if (customerKey === 'viv') {
+      return cards.find(c => c.ecrRepo === 'viv-master' || c.branch === 'master') || null;
+    }
+    const repo = `viv-release-${customerKey}`;
+    const candidates = cards.filter(c => c.ecrRepo === repo);
+    if (candidates.length === 0) return null;
+    return candidates.slice().sort((a, b) =>
+      (b.latestStartTime || '').localeCompare(a.latestStartTime || '')
+    )[0] || null;
+  }
+
+  _pickRecent(pinned, cards) {
+    const pinnedName = pinned && pinned.projectName;
+    return cards
+      .filter(c => c.projectName !== pinnedName)
+      .slice()
+      .sort((a, b) => (b.latestStartTime || '').localeCompare(a.latestStartTime || ''))
+      .slice(0, 4);
+  }
+
+  _normalizeAccount(card) {
+    const raw = card && card.account;
+    if (!raw) return 'viv';
+    const key = String(raw).toLowerCase();
+    if (key === 'viv') return 'viv';
+    return key;
+  }
+
+  _enrichCard(card) {
+    const pr = this.prSync ? this.prSync.findPRByBranch(card.branch) : null;
+    return {
+      ...card,
+      prUrl: pr ? pr.prUrl : null,
+      githubBranchUrl: `https://github.com/mavencare/webplatform/tree/${encodeURIComponent(card.branch || '')}`,
+      customerKey: this._normalizeAccount(card),
+    };
+  }
+
+  _hasTargetsForCustomer(card, customerKey) {
+    if (!card?.imageTag) return false;
+    const tagAliases = TAG_ALIASES[card.imageTag] || [card.imageTag];
+    for (const tag of tagAliases) {
+      const list = this.deployTargets?.[tag];
+      if (!list) continue;
+      for (const t of list) {
+        if ((t.account || '').toLowerCase() !== customerKey) continue;
+        // If the build has a known ecrRepo, the pipeline must consume from
+        // the same repo. Different brands can share a tag (e.g. 4.2.0-cktribute
+        // appears in viv-release-tribute, viv-release-haven, viv-release-qualitycare).
+        if (card.ecrRepo && t.ecrRepo && t.ecrRepo !== card.ecrRepo) continue;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  _groupByCustomer(cards) {
+    const buckets = new Map();
+    for (const rawCard of cards || []) {
+      const enriched = this._enrichCard(rawCard);
+      const key = this._normalizeAccount(enriched);
+      if (!this._hasTargetsForCustomer(enriched, key)) continue;
+      if (!buckets.has(key)) {
+        buckets.set(key, {
+          key,
+          label: CUSTOMER_LABELS[key] || key,
+          account: key,
+          allBuilds: [],
+          pinnedBuild: null,
+          recentBuilds: [],
+        });
+      }
+      buckets.get(key).allBuilds.push(enriched);
+    }
+
+    for (const bucket of buckets.values()) {
+      bucket.pinnedBuild = this._pickPinned(bucket.key, bucket.allBuilds);
+      bucket.recentBuilds = this._pickRecent(bucket.pinnedBuild, bucket.allBuilds);
+    }
+
+    const result = Array.from(buckets.values()).filter(b => b.allBuilds.length > 0);
+    result.sort((a, b) => {
+      const ai = CUSTOMER_ORDER.indexOf(a.key);
+      const bi = CUSTOMER_ORDER.indexOf(b.key);
+      if (ai !== -1 && bi !== -1) return ai - bi;
+      if (ai !== -1) return -1;
+      if (bi !== -1) return 1;
+      return a.key.localeCompare(b.key);
+    });
+    return result;
   }
 
   getStatus() {

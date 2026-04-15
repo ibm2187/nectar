@@ -34,6 +34,8 @@ class PrSync extends EventEmitter {
     this._lastSyncTime = null;
     // Cache: JIRA key → [normalized PR]
     this._prCache = new Map();
+    // Index: head branch → normalized PR (for builds page lookup)
+    this._prByBranch = new Map();
   }
 
   start() {
@@ -82,6 +84,10 @@ class PrSync extends EventEmitter {
       errors: 0,
     };
 
+    // Rebuild the branch index per scan so stale entries (force-push, branch
+    // reuse, deleted branches) are dropped. Swap-at-end avoids torn reads.
+    const nextByBranch = new Map();
+
     try {
       // Fetch PRs from all tracked repos
       const repos = (this.config.repos || []).filter(r => r.github);
@@ -92,9 +98,7 @@ class PrSync extends EventEmitter {
 
           // Extract JIRA keys and add/update cache
           for (const pr of prs) {
-            const jiraKeys = this._extractJiraKeys(pr);
-            if (jiraKeys.length === 0) continue;
-
+            const headRef = pr.head?.ref || null;
             const normalized = {
               prNumber: pr.number,
               prTitle: pr.title,
@@ -105,7 +109,20 @@ class PrSync extends EventEmitter {
               status: pr.merged_at ? 'merged' : pr.state === 'closed' ? 'closed' : 'open',
               repo: repo.github,
               baseBranch: pr.base?.ref || null,
+              headBranch: headRef,
             };
+
+            if (headRef) {
+              const existing = nextByBranch.get(headRef);
+              // Prefer open PRs; tiebreak by highest prNumber so we always surface the newest/active one
+              if (!existing || (existing.status !== 'open' && normalized.status === 'open') ||
+                  (existing.status === normalized.status && normalized.prNumber > existing.prNumber)) {
+                nextByBranch.set(headRef, normalized);
+              }
+            }
+
+            const jiraKeys = this._extractJiraKeys(pr);
+            if (jiraKeys.length === 0) continue;
 
             for (const key of jiraKeys) {
               if (!this._prCache.has(key)) this._prCache.set(key, new Map());
@@ -118,6 +135,9 @@ class PrSync extends EventEmitter {
           log.error(`PR sync: failed for ${repo.github}: ${err.message}`);
         }
       }
+
+      // Swap in the freshly-built branch index atomically
+      this._prByBranch = nextByBranch;
 
       // Step 2: Count unique JIRA keys
       results.jiraKeysFound = this._prCache.size;
@@ -270,6 +290,11 @@ class PrSync extends EventEmitter {
     if (results.releasesUpdated > 0) {
       this.releases._debounceSave();
     }
+  }
+
+  findPRByBranch(branch) {
+    if (!branch) return null;
+    return this._prByBranch.get(branch) || null;
   }
 
   getStatus() {

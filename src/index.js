@@ -115,6 +115,7 @@ if (aws.isConfigured()) log.info(`AWS client configured (region: ${aws.region})`
 
 const PipelineSync = require('./core/pipeline-sync');
 const pipelineSync = new PipelineSync(releases, aws, repoManager, config);
+pipelineSync.setPrSync(prSync);
 
 const ReleaseNotifier = require('./core/release-notifier');
 const releaseNotifier = new ReleaseNotifier(releases, slack, config);

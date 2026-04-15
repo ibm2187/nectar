@@ -8,6 +8,7 @@ describe('AwsClient.parseProjectName', () => {
       repo: 'webplatform',
       version: '4.2.1',
       branch: 'releases/4.2.1',
+      ecrRepo: 'viv-release',
     });
   });
 
@@ -17,6 +18,40 @@ describe('AwsClient.parseProjectName', () => {
       repo: 'webplatform',
       version: '4.2.0-cktribute',
       branch: 'releases/4.2.0-cktribute',
+      ecrRepo: 'viv-release',
+    });
+  });
+
+  it('strips customer slug and derives per-customer ecrRepo', () => {
+    expect(AwsClient.parseProjectName('ECR-Build_viv-release-ck-master')).toEqual({
+      repo: 'webplatform',
+      version: 'master',
+      branch: 'releases/master',
+      ecrRepo: 'viv-release-ck',
+    });
+    expect(AwsClient.parseProjectName('ECR-Build_viv-release-ck-4_2_0-cktribute')).toEqual({
+      repo: 'webplatform',
+      version: '4.2.0-cktribute',
+      branch: 'releases/4.2.0-cktribute',
+      ecrRepo: 'viv-release-ck',
+    });
+    expect(AwsClient.parseProjectName('ECR-Build_viv-release-bayada-4_2_0')).toEqual({
+      repo: 'webplatform',
+      version: '4.2.0',
+      branch: 'releases/4.2.0',
+      ecrRepo: 'viv-release-bayada',
+    });
+    expect(AwsClient.parseProjectName('ECR-Build_viv-release-tribute-4_1_3')).toEqual({
+      repo: 'webplatform',
+      version: '4.1.3',
+      branch: 'releases/4.1.3',
+      ecrRepo: 'viv-release-tribute',
+    });
+    expect(AwsClient.parseProjectName('ECR-Build_viv-release-lumen-4_2_5-lumen')).toEqual({
+      repo: 'webplatform',
+      version: '4.2.5-lumen',
+      branch: 'releases/4.2.5-lumen',
+      ecrRepo: 'viv-release-lumen',
     });
   });
 
@@ -26,6 +61,7 @@ describe('AwsClient.parseProjectName', () => {
       repo: 'webplatform',
       version: '4.1.0.3',
       branch: 'releases/4.1.0.3',
+      ecrRepo: 'viv-release',
     });
   });
 
@@ -35,6 +71,7 @@ describe('AwsClient.parseProjectName', () => {
       repo: 'webplatform',
       version: null,
       branch: 'master',
+      ecrRepo: 'viv-master',
     });
   });
 
@@ -45,6 +82,7 @@ describe('AwsClient.parseProjectName', () => {
       version: null,
       branch: null,
       custom: 'jeff',
+      ecrRepo: 'viv-custom',
     });
   });
 
@@ -55,6 +93,7 @@ describe('AwsClient.parseProjectName', () => {
       version: null,
       branch: null,
       custom: 'bayada-release',
+      ecrRepo: 'viv-bayada-release',
     });
   });
 

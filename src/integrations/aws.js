@@ -1,5 +1,9 @@
 const log = require('../core/log');
 
+// Customer slugs embedded in cross-account project names, e.g.
+// `ECR-Build_viv-release-ck-4_2_0`. Stripped during parseProjectName.
+const CUSTOMER_SLUGS = ['ck', 'bayada', 'tribute', 'haven', 'qualitycare', 'lumen'];
+
 let CodeBuildClient, ListProjectsCommand, ListBuildsForProjectCommand, BatchGetBuildsCommand;
 let CodePipelineClient, ListPipelinesCommand, GetPipelineStateCommand;
 let STSClient, AssumeRoleCommand;
@@ -327,27 +331,38 @@ class AwsClient {
     // Release builds: ECR-Build_viv-release-X_Y_Z or ECR-Build_viv-release-X_Y_Z-suffix
     const releaseMatch = name.match(/^ECR-Build_viv-release-(.+)$/);
     if (releaseMatch) {
-      const raw = releaseMatch[1];
+      let raw = releaseMatch[1];
+      // Detect customer slug to derive the ECR repo for cross-account release builds.
+      // ECR-Build_viv-release-ck-X    → ecrRepo 'viv-release-ck'
+      // ECR-Build_viv-release-X        → ecrRepo 'viv-release' (Viv root)
+      const slugMatch = raw.match(new RegExp(`^(${CUSTOMER_SLUGS.join('|')})-(.+)$`));
+      let ecrRepo;
+      if (slugMatch) {
+        ecrRepo = `viv-release-${slugMatch[1]}`;
+        raw = slugMatch[2];
+      } else {
+        ecrRepo = 'viv-release';
+      }
       // Convert underscores to dots for version, but preserve suffix after last hyphen-separated part
       // e.g., "4_2_0-cktribute" → version "4.2.0-cktribute"
       const version = raw.replace(/_/g, '.');
-      return { repo: 'webplatform', version, branch: `releases/${version}` };
+      return { repo: 'webplatform', version, branch: `releases/${version}`, ecrRepo };
     }
 
     // Master build
     if (name === 'ECR-Build_viv-master') {
-      return { repo: 'webplatform', version: null, branch: 'master' };
+      return { repo: 'webplatform', version: null, branch: 'master', ecrRepo: 'viv-master' };
     }
 
     // Custom builds: ECR-Build_viv-custom-{name}
     const customMatch = name.match(/^ECR-Build_viv-custom-(.+)$/);
     if (customMatch) {
-      return { repo: 'webplatform', version: null, branch: null, custom: customMatch[1] };
+      return { repo: 'webplatform', version: null, branch: null, custom: customMatch[1], ecrRepo: 'viv-custom' };
     }
 
-    // Bayada release
+    // Bayada release (legacy single-customer build)
     if (name === 'ECR-Build_viv-bayada-release') {
-      return { repo: 'webplatform', version: null, branch: null, custom: 'bayada-release' };
+      return { repo: 'webplatform', version: null, branch: null, custom: 'bayada-release', ecrRepo: 'viv-bayada-release' };
     }
 
     return null;

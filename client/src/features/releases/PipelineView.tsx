@@ -1,4 +1,4 @@
-import { cn, timeAgo } from '../../lib/utils'
+import { cn, timeAgo, formatDuration } from '../../lib/utils'
 import { Card, CardContent } from '../../components/ui/card'
 import { JiraLink } from '../../components/JiraLink'
 
@@ -32,13 +32,6 @@ const BUILD_STATUS: Record<string, { label: string; color: string; dot: string }
   FAILED:      { label: 'Failed',      color: 'text-red-400',    dot: 'bg-red-500' },
   IN_PROGRESS: { label: 'Building...',  color: 'text-blue-400',  dot: 'bg-blue-500 animate-pulse' },
   STOPPED:     { label: 'Stopped',     color: 'text-gray-400',   dot: 'bg-gray-500' },
-}
-
-function formatDuration(sec: number): string {
-  if (sec < 60) return `${sec}s`
-  const min = Math.floor(sec / 60)
-  const s = sec % 60
-  return s > 0 ? `${min}m ${s}s` : `${min}m`
 }
 
 // ── Full Pipeline View (for release detail page) ─────────
