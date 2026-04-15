@@ -266,12 +266,20 @@ class JiraSync extends EventEmitter {
       }
     }
 
-    // Track JIRA metadata on the release
+    // Track JIRA metadata on the release — detect date changes
+    const oldDate = release.jiraReleaseDate;
+    const newDate = jiraVersion.releaseDate;
+
     release.jiraVersionId = jiraVersion.id;
     release.jiraVersionName = versionName;
     release.jiraReleased = jiraVersion.released;
-    release.jiraReleaseDate = jiraVersion.releaseDate;
+    release.jiraReleaseDate = newDate;
     release.jiraArchived = jiraVersion.archived;
+
+    // Emit event if release date changed
+    if (oldDate && newDate && oldDate !== newDate && release.state !== 'done') {
+      this.emit('release:date-changed', release, { oldDate, newDate });
+    }
 
     // Update release state based on JIRA version status
     if (release) {

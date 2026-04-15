@@ -204,6 +204,13 @@ const webServer = createWebServer(services, config);
   cherryPickWatcher.start();
 
   // Start JIRA sync (primary source of truth for releases)
+  jiraSync.on('release:date-changed', (release, { oldDate, newDate }) => {
+    const SlackNotifier = require('./integrations/slack');
+    const channel = SlackNotifier.releaseChannelName(release.version);
+    const text = `📅 *Release ${release.version}* date changed: ~${oldDate}~ → *${newDate}*`;
+    slack.postMessage(channel, text);
+    log.info(`Release date changed: ${release.version} ${oldDate} → ${newDate}`);
+  });
   jiraSync.start();
 
   // Start git discovery (cross-references JIRA with git branches)
