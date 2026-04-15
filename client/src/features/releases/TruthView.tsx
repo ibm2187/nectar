@@ -444,8 +444,8 @@ export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
                 <col className="w-28" />
                 <col />{/* title takes remaining */}
                 <col className="w-36" />
-                <col className="w-20" />
-                <col className="w-12" />
+                <col className="w-16" />
+                <col className="w-10" />
                 <col className="w-28" />
                 <col className="w-16" />
                 <col className="w-24" />
@@ -682,7 +682,7 @@ function TicketRow({ ticket: t, prs, version, onClickPr }: { ticket: VerifiedTic
 
       {/* QA Assignee */}
       <td className="px-3 py-2 align-top hidden md:table-cell">
-        {(() => { const qa = displayAssignee(t.qaAssignee); return <span className={cn('text-xs', qa.className)}>{qa.text}</span> })()}
+        {(() => { const qa = displayAssignee(t.qaAssignee); return <span className={cn('text-xs truncate max-w-[100px] inline-block', qa.className)}>{qa.text}</span> })()}
       </td>
 
       {/* CPs + PRs */}
