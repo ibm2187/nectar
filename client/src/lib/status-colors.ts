@@ -37,36 +37,47 @@ export const STATUS_GROUPS: StatusGroupDef[] = [
   },
   {
     key: 'in-dev', label: 'In Dev', color: 'text-yellow-400', statuses: [
-      'Development In Progress', 'In Progress', 'In Review',
-      'Waiting for Cherry Pick', 'Open', 'To Do', 'Backlog',
+      'Development In Progress', 'In Progress', 'In Review', 'Development',
+      'Waiting for Cherry Pick', 'Design In Progress', 'Design In Review', 'Design Review',
+      'Implementing', 'Remediation in Progress', 'Defect Remediation in Progress',
+      'Pending Dev Investigation', 'Pending Defect Remediation', 'Pending Configuration',
+      'Pending Prioritization', 'Investigating Issue', 'Escalated',
+      'Open', 'To Do', 'Backlog', 'Planning', 'Requirements', 'Needs Requirements',
+      'Ready to Develop', 'Ready For Estimation', 'Reopened', 'Pending',
+      'On Hold', 'Deprioritized', 'Future Development', 'Future Remediation',
     ],
     pillActive: 'bg-yellow-500/15 text-yellow-400 shadow-sm',
     pillInactive: 'text-muted-foreground hover:text-yellow-400',
   },
   {
     key: 'blocked', label: 'Blocked', color: 'text-red-400', statuses: [
-      'Blocked', 'Testing Failed',
+      'Blocked', 'Testing Failed', 'Test Failed', 'Pending Bug Fix',
     ],
     pillActive: 'bg-red-500/15 text-red-400 shadow-sm',
     pillInactive: 'text-muted-foreground hover:text-red-400',
   },
   {
     key: 'ready-for-qa', label: 'Ready for QA', color: 'text-blue-400', statuses: [
-      'Ready For Testing', 'Cherry Picked',
+      'Ready For Testing', 'Cherry Picked', 'Cherrypick is Building',
+      'Retest After Cherrypick', 'DQA Required',
     ],
     pillActive: 'bg-blue-500/15 text-blue-400 shadow-sm',
     pillInactive: 'text-muted-foreground hover:text-blue-400',
   },
   {
     key: 'in-qa', label: 'In QA', color: 'text-purple-400', statuses: [
-      'In Testing', 'Testing in Branch', 'Re-verify Bug',
+      'In Testing', 'Testing in Branch', 'Testing', 'Re-verify Bug',
+      'Validating', 'Pending Customer QA/UAT',
     ],
     pillActive: 'bg-purple-500/15 text-purple-400 shadow-sm',
     pillInactive: 'text-muted-foreground hover:text-purple-400',
   },
   {
     key: 'done', label: 'Done', color: 'text-green-400', statuses: [
-      'QA Certified', 'Done', 'Closed', 'Resolved', 'Resolved Without Code',
+      'QA Certified', 'NO QA - Certified', 'Done', 'Closed', 'Resolved', 'Resolved Without Code',
+      'Completed', 'Released', 'Rollout', 'Approved', 'DQA Approved',
+      'Test Passed', 'TEST DEFERRED', 'Design Complete', 'Integration Complete',
+      'Release Night Activity', 'Canceled', 'Declined', 'Rejected',
     ],
     pillActive: 'bg-green-500/15 text-green-400 shadow-sm',
     pillInactive: 'text-muted-foreground hover:text-green-400',

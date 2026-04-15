@@ -415,14 +415,55 @@ class JiraClient {
   /**
    * Map JIRA status to Nectar ticket state.
    */
+  /**
+   * Map JIRA status to Nectar internal state.
+   * Based on full audit of all DEV project statuses (2026-04-15).
+   */
   static mapStatus(jiraStatus) {
     const s = (jiraStatus || '').toLowerCase();
-    if (s.includes('cherry picked')) return 'cherry-picked';
-    if (s.includes('ready for testing') || s.includes('ready for qa')) return 'ready-for-testing';
-    if (s.includes('in progress') || s.includes('in development')) return 'in-progress';
+
+    // Done — JIRA category: Done
     if (s.includes('qa certified') || s.includes('no qa')) return 'done';
-    if (s.includes('done') || s.includes('closed') || s.includes('resolved')) return 'done';
+    if (s.includes('resolved') || s.includes('closed') || s === 'done') return 'done';
+    if (s.includes('completed') || s.includes('released') || s.includes('rollout')) return 'done';
+    if (s.includes('approved') && !s.includes('awaiting') && !s.includes('pending')) return 'done';
+    if (s.includes('test passed') || s.includes('test deferred')) return 'done';
+    if (s.includes('dqa approved') || s.includes('design complete')) return 'done';
+    if (s.includes('migrated') || s.includes('declined') || s.includes('rejected')) return 'done';
+    if (s.includes('canceled') || s.includes('release night')) return 'done';
+
+    // Cherry-picked
+    if (s.includes('cherry picked') || s.includes('cherrypick is building')) return 'cherry-picked';
+    if (s.includes('retest after cherry')) return 'ready-for-testing';
+
+    // Ready for testing / QA
+    if (s.includes('ready for testing') || s.includes('ready for qa')) return 'ready-for-testing';
+
+    // In QA / testing
+    if (s.includes('in testing') || s.includes('testing in branch') || s === 'testing') return 'in-progress';
+    if (s.includes('validating') || s.includes('dqa required')) return 'in-progress';
+    if (s.includes('pending customer qa') || s.includes('pending bug fix')) return 'in-progress';
+
+    // Blocked / failed
+    if (s === 'blocked' || s.includes('testing failed') || s.includes('test failed')) return 'in-progress';
+
+    // In dev / active work
+    if (s.includes('in progress') || s.includes('in development') || s === 'development') return 'in-progress';
+    if (s.includes('in review') || s.includes('design in')) return 'in-progress';
+    if (s.includes('implementing') || s.includes('remediation')) return 'in-progress';
+    if (s.includes('waiting for cherry pick')) return 'in-progress';
+    if (s.includes('investigating') || s.includes('escalated')) return 'in-progress';
+    if (s.includes('pending dev') || s.includes('pending defect')) return 'in-progress';
+    if (s.includes('pending config') || s.includes('pending priorit')) return 'in-progress';
+
+    // Pending / to do
     if (s.includes('to do') || s.includes('open') || s.includes('backlog')) return 'pending';
+    if (s.includes('planning') || s.includes('requirements') || s.includes('designs')) return 'pending';
+    if (s.includes('on hold') || s.includes('deprioritized') || s.includes('archived')) return 'pending';
+    if (s.includes('reopened') || s.includes('roadmap')) return 'pending';
+    if (s.includes('ready to develop') || s.includes('ready for est')) return 'pending';
+    if (s.includes('re-verify bug')) return 'pending';
+
     return 'pending';
   }
 
