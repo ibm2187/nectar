@@ -19,6 +19,7 @@ function createWebServer(services, config) {
   const token = process.env.WEB_TOKEN;
 
   const app = express();
+  app.set('trust proxy', true); // Trust X-Forwarded-For from ALB/proxy so rate limiting is per-user
   app.use(express.json({ limit: '1mb' }));
 
   // ── Auth routes (before auth middleware) ──────────────
@@ -32,7 +33,7 @@ function createWebServer(services, config) {
   // ── Rate limiting ────────────────────────────────────
   const apiLimiter = rateLimit({
     windowMs: 60 * 1000,   // 1 minute
-    max: 200,              // 200 requests per minute per IP
+    max: 600,              // 600 requests per minute per IP
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests, please try again later' },
