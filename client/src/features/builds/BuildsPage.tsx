@@ -94,6 +94,84 @@ function getDeployTargetsForBuild(build: BuildCard, allTargets: Record<string, D
   return targets
 }
 
+// ── Build history with expandable JIRA keys ──────────────
+
+function BuildHistory({ builds, projectName }: { builds: BuildInfo[]; projectName: string }) {
+  const [selectedBuild, setSelectedBuild] = useState<number | null>(null)
+
+  return (
+    <div>
+      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">History</h4>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {builds.map(b => (
+          <button
+            key={b.buildNumber}
+            type="button"
+            onClick={() => setSelectedBuild(selectedBuild === b.buildNumber ? null : b.buildNumber)}
+            className={cn(
+              "flex flex-col items-center gap-0.5 px-1.5 py-1 rounded border cursor-pointer hover:ring-1 hover:ring-primary/30 transition-all min-w-[40px]",
+              b.status === 'SUCCEEDED' ? 'bg-green-500/10 border-green-500/30' :
+              b.status === 'FAILED' ? 'bg-red-500/10 border-red-500/30' :
+              b.status === 'IN_PROGRESS' ? 'bg-blue-500/10 border-blue-500/30' :
+              'bg-gray-500/10 border-gray-500/30',
+              selectedBuild === b.buildNumber && 'ring-1 ring-primary/50'
+            )}
+          >
+            <span className={cn(
+              "text-[10px] font-semibold",
+              b.status === 'SUCCEEDED' ? 'text-green-400' :
+              b.status === 'FAILED' ? 'text-red-400' :
+              b.status === 'IN_PROGRESS' ? 'text-blue-400' : 'text-gray-400'
+            )}>
+              #{b.buildNumber}
+            </span>
+            <span className="text-[9px] text-muted-foreground">
+              {b.startTime ? timeAgo(b.startTime) : '—'}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {/* Expanded build detail */}
+      {selectedBuild && (() => {
+        const b = builds.find(x => x.buildNumber === selectedBuild)
+        if (!b) return null
+        const keys = (b as any).jiraKeys || []
+        return (
+          <div className="mt-2 p-2 rounded border border-border/30 bg-accent/5">
+            <div className="flex items-center gap-2 text-xs mb-1">
+              <span className="font-semibold">Build #{b.buildNumber}</span>
+              <span className={cn(
+                b.status === 'SUCCEEDED' ? 'text-green-400' :
+                b.status === 'FAILED' ? 'text-red-400' : 'text-muted-foreground'
+              )}>{b.status}</span>
+              {b.durationSec && <span className="text-muted-foreground">{formatDuration(b.durationSec)}</span>}
+              {b.startTime && <span className="text-muted-foreground">{timeAgo(b.startTime)}</span>}
+              <a
+                href={`https://us-east-1.console.aws.amazon.com/codesuite/codebuild/projects/${projectName}/build/${projectName}%3A${b.buildNumber}/log`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline ml-auto"
+              >
+                AWS Logs
+              </a>
+            </div>
+            {keys.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {keys.map((k: string) => (
+                  <JiraLink key={k} jiraKey={k} className="text-xs" />
+                ))}
+              </div>
+            ) : (
+              <span className="text-xs text-muted-foreground italic">No JIRA tickets in this build</span>
+            )}
+          </div>
+        )
+      })()}
+    </div>
+  )
+}
+
 // ── Commit list with show more ───────────────────────────
 
 function CommitList({ commits }: { commits: Array<{ sha: string; message: string }> }) {
@@ -154,7 +232,9 @@ export function BuildsPage() {
       builds = builds.filter(b => {
         if (b.branch.toLowerCase().includes(s)) return true
         if (b.projectName.toLowerCase().includes(s)) return true
+        // Search JIRA keys across ALL builds, not just latest
         if (b.jiraKeys.some(k => k.toLowerCase().includes(s))) return true
+        if (b.builds.some(bld => (bld as any).jiraKeys?.some((k: string) => k.toLowerCase().includes(s)))) return true
         if ((b.account || '').toLowerCase().includes(s)) return true
         // Search deploy targets — match customer, env, or combined (with or without space)
         const targets = getDeployTargetsForBuild(b, data.deployTargets)
@@ -313,40 +393,7 @@ function BuildCardComponent({ build, deployTargets, navigate }: {
 
             {/* Build history */}
             {build.builds.length > 1 && (
-              <div>
-                <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">History</h4>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {build.builds.map(b => (
-                    <a
-                      key={b.buildNumber}
-                      href={`https://us-east-1.console.aws.amazon.com/codesuite/codebuild/projects/${build.projectName}/build/${build.projectName}%3A${b.buildNumber}/log`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className={cn(
-                        "flex flex-col items-center gap-0.5 px-1.5 py-1 rounded border cursor-pointer hover:ring-1 hover:ring-primary/30 transition-all min-w-[40px]",
-                        b.status === 'SUCCEEDED' ? 'bg-green-500/10 border-green-500/30' :
-                        b.status === 'FAILED' ? 'bg-red-500/10 border-red-500/30' :
-                        b.status === 'IN_PROGRESS' ? 'bg-blue-500/10 border-blue-500/30' :
-                        'bg-gray-500/10 border-gray-500/30'
-                      )}
-                      title={`#${b.buildNumber}: ${b.status}${b.startTime ? ` — ${timeAgo(b.startTime)}` : ''}${b.durationSec ? ` — ${formatDuration(b.durationSec)}` : ''}${(b as any).jiraKeys?.length ? `\nJIRA: ${(b as any).jiraKeys.join(', ')}` : ''}`}
-                    >
-                      <span className={cn(
-                        "text-[10px] font-semibold",
-                        b.status === 'SUCCEEDED' ? 'text-green-400' :
-                        b.status === 'FAILED' ? 'text-red-400' :
-                        b.status === 'IN_PROGRESS' ? 'text-blue-400' :
-                        'text-gray-400'
-                      )}>
-                        #{b.buildNumber}
-                      </span>
-                      <span className="text-[9px] text-muted-foreground">
-                        {b.startTime ? timeAgo(b.startTime) : '—'}
-                      </span>
-                    </a>
-                  ))}
-                </div>
-              </div>
+              <BuildHistory builds={build.builds} projectName={build.projectName} />
             )}
           </div>
         )}
