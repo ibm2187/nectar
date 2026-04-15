@@ -457,7 +457,7 @@ export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
                   <SortHeader label="Key"        active={sortKey === 'key'}        dir={sortDir} onClick={() => setSort('key')} />
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Title</th>
                   <SortHeader label="JIRA Status" active={sortKey === 'jiraStatus'} dir={sortDir} onClick={() => setSort('jiraStatus')} />
-                  <th className="px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">Cherry Pick</th>
+                  <th className="px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell whitespace-nowrap">Cherry Pick</th>
                   <th className="px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">PRs</th>
                   <SortHeader label="Dev"         active={sortKey === 'assignee'}   dir={sortDir} onClick={() => setSort('assignee')} className="hidden md:table-cell" />
                   <SortHeader label="QA"          active={sortKey === 'qaAssignee'} dir={sortDir} onClick={() => setSort('qaAssignee')} className="hidden md:table-cell" />
