@@ -148,6 +148,27 @@ module.exports = function createRoutes(services, config) {
     res.json(release);
   });
 
+  // Notify release channel — sends status update to Slack
+  router.post('/releases/:version/notify', asyncHandler(async (req, res) => {
+    const version = req.params.version;
+    const release = releases.get(version);
+    if (!release) return res.status(404).json({ error: 'Release not found' });
+
+    if (!services.releaseNotifier) {
+      return res.status(503).json({ error: 'Release notifier not configured' });
+    }
+
+    const SlackNotifier = require('../integrations/slack');
+    const channel = SlackNotifier.releaseChannelName(release.version);
+
+    try {
+      await services.releaseNotifier.notifyRelease(release);
+      res.json({ ok: true, channel, version: release.version });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }));
+
   // Per-release refresh — git fetch + JIRA sync + PR sync for one version
   router.post('/releases/:version/refresh', asyncHandler(async (req, res) => {
     const version = req.params.version;

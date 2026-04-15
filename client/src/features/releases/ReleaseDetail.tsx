@@ -310,6 +310,11 @@ export function ReleaseDetail() {
           ))}
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={validate}>Validate</Button>
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={assessRisk}>Risk</Button>
+          <Button variant="outline" size="sm" className="text-xs h-7" onClick={async () => {
+            try {
+              await apiFetch(`/releases/${version}/notify`, { method: 'POST' })
+            } catch { /* silent */ }
+          }}>Notify Channel</Button>
           {/* Presentation button */}
           {taskLoading || (task && (task.status === 'pending' || task.status === 'in-progress')) ? (
             <Button variant="outline" size="sm" className="text-xs h-7" disabled>

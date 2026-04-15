@@ -116,6 +116,8 @@ if (aws.isConfigured()) log.info(`AWS client configured (region: ${aws.region})`
 const PipelineSync = require('./core/pipeline-sync');
 const pipelineSync = new PipelineSync(releases, aws, repoManager, config);
 
+const ReleaseNotifier = require('./core/release-notifier');
+const releaseNotifier = new ReleaseNotifier(releases, slack, config);
 
 const CustomerStore = require('./core/customer-store');
 const customerStore = new CustomerStore();
@@ -188,6 +190,7 @@ const services = {
   zoho, zohoSync,
   prSync,
   aws, pipelineSync,
+  releaseNotifier,
 };
 const webServer = createWebServer(services, config);
 
@@ -212,6 +215,9 @@ const webServer = createWebServer(services, config);
   // Start PR sync (finds GitHub PRs linked to JIRA issues)
   prSync.start();
 
+  // Start release channel notifier (9 AM + 2 PM ET for due releases)
+  releaseNotifier.start();
+
   // Start pipeline sync (CodeBuild + CodePipeline status)
   pipelineSync.start();
 
@@ -234,6 +240,12 @@ const webServer = createWebServer(services, config);
   }, 30 * 60 * 1000); // every 30 min
 
   // Start environment version poller (hits /api/status/version on each env)
+  envPoller.on('env:version-changed', ({ envName, customerId, newVersion, previousVersion }) => {
+    // Send deployment notification to the release-specific Slack channel
+    const customer = customerStore.getCustomer ? customerStore.getCustomer(customerId) : null;
+    const customerName = customer?.name || customerId;
+    slack.notifyReleaseDeployment(newVersion, envName, customerName, previousVersion);
+  });
   envPoller.start();
 
   // Start Datadog monitor poller (every 2 minutes, if configured)

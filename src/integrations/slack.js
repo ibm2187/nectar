@@ -155,6 +155,98 @@ class SlackNotifier {
     return this.postMessage(channel, text);
   }
 
+  // ── Release channel notifications ──────────────────────
+
+  /**
+   * Get the Slack channel name for a release version.
+   * e.g., "4.1.0.5-ck" → "#4-1-0-5-ck"
+   */
+  static releaseChannelName(version) {
+    return '#' + version.replace(/\./g, '-');
+  }
+
+  /**
+   * Check if a release channel exists by trying to look it up.
+   */
+  async channelExists(channelName) {
+    if (!this.ready) return false;
+    if (this._badChannels && this._badChannels.has(channelName)) return false;
+    try {
+      // Posting a test isn't needed — the postMessage will fail with channel_not_found
+      // and get added to _badChannels. For checking, we just return true if not in bad list.
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Post a release status update to the release-specific channel.
+   */
+  async notifyReleaseStatus(release, statusData) {
+    const channel = SlackNotifier.releaseChannelName(release.version);
+    const { tickets, groupCounts, blockedTickets, nectarUrl } = statusData;
+
+    const totalNotDone = (groupCounts.total || 0) - (groupCounts.done || 0);
+
+    const lines = [
+      `📋 *Release ${release.version}* — Status Update`,
+      '',
+      `*Release date:* ${release.jiraReleaseDate || 'Unscheduled'}`,
+      `*State:* ${release.state}`,
+      '',
+      `*Tickets:* ${groupCounts.total || 0} total`,
+      groupCounts.inDev ? `  🟡 In Dev: ${groupCounts.inDev}` : null,
+      groupCounts.blocked ? `  🔴 Blocked: ${groupCounts.blocked}` : null,
+      groupCounts.readyForQa ? `  🔵 Ready for QA: ${groupCounts.readyForQa}` : null,
+      groupCounts.inQa ? `  🟣 In QA: ${groupCounts.inQa}` : null,
+      groupCounts.done ? `  🟢 Done: ${groupCounts.done}` : null,
+    ].filter(l => l !== null);
+
+    // Not Done section
+    if (totalNotDone > 0) {
+      lines.push('');
+      if (totalNotDone <= 10) {
+        lines.push(`*Not Done (${totalNotDone}):*`);
+        for (const t of tickets.filter(t => !statusData.doneStatuses.has(t.jiraStatus || ''))) {
+          lines.push(`  • <${statusData.jiraBaseUrl}/browse/${t.key}|${t.key}> — ${t.summary} (${t.jiraStatus || 'Unknown'})`);
+        }
+      } else {
+        lines.push(`*Not Done:* ${totalNotDone} tickets remaining`);
+      }
+    }
+
+    // Always show blocked tickets
+    if (blockedTickets.length > 0) {
+      lines.push('');
+      lines.push(`⚠️ *Blocked (${blockedTickets.length}):*`);
+      for (const t of blockedTickets) {
+        const assignee = t.assignee || 'Unassigned';
+        lines.push(`  • <${statusData.jiraBaseUrl}/browse/${t.key}|${t.key}> — ${t.summary} (${assignee})`);
+      }
+    }
+
+    if (nectarUrl) {
+      lines.push('');
+      lines.push(`🔗 <${nectarUrl}|View in Nectar>`);
+    }
+
+    return this.postMessage(channel, lines.join('\n'));
+  }
+
+  /**
+   * Post a deployment notification to the release-specific channel.
+   */
+  async notifyReleaseDeployment(version, envName, customerName, previousVersion) {
+    const channel = SlackNotifier.releaseChannelName(version);
+    const lines = [
+      `🚀 *${version}* deployed to *${customerName} ${envName}*`,
+      previousVersion ? `Previously running: ${previousVersion}` : null,
+      `Detected at ${new Date().toLocaleTimeString()}`,
+    ].filter(Boolean);
+    return this.postMessage(channel, lines.join('\n'));
+  }
+
   async stop() {
     if (this.app) {
       await this.app.stop().catch(() => {});

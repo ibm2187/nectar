@@ -310,9 +310,20 @@ class EnvironmentPoller extends EventEmitter {
     }
 
     const version = versionResult.status === 'fulfilled' ? versionResult.value.version : null;
-    return {
-      versionChanged: !!(previousVersion && version && previousVersion !== version),
-    };
+    const versionChanged = !!(previousVersion && version && previousVersion !== version);
+
+    if (versionChanged) {
+      this.emit('env:version-changed', {
+        envId: env.id,
+        envName: env.name || env.nodeEnv || env.id,
+        customerId: env.customerId,
+        tier: env.tier,
+        newVersion: version,
+        previousVersion,
+      });
+    }
+
+    return { versionChanged };
   }
 
   /**
