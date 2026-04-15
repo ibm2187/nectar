@@ -147,6 +147,18 @@ class PipelineSync extends EventEmitter {
 
       this.buildProjects = deduped;
 
+      // Store buildByJiraKey on matching releases
+      for (const card of deduped) {
+        if (!card.version || !card.buildByJiraKey) continue;
+        // Find the release for this build's version
+        const release = this.releases.get(card.version, card.repo);
+        if (release) {
+          release.buildByJiraKey = card.buildByJiraKey;
+          release.buildSyncedAt = new Date().toISOString();
+        }
+      }
+      this.releases._debounceSave();
+
       // Step 3: Fetch deploy pipeline states (main account)
       const deployTargets = {};
       for (const [name, info] of Object.entries(this._deployMap || {})) {
@@ -285,29 +297,61 @@ class PipelineSync extends EventEmitter {
     if (builds.length === 0) return null;
 
     const latest = builds[0];
-    const previousSuccess = builds.find(b => b.status === 'SUCCEEDED' && b.id !== latest.id);
 
-    // Get new commits from local git
-    let newCommits = [];
-    let jiraKeys = [];
-    if (latest.resolvedSourceVersion && parsed.repo === 'webplatform') {
-      try {
-        const baseSha = previousSuccess?.resolvedSourceVersion || null;
-        if (baseSha && baseSha !== latest.resolvedSourceVersion) {
-          newCommits = await this.repoManager.log('webplatform', `${baseSha}..${latest.resolvedSourceVersion}`, { limit: 30 });
-        } else if (!baseSha) {
-          newCommits = await this.repoManager.log('webplatform', latest.resolvedSourceVersion, { limit: 10 });
-        }
-        // If baseSha === latestSha, no new commits (rebuilt same code)
-        jiraKeys = JiraClient.extractKeys(newCommits.map(c => c.message).join(' '));
-      } catch (err) {
-        log.warn(`Pipeline sync: git log failed for ${projectName} (${latest.resolvedSourceVersion?.slice(0, 10)}): ${err.message}`);
+    // Compute JIRA keys per build by diffing consecutive commit SHAs
+    const enrichedBuilds = [];
+    for (let i = 0; i < builds.length; i++) {
+      const b = builds[i];
+      let buildJiraKeys = [];
+      let buildCommits = [];
+
+      if (b.resolvedSourceVersion && parsed.repo === 'webplatform') {
+        // Find the next older build with a different SHA as the base
+        const olderBuild = builds.slice(i + 1).find(ob => ob.resolvedSourceVersion && ob.resolvedSourceVersion !== b.resolvedSourceVersion);
+        const baseSha = olderBuild?.resolvedSourceVersion || null;
+
+        try {
+          if (baseSha) {
+            buildCommits = await this.repoManager.log('webplatform', `${baseSha}..${b.resolvedSourceVersion}`, { limit: 30 });
+          } else if (i === builds.length - 1) {
+            // Oldest build in our window — show last few commits
+            buildCommits = await this.repoManager.log('webplatform', b.resolvedSourceVersion, { limit: 10 });
+          }
+          buildJiraKeys = JiraClient.extractKeys(buildCommits.map(c => c.message).join(' '));
+        } catch { /* git log failed — branch not fetched */ }
       }
-    } else {
-      log.info(`Pipeline sync: no commits for ${projectName} — resolvedSourceVersion: ${latest.resolvedSourceVersion}, repo: ${parsed.repo}`);
+
+      enrichedBuilds.push({
+        buildNumber: b.buildNumber,
+        status: b.status,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        durationSec: b.durationSec,
+        commitSha: b.resolvedSourceVersion,
+        jiraKeys: buildJiraKeys,
+        commits: buildCommits,
+      });
     }
 
-    // Find which deploy targets use this build's image tag
+    // Latest build's commits/keys for the card display
+    const newCommits = enrichedBuilds[0]?.commits || [];
+    const jiraKeys = enrichedBuilds[0]?.jiraKeys || [];
+
+    // Build reverse index: JIRA key → build info (first successful build containing it)
+    const buildByJiraKey = {};
+    // Walk from oldest to newest so the latest build wins
+    for (let i = enrichedBuilds.length - 1; i >= 0; i--) {
+      const b = enrichedBuilds[i];
+      for (const key of b.jiraKeys) {
+        buildByJiraKey[key] = {
+          buildNumber: b.buildNumber,
+          status: b.status,
+          startTime: b.startTime,
+          branch: parsed.branch || parsed.custom || projectName,
+        };
+      }
+    }
+
     const imageTag = parsed.version || parsed.branch || parsed.custom || null;
 
     return {
@@ -319,16 +363,18 @@ class PipelineSync extends EventEmitter {
       imageTag,
       latestStatus: latest.status,
       latestStartTime: latest.startTime,
-      builds: builds.map(b => ({
+      builds: enrichedBuilds.map(b => ({
         buildNumber: b.buildNumber,
         status: b.status,
         startTime: b.startTime,
         endTime: b.endTime,
         durationSec: b.durationSec,
-        commitSha: b.resolvedSourceVersion,
+        commitSha: b.commitSha,
+        jiraKeys: b.jiraKeys,
       })),
       newCommits,
       jiraKeys,
+      buildByJiraKey,
     };
   }
 

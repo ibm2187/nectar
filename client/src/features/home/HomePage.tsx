@@ -508,8 +508,9 @@ function ReleasePanel({
               <col style={{ width: '155px' }} />
               <col style={{ width: '75px' }} />
               <col style={{ width: '35px' }} />
-              <col style={{ width: '120px' }} />
-              <col style={{ width: '120px' }} />
+              <col style={{ width: '50px' }} />
+              <col style={{ width: '110px' }} />
+              <col style={{ width: '110px' }} />
             </colgroup>
             <thead>
               <tr className="border-b border-border/20 text-left">
@@ -518,6 +519,7 @@ function ReleasePanel({
                 <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">Status</th>
                 <th className="px-1 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Cherry-Pick PRs">Cherry Pick</th>
                 <th className="px-0.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Original PRs">PRs</th>
+                <th className="px-1 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center">Build</th>
                 <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">Dev</th>
                 <th className="px-2 pr-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">QA</th>
               </tr>
@@ -548,6 +550,7 @@ function ReleasePanel({
                       prs={ticket.prs || []}
                       onClick={() => onClickPr(ticket.key, ticket.summary, ticket.prs || [], r.repo || 'webplatform', r.version)}
                     />
+                    <BuildStatusCell build={ticket.build} />
                     <td className="px-2 py-1.5 align-middle text-right whitespace-nowrap">
                       <span className={cn('text-xs truncate max-w-[110px] inline-block', dev.className)}>{dev.text}</span>
                     </td>
@@ -559,7 +562,7 @@ function ReleasePanel({
               })}
               {r.tickets.length > (view === 'pm' ? 50 : 25) && (
                 <tr>
-                  <td colSpan={7} className="pl-4 py-2 text-xs text-muted-foreground">
+                  <td colSpan={8} className="pl-4 py-2 text-xs text-muted-foreground">
                     +{r.tickets.length - (view === 'pm' ? 50 : 25)} more tickets
                   </td>
                 </tr>
@@ -576,6 +579,30 @@ function ReleasePanel({
         </button>
       )}
     </Card>
+  )
+}
+
+// ── Build status cell ────────────────────────────────────
+
+function BuildStatusCell({ build }: { build: { buildNumber: number; status: string; startTime: string; branch: string } | null }) {
+  if (!build) return <td className="px-1 py-1.5 align-middle text-center"><span className="text-muted-foreground/20 text-sm">—</span></td>
+
+  const succeeded = build.status === 'SUCCEEDED'
+  const failed = build.status === 'FAILED'
+  const inProgress = build.status === 'IN_PROGRESS'
+
+  return (
+    <td className="px-1 py-1.5 align-middle text-center">
+      <span
+        className={cn(
+          'text-sm cursor-default',
+          succeeded ? 'text-green-400' : failed ? 'text-red-400' : inProgress ? 'text-blue-400 animate-pulse' : 'text-muted-foreground'
+        )}
+        title={`Build #${build.buildNumber} ${build.status}${build.startTime ? ` · ${new Date(build.startTime).toLocaleString()}` : ''}${build.branch ? ` · ${build.branch}` : ''}`}
+      >
+        {succeeded ? '✓' : failed ? '✗' : inProgress ? '...' : '?'}
+      </span>
+    </td>
   )
 }
 

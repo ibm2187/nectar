@@ -20,6 +20,7 @@ interface Props {
   repo: string
   version: string
   prsByJiraKey?: Record<string, PrInfo[]>
+  buildByJiraKey?: Record<string, { buildNumber: number; status: string; startTime: string; branch: string }>
 }
 
 // Health styling — color, emoji, label, sort priority (worst first)
@@ -58,7 +59,7 @@ type ViewMode = 'impact' | 'full'
 type FilterKey = 'all' | HealthCategory
 type CompareType = CompareTarget['type']
 
-export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
+export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {} }: Props) {
   // ── URL-driven state (everything here is shareable) ─────────
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -446,6 +447,7 @@ export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
                 <col className="w-44" />
                 <col className="w-24" />
                 <col className="w-12" />
+                <col className="w-12" />
                 <col className="w-24" />
                 <col className="w-24" />
                 <col className="w-16" />
@@ -459,6 +461,7 @@ export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
                   <SortHeader label="JIRA Status" active={sortKey === 'jiraStatus'} dir={sortDir} onClick={() => setSort('jiraStatus')} />
                   <th className="px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell whitespace-nowrap">Cherry Pick</th>
                   <th className="px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">PRs</th>
+                  <th className="px-1 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">Build</th>
                   <SortHeader label="Dev"         active={sortKey === 'assignee'}   dir={sortDir} onClick={() => setSort('assignee')} className="hidden md:table-cell" />
                   <SortHeader label="QA"          active={sortKey === 'qaAssignee'} dir={sortDir} onClick={() => setSort('qaAssignee')} className="hidden md:table-cell" />
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">Branch</th>
@@ -469,12 +472,12 @@ export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-3 py-8 text-center text-sm text-muted-foreground italic">
+                    <td colSpan={11} className="px-3 py-8 text-center text-sm text-muted-foreground italic">
                       No tickets match the current filter
                     </td>
                   </tr>
                 ) : (
-                  filtered.map(t => <TicketRow key={t.key} ticket={t} prs={prsByJiraKey[t.key] || []} version={version} onClickPr={(prs) => setPrPanel({ jiraKey: t.key, summary: t.summary, prs })} />)
+                  filtered.map(t => <TicketRow key={t.key} ticket={t} prs={prsByJiraKey[t.key] || []} build={buildByJiraKey[t.key] || null} version={version} onClickPr={(prs) => setPrPanel({ jiraKey: t.key, summary: t.summary, prs })} />)
                 )}
               </tbody>
             </table>
@@ -610,7 +613,7 @@ function SortHeader({
   )
 }
 
-function TicketRow({ ticket: t, prs, version, onClickPr }: { ticket: VerifiedTicket; prs: PrInfo[]; version: string; onClickPr: (prs: PrInfo[]) => void }) {
+function TicketRow({ ticket: t, prs, build, version, onClickPr }: { ticket: VerifiedTicket; prs: PrInfo[]; build: { buildNumber: number; status: string; startTime: string; branch: string } | null; version: string; onClickPr: (prs: PrInfo[]) => void }) {
   const info = HEALTH_INFO[t.health]
   // A ticket is a "missing plan" for this release if it appears in Target FixVersion
   // but NOT in the canonical fixVersions — meaning the plan says it should ship here,
@@ -715,6 +718,25 @@ function TicketRow({ ticket: t, prs, version, onClickPr }: { ticket: VerifiedTic
           </>
         )
       })()}
+
+      {/* Build status */}
+      <td className="px-1 py-2 align-top text-center hidden md:table-cell">
+        {build ? (
+          <span
+            className={cn('text-sm cursor-default',
+              build.status === 'SUCCEEDED' ? 'text-green-400' :
+              build.status === 'FAILED' ? 'text-red-400' :
+              build.status === 'IN_PROGRESS' ? 'text-blue-400 animate-pulse' :
+              'text-muted-foreground'
+            )}
+            title={`Build #${build.buildNumber} ${build.status}${build.startTime ? ` · ${new Date(build.startTime).toLocaleString()}` : ''}${build.branch ? ` · ${build.branch}` : ''}`}
+          >
+            {build.status === 'SUCCEEDED' ? '✓' : build.status === 'FAILED' ? '✗' : build.status === 'IN_PROGRESS' ? '...' : '?'}
+          </span>
+        ) : (
+          <span className="text-muted-foreground/20 text-sm">—</span>
+        )}
+      </td>
 
       {/* Dev Assignee */}
       <td className="px-3 py-2 align-top hidden md:table-cell">

@@ -98,11 +98,13 @@ module.exports = function createRoutes(services, config) {
     let result = annotated.map(release => {
       let tickets = release.tickets || [];
 
-      // Enrich tickets with PR data from PR sync
+      // Enrich tickets with PR data + build status
       const prsByJiraKey = release.prsByJiraKey || {};
+      const buildByJiraKey = release.buildByJiraKey || {};
       tickets = tickets.map(t => ({
         ...t,
         prs: prsByJiraKey[t.key] || [],
+        build: buildByJiraKey[t.key] || null,
       }));
 
       // Filter tickets by person + view role
