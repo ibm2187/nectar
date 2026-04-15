@@ -90,7 +90,7 @@ export function HomePage() {
   const [people, setPeople] = useState<Person[]>([])
   const [loading, setLoading] = useState(true)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-  const [prPanel, setPrPanel] = useState<{ jiraKey: string; summary: string; prs: PrInfo[]; repo: string } | null>(null)
+  const [prPanel, setPrPanel] = useState<{ jiraKey: string; summary: string; prs: PrInfo[]; repo: string; version: string } | null>(null)
   const [statusGroup, setStatusGroup] = useState<StatusGroup>('all')
   const [repoFilter, setRepoFilter] = useState('')
   const [ticketSearch, setTicketSearch] = useState('')
@@ -344,7 +344,7 @@ export function HomePage() {
                   navigate={navigate}
                   collapsed={collapsed}
                   onToggle={toggleCollapse}
-                  onClickPr={(jiraKey, summary, prs, repo) => setPrPanel({ jiraKey, summary, prs, repo })}
+                  onClickPr={(jiraKey, summary, prs, repo, version) => setPrPanel({ jiraKey, summary, prs, repo, version })}
                 />
               )}
               {upcoming.length > 0 && (
@@ -356,7 +356,7 @@ export function HomePage() {
                   navigate={navigate}
                   collapsed={collapsed}
                   onToggle={toggleCollapse}
-                  onClickPr={(jiraKey, summary, prs, repo) => setPrPanel({ jiraKey, summary, prs, repo })}
+                  onClickPr={(jiraKey, summary, prs, repo, version) => setPrPanel({ jiraKey, summary, prs, repo, version })}
                 />
               )}
               {unscheduled.length > 0 && (
@@ -369,7 +369,7 @@ export function HomePage() {
                   navigate={navigate}
                   collapsed={collapsed}
                   onToggle={toggleCollapse}
-                  onClickPr={(jiraKey, summary, prs, repo) => setPrPanel({ jiraKey, summary, prs, repo })}
+                  onClickPr={(jiraKey, summary, prs, repo, version) => setPrPanel({ jiraKey, summary, prs, repo, version })}
                 />
               )}
             </>
@@ -384,6 +384,7 @@ export function HomePage() {
         summary={prPanel?.summary || ''}
         prs={prPanel?.prs || []}
         githubSearchUrl={prPanel ? `https://github.com/mavencare/${prPanel.repo || 'webplatform'}/pulls?q=${prPanel.jiraKey}` : undefined}
+        releaseVersion={prPanel?.version || null}
       />
     </div>
   )
@@ -402,7 +403,7 @@ function ReleaseGroup({
   navigate: (path: string, opts?: any) => void
   collapsed: Set<string>
   onToggle: (id: string) => void
-  onClickPr: (jiraKey: string, summary: string, prs: PrInfo[], repo: string) => void
+  onClickPr: (jiraKey: string, summary: string, prs: PrInfo[], repo: string, version: string) => void
 }) {
   return (
     <div>
@@ -438,7 +439,7 @@ function ReleasePanel({
   navigate: (path: string, opts?: any) => void
   isCollapsed: boolean
   onToggle: () => void
-  onClickPr: (jiraKey: string, summary: string, prs: PrInfo[], repo: string) => void
+  onClickPr: (jiraKey: string, summary: string, prs: PrInfo[], repo: string, version: string) => void
 }) {
   const releaseKey = r.repo ? `${r.repo}:${r.version}` : r.version
   const dateInfo = r.jiraReleaseDate ? relativeDate(r.jiraReleaseDate) : null
@@ -503,20 +504,20 @@ function ReleasePanel({
           <table className="w-full text-sm table-fixed">
             <colgroup>
               <col style={{ width: '100px' }} />
-              <col style={{ width: '30px' }} />
-              <col style={{ width: '30px' }} />
               <col />
               <col style={{ width: '155px' }} />
+              <col style={{ width: '30px' }} />
+              <col style={{ width: '30px' }} />
               <col style={{ width: '120px' }} />
               <col style={{ width: '120px' }} />
             </colgroup>
             <thead>
               <tr className="border-b border-border/20 text-left">
                 <th className="pl-4 pr-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Key</th>
-                <th className="px-0.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Cherry-Pick PRs">CPs</th>
-                <th className="px-0.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Original PRs">PRs</th>
                 <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Summary</th>
                 <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">Status</th>
+                <th className="px-0.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Cherry-Pick PRs">CPs</th>
+                <th className="px-0.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Original PRs">PRs</th>
                 <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">Dev</th>
                 <th className="px-2 pr-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">QA</th>
               </tr>
@@ -530,10 +531,6 @@ function ReleasePanel({
                     <td className="pl-4 pr-2 py-1.5 align-middle whitespace-nowrap">
                       <JiraLink jiraKey={ticket.key} className="text-xs" />
                     </td>
-                    <PrCountCells
-                      prs={ticket.prs || []}
-                      onClick={() => onClickPr(ticket.key, ticket.summary, ticket.prs || [], r.repo || 'webplatform')}
-                    />
                     <td className="px-2 py-1.5 align-middle">
                       <div className="text-foreground truncate" title={ticket.summary}>{ticket.summary}</div>
                     </td>
@@ -547,6 +544,10 @@ function ReleasePanel({
                         </span>
                       )}
                     </td>
+                    <PrCountCells
+                      prs={ticket.prs || []}
+                      onClick={() => onClickPr(ticket.key, ticket.summary, ticket.prs || [], r.repo || 'webplatform', r.version)}
+                    />
                     <td className="px-2 py-1.5 align-middle text-right whitespace-nowrap">
                       <span className={cn('text-xs truncate max-w-[110px] inline-block', dev.className)}>{dev.text}</span>
                     </td>
@@ -581,33 +582,46 @@ function ReleasePanel({
 // ── PR count cells (two columns: CPs and PRs) ───────────
 
 function PrCountCells({ prs, onClick }: { prs: PrInfo[]; onClick: () => void }) {
-  const cpCount = prs.filter(p => {
+  const cherryPicks = prs.filter(p => {
     const b = p.baseBranch || ''
     return b.startsWith('releases/') || b.startsWith('VIV/') || b.startsWith('release/')
-  }).length
-  const prCount = prs.filter(p => {
+  })
+  const originals = prs.filter(p => {
     const b = p.baseBranch || ''
     return b === 'master' || b === 'main' || b === 'develop'
-  }).length
+  })
+
+  // CP status: any merged? any open? or none?
+  const cpMerged = cherryPicks.some(p => p.status === 'merged')
+  const cpOpen = cherryPicks.some(p => p.status === 'open')
 
   return (
     <>
       <td className="px-0.5 py-1.5 align-middle text-center">
-        {cpCount > 0 ? (
+        {cpMerged ? (
           <button type="button" onClick={(e) => { e.stopPropagation(); onClick() }}
-            className="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold bg-green-500/20 text-green-400 cursor-pointer hover:bg-green-500/30 transition-colors"
-            title={`${cpCount} cherry-pick PR${cpCount !== 1 ? 's' : ''}`}
-          >{cpCount}</button>
+            className="cursor-pointer hover:opacity-80 transition-opacity"
+            title={`${cherryPicks.length} cherry-pick PR${cherryPicks.length !== 1 ? 's' : ''} — merged`}
+          >
+            <span className="text-green-400 text-sm">✓</span>
+          </button>
+        ) : cpOpen ? (
+          <button type="button" onClick={(e) => { e.stopPropagation(); onClick() }}
+            className="cursor-pointer hover:opacity-80 transition-opacity"
+            title={`${cherryPicks.length} cherry-pick PR${cherryPicks.length !== 1 ? 's' : ''} — open`}
+          >
+            <span className="text-yellow-400 text-sm">○</span>
+          </button>
         ) : (
-          <span className="text-[10px] text-muted-foreground/25">—</span>
+          <span className="text-muted-foreground/20 text-sm">—</span>
         )}
       </td>
       <td className="px-0.5 py-1.5 align-middle text-center">
-        {prCount > 0 ? (
+        {originals.length > 0 ? (
           <button type="button" onClick={(e) => { e.stopPropagation(); onClick() }}
             className="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold bg-blue-500/20 text-blue-400 cursor-pointer hover:bg-blue-500/30 transition-colors"
-            title={`${prCount} original PR${prCount !== 1 ? 's' : ''}`}
-          >{prCount}</button>
+            title={`${originals.length} original PR${originals.length !== 1 ? 's' : ''}`}
+          >{originals.length}</button>
         ) : (
           <span className="text-[10px] text-muted-foreground/25">—</span>
         )}

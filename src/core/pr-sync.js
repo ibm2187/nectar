@@ -42,7 +42,7 @@ class PrSync extends EventEmitter {
       return;
     }
 
-    const interval = (this.config.polling && this.config.polling.prSync) || 5 * 60 * 1000; // 5 min
+    const interval = (this.config.polling && this.config.polling.prSync) || 2 * 60 * 1000; // 2 min
     log.info(`PR sync started (polling every ${interval / 60000}m)`);
 
     // Initial sync after short delay

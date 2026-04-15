@@ -19,6 +19,7 @@ import { getStatusBadgeColor, displayAssignee } from '../../lib/status-colors'
 interface Props {
   repo: string
   version: string
+  prsByJiraKey?: Record<string, PrInfo[]>
 }
 
 // Health styling — color, emoji, label, sort priority (worst first)
@@ -57,7 +58,7 @@ type ViewMode = 'impact' | 'full'
 type FilterKey = 'all' | HealthCategory
 type CompareType = CompareTarget['type']
 
-export function TruthView({ repo, version }: Props) {
+export function TruthView({ repo, version, prsByJiraKey = {} }: Props) {
   // ── URL-driven state (everything here is shareable) ─────────
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -443,7 +444,8 @@ export function TruthView({ repo, version }: Props) {
                 <col className="w-28" />
                 <col />{/* title takes remaining */}
                 <col className="w-36" />
-                <col className="w-28" />
+                <col className="w-8" />
+                <col className="w-8" />
                 <col className="w-28" />
                 <col className="w-16" />
                 <col className="w-24" />
@@ -454,8 +456,9 @@ export function TruthView({ repo, version }: Props) {
                   <SortHeader label="Key"        active={sortKey === 'key'}        dir={sortDir} onClick={() => setSort('key')} />
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Title</th>
                   <SortHeader label="JIRA Status" active={sortKey === 'jiraStatus'} dir={sortDir} onClick={() => setSort('jiraStatus')} />
+                  <th className="px-1 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell" title="Cherry-Pick PRs">CPs</th>
+                  <th className="px-1 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell" title="Original PRs">PRs</th>
                   <SortHeader label="QA"          active={sortKey === 'qaAssignee'} dir={sortDir} onClick={() => setSort('qaAssignee')} className="hidden md:table-cell" />
-                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Cherry-Pick</th>
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">Branch</th>
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Deployed</th>
                   <SortHeader label="Health"     active={sortKey === 'health'}     dir={sortDir} onClick={() => setSort('health')} />
@@ -464,12 +467,12 @@ export function TruthView({ repo, version }: Props) {
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground italic">
+                    <td colSpan={9} className="px-3 py-8 text-center text-sm text-muted-foreground italic">
                       No tickets match the current filter
                     </td>
                   </tr>
                 ) : (
-                  filtered.map(t => <TicketRow key={t.key} ticket={t} onClickPr={(prs) => setPrPanel({ jiraKey: t.key, summary: t.summary, prs })} />)
+                  filtered.map(t => <TicketRow key={t.key} ticket={t} prs={prsByJiraKey[t.key] || []} version={version} onClickPr={(prs) => setPrPanel({ jiraKey: t.key, summary: t.summary, prs })} />)
                 )}
               </tbody>
             </table>
@@ -583,6 +586,7 @@ export function TruthView({ repo, version }: Props) {
         summary={prPanel?.summary || ''}
         prs={prPanel?.prs || []}
         githubSearchUrl={prPanel ? `https://github.com/mavencare/${repo}/pulls?q=${prPanel.jiraKey}` : undefined}
+        releaseVersion={version}
       />
     </div>
   )
@@ -604,7 +608,7 @@ function SortHeader({
   )
 }
 
-function TicketRow({ ticket: t, onClickPr }: { ticket: VerifiedTicket; onClickPr: (prs: PrInfo[]) => void }) {
+function TicketRow({ ticket: t, prs, version, onClickPr }: { ticket: VerifiedTicket; prs: PrInfo[]; version: string; onClickPr: (prs: PrInfo[]) => void }) {
   const info = HEALTH_INFO[t.health]
   // A ticket is a "missing plan" for this release if it appears in Target FixVersion
   // but NOT in the canonical fixVersions — meaning the plan says it should ship here,
@@ -681,27 +685,40 @@ function TicketRow({ ticket: t, onClickPr }: { ticket: VerifiedTicket; onClickPr
         {(() => { const qa = displayAssignee(t.qaAssignee); return <span className={cn('text-xs', qa.className)}>{qa.text}</span> })()}
       </td>
 
-      {/* Cherry-pick PR */}
-      <td className="px-3 py-2 align-top hidden md:table-cell">
-        {t.pr ? (
-          <button
-            type="button"
-            onClick={() => onClickPr([{
-              prNumber: t.pr!.prNumber,
-              prTitle: t.pr!.prTitle,
-              prAuthor: t.pr!.prAuthor,
-              prUrl: t.pr!.prUrl,
-              prCreatedAt: t.pr!.prCreatedAt,
-              status: 'open',
-            }])}
-            className="text-primary hover:underline text-xs cursor-pointer"
-          >
-            #{t.pr.prNumber} (open)
-          </button>
-        ) : (
-          <span className="text-xs text-muted-foreground">—</span>
-        )}
-      </td>
+      {/* CPs + PRs */}
+      {(() => {
+        const allPrs = prs.length > 0 ? prs : (t.pr ? [{
+          prNumber: t.pr.prNumber, prTitle: t.pr.prTitle, prAuthor: t.pr.prAuthor,
+          prUrl: t.pr.prUrl, prCreatedAt: t.pr.prCreatedAt, status: 'open' as const,
+          baseBranch: `releases/${version}`,
+        }] : [])
+        const cps = allPrs.filter((p: any) => { const b = p.baseBranch || ''; return b.startsWith('releases/') || b.startsWith('VIV/') || b.startsWith('release/') })
+        const originals = allPrs.filter((p: any) => { const b = p.baseBranch || ''; return b === 'master' || b === 'main' || b === 'develop' })
+        const cpMerged = cps.some((p: any) => p.status === 'merged')
+        const cpOpen = cps.some((p: any) => p.status === 'open')
+        return (
+          <>
+            <td className="px-1 py-2 align-top text-center hidden md:table-cell">
+              {cpMerged ? (
+                <button type="button" onClick={() => onClickPr(allPrs)} className="cursor-pointer hover:opacity-80"><span className="text-green-400 text-sm">✓</span></button>
+              ) : cpOpen ? (
+                <button type="button" onClick={() => onClickPr(allPrs)} className="cursor-pointer hover:opacity-80"><span className="text-yellow-400 text-sm">○</span></button>
+              ) : (
+                <span className="text-muted-foreground/20 text-sm">—</span>
+              )}
+            </td>
+            <td className="px-1 py-2 align-top text-center hidden md:table-cell">
+              {originals.length > 0 ? (
+                <button type="button" onClick={() => onClickPr(allPrs)}
+                  className="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold bg-blue-500/20 text-blue-400 cursor-pointer hover:bg-blue-500/30"
+                >{originals.length}</button>
+              ) : (
+                <span className="text-muted-foreground/20 text-sm">—</span>
+              )}
+            </td>
+          </>
+        )
+      })()}
 
       {/* On Branch */}
       <td className="px-3 py-2 align-top text-center hidden md:table-cell">

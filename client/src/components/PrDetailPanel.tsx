@@ -48,9 +48,11 @@ interface PrDetailPanelProps {
   summary: string
   prs: PrInfo[]
   githubSearchUrl?: string
+  /** Current release version — used to highlight the matching cherry-pick */
+  releaseVersion?: string | null
 }
 
-export function PrDetailPanel({ open, onClose, jiraKey, summary, prs, githubSearchUrl }: PrDetailPanelProps) {
+export function PrDetailPanel({ open, onClose, jiraKey, summary, prs, githubSearchUrl, releaseVersion }: PrDetailPanelProps) {
   useEffect(() => {
     if (!open) return
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -103,7 +105,7 @@ export function PrDetailPanel({ open, onClose, jiraKey, summary, prs, githubSear
           ) : (
             <>
               {cherryPicks.length > 0 && (
-                <PrSection title="Cherry-Picks" icon="🍒" prs={cherryPicks} accentColor="green" />
+                <PrSection title={`Cherry-Picks${releaseVersion ? ` for ${releaseVersion}` : ''}`} icon="🍒" prs={cherryPicks} accentColor="green" releaseVersion={releaseVersion} />
               )}
               {originals.length > 0 && (
                 <PrSection title="Original" icon="⑂" prs={originals} accentColor="blue" />
@@ -143,11 +145,12 @@ const STATUS_DOTS: Record<string, string> = {
   closed: 'bg-gray-500',
 }
 
-function PrSection({ title, icon, prs, accentColor }: {
+function PrSection({ title, icon, prs, accentColor, releaseVersion }: {
   title: string
   icon: string
   prs: PrInfo[]
   accentColor: 'green' | 'blue' | 'gray'
+  releaseVersion?: string | null
 }) {
   const headerColors = {
     green: 'text-green-400',
@@ -161,13 +164,22 @@ function PrSection({ title, icon, prs, accentColor }: {
         {icon} {title} ({prs.length})
       </h4>
       <div className="space-y-2">
-        {prs.map(pr => (
+        {prs.map(pr => {
+          // Highlight the cherry-pick that matches the current release
+          const isMatch = !!(releaseVersion && pr.baseBranch && (
+            pr.baseBranch.includes(releaseVersion) ||
+            pr.baseBranch.endsWith(releaseVersion)
+          ))
+          return (
           <a
             key={pr.prNumber}
             href={pr.prUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="block rounded-lg border border-border/50 p-3 hover:border-primary/30 hover:bg-accent/20 transition-colors"
+            className={cn(
+              "block rounded-lg border p-3 hover:border-primary/30 hover:bg-accent/20 transition-colors",
+              isMatch ? 'border-primary/40 bg-primary/5 ring-1 ring-primary/20' : 'border-border/50'
+            )}
           >
             <div className="flex items-center gap-2 mb-1">
               <span className={cn("w-2 h-2 rounded-full shrink-0", STATUS_DOTS[pr.status] || STATUS_DOTS.closed)} />
@@ -192,7 +204,8 @@ function PrSection({ title, icon, prs, accentColor }: {
               {pr.prCreatedAt && <span>{timeAgo(pr.prCreatedAt)}</span>}
             </div>
           </a>
-        ))}
+          )
+        })}
       </div>
     </div>
   )

@@ -535,7 +535,7 @@ export function ReleaseDetail() {
       {/* Truth view — JIRA + Git + PR reconciliation */}
       {release.repo && (
         <div className="mb-4">
-          <TruthView repo={release.repo} version={release.version} />
+          <TruthView repo={release.repo} version={release.version} prsByJiraKey={(release as any).prsByJiraKey || {}} />
         </div>
       )}
 

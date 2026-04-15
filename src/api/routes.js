@@ -146,6 +146,54 @@ module.exports = function createRoutes(services, config) {
     res.json(release);
   });
 
+  // Per-release refresh — git fetch + JIRA sync + PR sync for one version
+  router.post('/releases/:version/refresh', asyncHandler(async (req, res) => {
+    const version = req.params.version;
+    const release = releases.get(version);
+    if (!release) return res.status(404).json({ error: 'Release not found' });
+
+    const results = { git: false, jira: false, pr: false, durationMs: 0 };
+    const start = Date.now();
+
+    // 1. Git fetch for this repo
+    if (release.repo && repoManager) {
+      try {
+        await repoManager.fetch(release.repo);
+        results.git = true;
+      } catch (err) {
+        log.warn(`Refresh: git fetch failed for ${release.repo}: ${err.message}`);
+      }
+    }
+
+    // 2. JIRA sync for this specific version
+    if (jiraSync && jiraSync.jira.isConfigured()) {
+      try {
+        const jiraVersionName = release.jiraVersionName || version;
+        await jiraSync._syncVersionTickets(jiraVersionName);
+        results.jira = true;
+      } catch (err) {
+        log.warn(`Refresh: JIRA sync failed for ${version}: ${err.message}`);
+      }
+    }
+
+    // 3. PR sync — trigger a full run (fast if incremental)
+    if (services.prSync) {
+      try {
+        await services.prSync.run();
+        results.pr = true;
+      } catch (err) {
+        log.warn(`Refresh: PR sync failed: ${err.message}`);
+      }
+    }
+
+    results.durationMs = Date.now() - start;
+    log.info(`Refresh ${version}: git=${results.git} jira=${results.jira} pr=${results.pr} in ${results.durationMs}ms`);
+
+    // Return the updated release
+    const updated = releases.get(version);
+    res.json({ release: updated, refresh: results });
+  }));
+
   // Customer impact — Zoho tickets grouped by customer/department
   router.get('/releases/:version/customer-impact', (req, res) => {
     const release = releases.get(req.params.version);

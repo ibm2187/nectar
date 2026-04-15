@@ -32,22 +32,27 @@ class JiraSync extends EventEmitter {
       return;
     }
 
-    const interval = this.config.polling.jiraSync || 10 * 60 * 1000; // 10 min default
-    log.info(`JIRA sync started (polling every ${interval / 60000}m)`);
+    const fullInterval = this.config.polling.jiraSync || 10 * 60 * 1000; // 10 min default
+    const hotInterval = this.config.polling.jiraSyncHot || 2 * 60 * 1000; // 2 min for hot releases
+    log.info(`JIRA sync started (hot: every ${hotInterval / 60000}m, full: every ${fullInterval / 60000}m)`);
 
-    // Initial sync
+    // Initial full sync
     this.run().catch(err => log.error('JIRA sync error:', err.message));
 
+    // Hot sync — only overdue + next 2 weeks releases (fast, frequent)
+    this._hotTimer = setInterval(() => {
+      this.runHot().catch(err => log.error('JIRA hot sync error:', err.message));
+    }, hotInterval);
+
+    // Full sync — all candidate versions (slower, less frequent)
     this._timer = setInterval(() => {
       this.run().catch(err => log.error('JIRA sync error:', err.message));
-    }, interval);
+    }, fullInterval);
   }
 
   stop() {
-    if (this._timer) {
-      clearInterval(this._timer);
-      this._timer = null;
-    }
+    if (this._timer) { clearInterval(this._timer); this._timer = null; }
+    if (this._hotTimer) { clearInterval(this._hotTimer); this._hotTimer = null; }
   }
 
   /**
@@ -81,6 +86,58 @@ class JiraSync extends EventEmitter {
         this.releases._debounceSave();
       }
     }
+  }
+
+  /**
+   * Hot sync — only sync versions that are overdue or upcoming within 2 weeks.
+   * Runs frequently (every 2 min) for fast feedback on active releases.
+   */
+  async runHot() {
+    if (this._running) return this.lastResults;
+
+    this._running = true;
+    const startTime = Date.now();
+
+    const results = { versions: 0, tickets: 0 };
+
+    try {
+      const jiraProject = this.config.jira.project || 'DEV';
+      const allVersions = await this.jira.getVersionsSummary(jiraProject);
+
+      // Only sync versions that are overdue or within next 2 weeks
+      const today = new Date().toISOString().slice(0, 10);
+      const twoWeeksOut = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+      const hotVersions = allVersions.filter(v => {
+        if (v.archived || v.released) return false;
+        if (!v.releaseDate) return false; // unscheduled — handled by full sync
+        return v.releaseDate <= twoWeeksOut; // overdue or upcoming
+      });
+
+      for (const version of hotVersions) {
+        try {
+          const result = await this._syncVersionTickets(version.name);
+          if (result) {
+            results.tickets += result.tickets;
+          }
+          results.versions++;
+        } catch (err) {
+          log.error(`JIRA hot sync failed for ${version.name}:`, err.message);
+        }
+      }
+    } catch (err) {
+      log.error('JIRA hot sync error:', err.message);
+    }
+
+    const durationMs = Date.now() - startTime;
+    this._running = false;
+
+    if (results.versions > 0) {
+      log.info(`JIRA hot sync: ${results.versions} versions, ${results.tickets} tickets in ${durationMs}ms`);
+      this.emit('sync:completed', { ...this.lastResults, hot: true });
+    }
+
+    return results;
   }
 
   /**
