@@ -19,7 +19,7 @@ function createWebServer(services, config) {
   const token = process.env.WEB_TOKEN;
 
   const app = express();
-  app.set('trust proxy', true); // Trust X-Forwarded-For from ALB/proxy so rate limiting is per-user
+  app.set('trust proxy', 1); // Trust first proxy (ALB) for X-Forwarded-For
   app.use(express.json({ limit: '1mb' }));
 
   // ── Auth routes (before auth middleware) ──────────────
