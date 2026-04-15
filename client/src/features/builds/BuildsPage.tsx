@@ -317,10 +317,13 @@ function BuildCardComponent({ build, deployTargets, navigate }: {
                 <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">History</h4>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {build.builds.map(b => (
-                    <div
+                    <a
                       key={b.buildNumber}
+                      href={`https://us-east-1.console.aws.amazon.com/codesuite/codebuild/projects/${build.projectName}/build/${build.projectName}%3A${b.buildNumber}/log`}
+                      target="_blank"
+                      rel="noopener noreferrer"
                       className={cn(
-                        "flex flex-col items-center gap-0.5 px-1.5 py-1 rounded border cursor-default min-w-[40px]",
+                        "flex flex-col items-center gap-0.5 px-1.5 py-1 rounded border cursor-pointer hover:ring-1 hover:ring-primary/30 transition-all min-w-[40px]",
                         b.status === 'SUCCEEDED' ? 'bg-green-500/10 border-green-500/30' :
                         b.status === 'FAILED' ? 'bg-red-500/10 border-red-500/30' :
                         b.status === 'IN_PROGRESS' ? 'bg-blue-500/10 border-blue-500/30' :
@@ -340,7 +343,7 @@ function BuildCardComponent({ build, deployTargets, navigate }: {
                       <span className="text-[9px] text-muted-foreground">
                         {b.startTime ? timeAgo(b.startTime) : '—'}
                       </span>
-                    </div>
+                    </a>
                   ))}
                 </div>
               </div>
