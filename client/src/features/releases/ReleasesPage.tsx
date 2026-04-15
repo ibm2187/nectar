@@ -660,7 +660,7 @@ function CalendarReleaseCard({ release, onClick }: { release: Release; onClick: 
 
   // Ticket progress
   const tickets = release.tickets || []
-  const doneCount = tickets.filter(t => t.state === 'done' || t.state === 'closed').length
+  const doneCount = tickets.filter(t => t.state === 'done' || t.state === 'closed' || t.state === 'cherry-picked').length
   const totalCount = tickets.length
   const progressPct = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0
 
@@ -928,7 +928,7 @@ function AgendaReleaseRow({ release, now, onClick }: {
 
   // Ticket progress
   const tickets = release.tickets || []
-  const doneCount = tickets.filter(t => t.state === 'done' || t.state === 'closed').length
+  const doneCount = tickets.filter(t => t.state === 'done' || t.state === 'closed' || t.state === 'cherry-picked').length
   const totalCount = tickets.length
 
   // Risk badge

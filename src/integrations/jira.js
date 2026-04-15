@@ -420,6 +420,7 @@ class JiraClient {
     if (s.includes('cherry picked')) return 'cherry-picked';
     if (s.includes('ready for testing') || s.includes('ready for qa')) return 'ready-for-testing';
     if (s.includes('in progress') || s.includes('in development')) return 'in-progress';
+    if (s.includes('qa certified') || s.includes('no qa')) return 'done';
     if (s.includes('done') || s.includes('closed') || s.includes('resolved')) return 'done';
     if (s.includes('to do') || s.includes('open') || s.includes('backlog')) return 'pending';
     return 'pending';
