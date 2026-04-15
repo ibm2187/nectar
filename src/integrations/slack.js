@@ -186,9 +186,17 @@ class SlackNotifier {
   /**
    * Post a release status update to the release-specific channel.
    */
+  static _statusEmoji(jiraStatus) {
+    const s = jiraStatus || '';
+    if (['Blocked', 'Testing Failed'].includes(s)) return '🔴';
+    if (['Ready For Testing', 'Cherry Picked'].includes(s)) return '🔵';
+    if (['In Testing', 'Testing in Branch', 'Re-verify Bug'].includes(s)) return '🟣';
+    if (['QA Certified', 'Done', 'Closed', 'Resolved', 'Resolved Without Code'].includes(s)) return '🟢';
+    return '🟡'; // In Dev / default
+  }
+
   async notifyReleaseStatus(release, statusData) {
     const channel = SlackNotifier.releaseChannelName(release.version);
-    // Always retry release channels — don't let the bad channel cache block them
     if (this._badChannels) this._badChannels.delete(channel);
     const { tickets, groupCounts, blockedTickets, nectarUrl } = statusData;
 
@@ -214,7 +222,8 @@ class SlackNotifier {
       if (totalNotDone <= 10) {
         lines.push(`*Not Done (${totalNotDone}):*`);
         for (const t of tickets.filter(t => !statusData.doneStatuses.has(t.jiraStatus || ''))) {
-          lines.push(`  • <${statusData.jiraBaseUrl}/browse/${t.key}|${t.key}> — ${t.summary} (${t.jiraStatus || 'Unknown'})`);
+          const emoji = SlackNotifier._statusEmoji(t.jiraStatus);
+          lines.push(`  ${emoji} <${statusData.jiraBaseUrl}/browse/${t.key}|${t.key}> — ${t.summary} _(${t.jiraStatus || 'Unknown'})_`);
         }
       } else {
         lines.push(`*Not Done:* ${totalNotDone} tickets remaining`);
@@ -227,7 +236,7 @@ class SlackNotifier {
       lines.push(`⚠️ *Blocked (${blockedTickets.length}):*`);
       for (const t of blockedTickets) {
         const assignee = t.assignee || 'Unassigned';
-        lines.push(`  • <${statusData.jiraBaseUrl}/browse/${t.key}|${t.key}> — ${t.summary} (${assignee})`);
+        lines.push(`  🔴 <${statusData.jiraBaseUrl}/browse/${t.key}|${t.key}> — ${t.summary} _(${assignee})_`);
       }
     }
 
