@@ -91,7 +91,7 @@ export function HomePage() {
   const [loading, setLoading] = useState(true)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [prPanel, setPrPanel] = useState<{ jiraKey: string; summary: string; prs: PrInfo[]; repo: string; version: string } | null>(null)
-  const [statusGroup, setStatusGroup] = useState<StatusGroup>('all')
+  const [statusGroup, setStatusGroup] = useState<StatusGroup>('not-done')
   const [repoFilter, setRepoFilter] = useState('')
   const [ticketSearch, setTicketSearch] = useState('')
 
