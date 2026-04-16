@@ -165,4 +165,69 @@ describe('NECTAR_FIELDS', () => {
   it('includes assignee', () => {
     expect(JiraClient.NECTAR_FIELDS).toContain('assignee');
   });
+
+  it('includes priority, riskLevel, customerPriority fields', () => {
+    expect(JiraClient.NECTAR_FIELDS).toContain('priority');
+    expect(JiraClient.NECTAR_FIELDS).toContain('customfield_10650'); // Risk Level
+    expect(JiraClient.NECTAR_FIELDS).toContain('customfield_11023'); // Customer Priority
+  });
+
+  describe('priority + risk + customer priority', () => {
+    function makeWith(extras = {}) {
+      return {
+        key: 'DEV-100',
+        fields: {
+          summary: 'X', status: { name: 'Open' }, issuetype: { name: 'Bug' },
+          assignee: null, reporter: null, fixVersions: [], labels: [],
+          ...extras,
+        },
+      };
+    }
+
+    it('extracts built-in priority', () => {
+      const r = JiraClient.normalizeIssue(makeWith({ priority: { name: 'High' } }));
+      expect(r.priority).toBe('High');
+    });
+
+    it('handles missing priority', () => {
+      const r = JiraClient.normalizeIssue(makeWith({}));
+      expect(r.priority).toBeNull();
+    });
+
+    it('extracts riskLevel from customfield_10650', () => {
+      const r = JiraClient.normalizeIssue(makeWith({ customfield_10650: { value: '3 - High Risk' } }));
+      expect(r.riskLevel).toBe('3 - High Risk');
+    });
+
+    it('handles null riskLevel', () => {
+      const r = JiraClient.normalizeIssue(makeWith({ customfield_10650: null }));
+      expect(r.riskLevel).toBeNull();
+    });
+
+    it('handles riskLevel sentinel { value: null }', () => {
+      const r = JiraClient.normalizeIssue(makeWith({ customfield_10650: { value: null } }));
+      expect(r.riskLevel).toBeNull();
+    });
+
+    it('extracts customerPriority from customfield_11023', () => {
+      const r = JiraClient.normalizeIssue(makeWith({ customfield_11023: { value: 'URGENT' } }));
+      expect(r.customerPriority).toBe('URGENT');
+    });
+
+    it('handles null customerPriority', () => {
+      const r = JiraClient.normalizeIssue(makeWith({ customfield_11023: null }));
+      expect(r.customerPriority).toBeNull();
+    });
+
+    it('all three fields populated together', () => {
+      const r = JiraClient.normalizeIssue(makeWith({
+        priority: { name: 'Urgent' },
+        customfield_10650: { value: '2 - Medium Risk' },
+        customfield_11023: { value: 'High' },
+      }));
+      expect(r.priority).toBe('Urgent');
+      expect(r.riskLevel).toBe('2 - Medium Risk');
+      expect(r.customerPriority).toBe('High');
+    });
+  });
 });

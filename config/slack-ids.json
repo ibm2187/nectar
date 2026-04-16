@@ -1,0 +1,200 @@
+{
+  "users": {
+    "aaron": {
+      "name": "Aaron Lal",
+      "id": "U04PC87EU"
+    },
+    "adam": {
+      "name": "Adam Blackman",
+      "id": "U03T4AUJP"
+    },
+    "adam.tonet": {
+      "name": "Adam Tonet",
+      "id": "UP11EHEMP"
+    },
+    "amyho": {
+      "name": "Amy Ho",
+      "id": "U56T3C4KU"
+    },
+    "ana.zhu": {
+      "name": "Ana Zhu",
+      "id": "US7C09VAS"
+    },
+    "arati.jasani": {
+      "name": "Arati Jasani",
+      "id": "U8DRL0H3R"
+    },
+    "brie": {
+      "name": "Brie Xiang",
+      "id": "U5ZCZDETV"
+    },
+    "bryan": {
+      "name": "Bryan Higgins",
+      "id": "U0A1WT97T"
+    },
+    "bryan.nothling": {
+      "name": "Bryan Nothling",
+      "id": "UMZ3EC3EG"
+    },
+    "cynduja.balachandran": {
+      "name": "Cynduja Balachandran",
+      "id": "U02N3AANDB2"
+    },
+    "david.huff": {
+      "name": "David Huff",
+      "id": "U071XMU2GBV"
+    },
+    "david.schauer": {
+      "name": "David Schauer",
+      "id": "U06V10WKGUA"
+    },
+    "ericfang": {
+      "name": "eric fang",
+      "id": "U03T6V5C8"
+    },
+    "ericsloan": {
+      "name": "Eric Sloan",
+      "id": "U3YC42ABE"
+    },
+    "geeta.candula": {
+      "name": "Geeta Candula",
+      "id": "U02G09S2DPW"
+    },
+    "humaira.khan": {
+      "name": "Humaira Khan",
+      "id": "U03JYMN8VQF"
+    },
+    "ibrahim.alshaikhli": {
+      "name": "Ibrahim Alshaikhli",
+      "id": "U02E7G637U6"
+    },
+    "jack.gruber": {
+      "name": "Jack Gruber",
+      "id": "U09HTMGGRJ5"
+    },
+    "james.merson": {
+      "name": "James Merson",
+      "id": "U089127MVH7"
+    },
+    "jan.surritte": {
+      "name": "Jan Surritte",
+      "id": "U09NEF7SY78"
+    },
+    "jay.briggs": {
+      "name": "Jay Briggs",
+      "id": "U071UTTJZL5"
+    },
+    "jeffheifetz": {
+      "name": "Jeff Heifetz",
+      "id": "U5033V458"
+    },
+    "jenkins": {
+      "name": "jenkins",
+      "id": "U03GBMA131D"
+    },
+    "jessica.bennett": {
+      "name": "Jessica Webster",
+      "id": "UAK7XF1B6"
+    },
+    "kai.newsome": {
+      "name": "Kai Newsome",
+      "id": "U0785US2MU3"
+    },
+    "kajann.shivagnahnam": {
+      "name": "Kajann Shivagnahnam",
+      "id": "U05A7GN79MK"
+    },
+    "kamala.priyadarsini": {
+      "name": "Kamala Priyadarsini",
+      "id": "U09ACUHJGD6"
+    },
+    "kyle.kim": {
+      "name": "Kyle Kim",
+      "id": "U08TK432T8T"
+    },
+    "lili.zang": {
+      "name": "Lili Zang",
+      "id": "UF4503T4G"
+    },
+    "logan.powell": {
+      "name": "Logan Powell",
+      "id": "U0353AL5YKS"
+    },
+    "lucas.ragland": {
+      "name": "Lucas Ragland",
+      "id": "U08GADLM3PH"
+    },
+    "mark.bauer": {
+      "name": "Mark Bauer",
+      "id": "U071XR6GKCJ"
+    },
+    "max.collie": {
+      "name": "Max Collie",
+      "id": "U03L329S0GY"
+    },
+    "mehak.taneja": {
+      "name": "Mehak Taneja",
+      "id": "U038JMQDFSS"
+    },
+    "michelle.verbruggen": {
+      "name": "Michelle Verbruggen",
+      "id": "UC3KL38DP"
+    },
+    "nick.lojas": {
+      "name": "Nick Lojas",
+      "id": "U0AHTKBFGV9"
+    },
+    "nukul": {
+      "name": "Nukul Bhasin",
+      "id": "U03SE0F48"
+    },
+    "oleksii.tsulun": {
+      "name": "Olexii Tsulun",
+      "id": "U07V3HMMCG7"
+    },
+    "piyush.puri": {
+      "name": "Piyyush Puri",
+      "id": "U051CDL104U"
+    },
+    "prateek.ahluwalia": {
+      "name": "Prateek Ahluwalia",
+      "id": "U082H058H3K"
+    },
+    "reza.poursafa": {
+      "name": "Reza Poursafa",
+      "id": "U04HMBVGXUN"
+    },
+    "sai.chintapalli": {
+      "name": "Sai Chintapalli",
+      "id": "U07RJ1SJHDY"
+    },
+    "steve.zimmers": {
+      "name": "Steve Zimmers",
+      "id": "UA8CBDAQ6"
+    },
+    "steven.xu": {
+      "name": "Steven Xu",
+      "id": "U8PHTDNHG"
+    },
+    "tressa.winn": {
+      "name": "Tressa Winn",
+      "id": "U071H8RTHJB"
+    },
+    "usha.sanjay": {
+      "name": "Usha Sanjay",
+      "id": "UCWFDMWDS"
+    },
+    "victoria.maidment": {
+      "name": "Victoria Maidment",
+      "id": "UD9KVMX9P"
+    },
+    "will.surritte": {
+      "name": "Will Surritte",
+      "id": "U072AFCM9A5"
+    },
+    "willsnieder": {
+      "name": "William Snieder",
+      "id": "U5ZELC3HR"
+    }
+  }
+}

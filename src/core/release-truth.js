@@ -205,6 +205,9 @@ class ReleaseTruth {
               ticket.customerTags = fresh.customerTags;
               ticket.qaAssignee = fresh.qaAssignee;
               ticket.deployedEnvironments = fresh.deployedEnvironments;
+              ticket.priority = fresh.priority;
+              ticket.riskLevel = fresh.riskLevel;
+              ticket.customerPriority = fresh.customerPriority;
               ticket.zohoRef = fresh.zohoRef;
               ticket.jiraRefreshedAt = new Date().toISOString();
             }

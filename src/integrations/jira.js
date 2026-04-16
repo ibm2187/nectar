@@ -24,10 +24,15 @@ const DEPLOYED_ENVS_FIELD = 'customfield_10595';
 const QA_ASSIGNEE_FIELD = 'customfield_10466';
 const PRODUCT_ASSIGNEE_FIELD = 'customfield_10757';
 
+// Risk and priority signals — used by Nectar to sort/filter tickets.
+const RISK_LEVEL_FIELD = 'customfield_10650';        // "1 - Low Risk" / "2 - Medium Risk" / "3 - High Risk"
+const CUSTOMER_PRIORITY_FIELD = 'customfield_11023'; // URGENT / High / Medium / Low / Internal Only
+
 // Shared fields list — every Nectar JIRA query should request at minimum these
 // so normalizeIssue can populate all fields consistently.
 const NECTAR_FIELDS = [
   'summary', 'status', 'issuetype', 'assignee', 'reporter', 'fixVersions', 'labels',
+  'priority',           // Built-in priority (Urgent/High/Medium/Low/Lowest)
   'customfield_10594',  // Target FixVersion
   'customfield_10463',  // Component / area
   'customfield_11056',  // Customer tag
@@ -35,6 +40,8 @@ const NECTAR_FIELDS = [
   'customfield_10466',  // QA Assignee
   'customfield_10757',  // Product Assignee
   'customfield_10595',  // Deployed Environments
+  'customfield_10650',  // Risk Level
+  'customfield_11023',  // Customer Priority
   'customfield_10992',  // Submitter Name
   'customfield_10993',  // Submitter Email
 ];
@@ -269,6 +276,7 @@ class JiraClient {
       status: fields.status ? fields.status.name : 'Unknown',
       type: fields.issuetype ? fields.issuetype.name : 'Unknown',
       assignee: fields.assignee ? fields.assignee.displayName : null,
+      priority: fields.priority ? fields.priority.name : null,
       fixVersions: (fields.fixVersions || []).map(v => v.name),
       targetFixVersions: JiraClient.extractVersionNames(fields[TARGET_FIX_VERSION_FIELD]),
       labels: fields.labels || [],
@@ -278,6 +286,8 @@ class JiraClient {
       qaAssignee: fields[QA_ASSIGNEE_FIELD] ? fields[QA_ASSIGNEE_FIELD].displayName || null : null,
       productAssignee: fields[PRODUCT_ASSIGNEE_FIELD] ? fields[PRODUCT_ASSIGNEE_FIELD].displayName || null : null,
       deployedEnvironments: JiraClient.extractStringArray(fields[DEPLOYED_ENVS_FIELD]),
+      riskLevel: JiraClient.extractFieldString(fields[RISK_LEVEL_FIELD]),
+      customerPriority: JiraClient.extractFieldString(fields[CUSTOMER_PRIORITY_FIELD]),
       zohoRef: rawZoho ? JiraClient.parseZohoRef(rawZoho) : null,
       submitterName: fields[ZOHO_SUBMITTER_NAME_FIELD] || null,
       submitterEmail: fields[ZOHO_SUBMITTER_EMAIL_FIELD] || null,

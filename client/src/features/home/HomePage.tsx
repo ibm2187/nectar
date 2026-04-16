@@ -917,8 +917,26 @@ function getNextRelease(ticket: TicketRowData): TicketRowData['releases'][number
   return null
 }
 
+// Numeric ordering for JIRA priority/customer-priority enums.
+// Lower number = more urgent, so ascending sort puts urgent first.
+const PRIORITY_ORDER: Record<string, number> = {
+  'urgent': 0, 'highest': 1, 'high': 2, 'medium': 3, 'low': 4, 'lowest': 5,
+  'internal only': 6,
+}
+function priorityOrdinal(value: string | null | undefined): number | null {
+  if (!value) return null
+  return PRIORITY_ORDER[value.toLowerCase()] ?? 99
+}
+// Risk Level field comes through as "1 - Low Risk", "2 - Medium Risk", "3 - High Risk".
+// Higher number = riskier, so DESC puts high risk first.
+function riskOrdinal(value: string | null | undefined): number | null {
+  if (!value) return null
+  const m = value.match(/^(\d+)/)
+  return m ? parseInt(m[1], 10) : null
+}
+
 function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
-  type TicketSortKey = 'key' | 'summary' | 'status' | 'assignee' | 'qa' | 'deployed' | 'nextRelease' | 'nextDate' | 'releases'
+  type TicketSortKey = 'key' | 'summary' | 'status' | 'priority' | 'risk' | 'customerPriority' | 'assignee' | 'qa' | 'deployed' | 'nextRelease' | 'nextDate' | 'releases'
   // Default: earliest release date first
   const [sortState, onSort] = useSortState<TicketSortKey>('nextDate', 'asc')
 
@@ -961,15 +979,18 @@ function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
   }, [tickets, selectedReleases])
 
   const accessors = useMemo(() => ({
-    key:         (t: TicketRowData) => t.key,
-    summary:     (t: TicketRowData) => t.summary,
-    status:      (t: TicketRowData) => t.jiraStatus,
-    assignee:    (t: TicketRowData) => t.assignee,
-    qa:          (t: TicketRowData) => t.qaAssignee,
-    deployed:    (t: TicketRowData) => (t.deployedEnvironments || []).length,
-    nextRelease: (t: TicketRowData) => getNextRelease(t)?.version || null,
-    nextDate:    (t: TicketRowData) => getNextRelease(t)?.jiraReleaseDate || null,
-    releases:    (t: TicketRowData) => (t.releases || []).length,
+    key:              (t: TicketRowData) => t.key,
+    summary:          (t: TicketRowData) => t.summary,
+    status:           (t: TicketRowData) => t.jiraStatus,
+    priority:         (t: TicketRowData) => priorityOrdinal(t.priority),
+    risk:             (t: TicketRowData) => riskOrdinal(t.riskLevel),
+    customerPriority: (t: TicketRowData) => priorityOrdinal(t.customerPriority),
+    assignee:         (t: TicketRowData) => t.assignee,
+    qa:               (t: TicketRowData) => t.qaAssignee,
+    deployed:         (t: TicketRowData) => (t.deployedEnvironments || []).length,
+    nextRelease:      (t: TicketRowData) => getNextRelease(t)?.version || null,
+    nextDate:         (t: TicketRowData) => getNextRelease(t)?.jiraReleaseDate || null,
+    releases:         (t: TicketRowData) => (t.releases || []).length,
   }), [])
   const sorted = useSortableData<TicketRowData, TicketSortKey>(filteredByChips, sortState, accessors)
 
@@ -1022,6 +1043,9 @@ function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
                 <col className="w-28" />
                 <col />{/* summary */}
                 <col className="w-40" />
+                <col className="w-20" />{/* priority */}
+                <col className="w-24" />{/* risk */}
+                <col className="w-28" />{/* customer priority */}
                 <col className="w-32" />
                 <col className="w-28" />
                 <col className="w-28" />
@@ -1031,15 +1055,18 @@ function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
               </colgroup>
               <thead className="sticky top-0 bg-background z-10">
                 <tr className="border-b text-left">
-                  <SortableHeader label="Key"           sortKey="key"         state={sortState} onSort={k => onSort(k as TicketSortKey)} />
-                  <SortableHeader label="Summary"       sortKey="summary"     state={sortState} onSort={k => onSort(k as TicketSortKey)} />
-                  <SortableHeader label="Status"        sortKey="status"      state={sortState} onSort={k => onSort(k as TicketSortKey)} />
-                  <SortableHeader label="Assignee"      sortKey="assignee"    state={sortState} onSort={k => onSort(k as TicketSortKey)} />
-                  <SortableHeader label="QA"            sortKey="qa"          state={sortState} onSort={k => onSort(k as TicketSortKey)} className="hidden md:table-cell" />
-                  <SortableHeader label="Deployed"      sortKey="deployed"    state={sortState} onSort={k => onSort(k as TicketSortKey)} className="hidden md:table-cell" />
-                  <SortableHeader label="Next Release"  sortKey="nextRelease" state={sortState} onSort={k => onSort(k as TicketSortKey)} />
-                  <SortableHeader label="Date"          sortKey="nextDate"    state={sortState} onSort={k => onSort(k as TicketSortKey)} />
-                  <SortableHeader label="Releases"      sortKey="releases"    state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Key"          sortKey="key"              state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Summary"      sortKey="summary"          state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Status"       sortKey="status"           state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Priority"     sortKey="priority"         state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Risk"         sortKey="risk"             state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Cust Prio"    sortKey="customerPriority" state={sortState} onSort={k => onSort(k as TicketSortKey)} className="hidden md:table-cell" title="Primary Customer Priority" />
+                  <SortableHeader label="Assignee"     sortKey="assignee"         state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="QA"           sortKey="qa"               state={sortState} onSort={k => onSort(k as TicketSortKey)} className="hidden md:table-cell" />
+                  <SortableHeader label="Deployed"     sortKey="deployed"         state={sortState} onSort={k => onSort(k as TicketSortKey)} className="hidden md:table-cell" />
+                  <SortableHeader label="Next Release" sortKey="nextRelease"      state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Date"         sortKey="nextDate"         state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Releases"     sortKey="releases"         state={sortState} onSort={k => onSort(k as TicketSortKey)} />
                 </tr>
               </thead>
               <tbody>
@@ -1075,6 +1102,9 @@ function HomeTicketRow({ ticket: t, onReleaseClick }: {
       <td className="px-3 py-2 align-top">
         <span className="text-xs">{t.jiraStatus}</span>
       </td>
+      <td className="px-3 py-2 align-top"><PriorityBadge value={t.priority} /></td>
+      <td className="px-3 py-2 align-top"><RiskBadge value={t.riskLevel} /></td>
+      <td className="px-3 py-2 align-top hidden md:table-cell"><PriorityBadge value={t.customerPriority} /></td>
       <td className="px-3 py-2 align-top">
         <span className="text-xs">{t.assignee || <span className="text-muted-foreground italic">—</span>}</span>
       </td>
@@ -1125,6 +1155,47 @@ function NextReleaseVersionCell({ next, onClick }: {
     >
       {next.version}
     </button>
+  )
+}
+
+function PriorityBadge({ value }: { value: string | null | undefined }) {
+  if (!value) return <span className="text-xs text-muted-foreground italic">—</span>
+  const v = value.toLowerCase()
+  const style =
+    v === 'urgent' || v === 'highest'
+      ? 'bg-red-500/15 text-red-400 border-red-500/40'
+      : v === 'high'
+        ? 'bg-orange-500/15 text-orange-400 border-orange-500/40'
+        : v === 'medium'
+          ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/40'
+          : v === 'low' || v === 'lowest'
+            ? 'bg-muted/30 text-muted-foreground border-muted'
+            : 'bg-blue-500/10 text-blue-400 border-blue-500/30' // "Internal Only" etc.
+  return (
+    <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border whitespace-nowrap', style)} title={value}>
+      {value}
+    </span>
+  )
+}
+
+function RiskBadge({ value }: { value: string | null | undefined }) {
+  if (!value) return <span className="text-xs text-muted-foreground italic">—</span>
+  // "1 - Low Risk" / "2 - Medium Risk" / "3 - High Risk"
+  const m = value.match(/^(\d+)/)
+  const level = m ? parseInt(m[1], 10) : null
+  const label = value.replace(/^\d+\s*-\s*/, '') // strip leading "1 - "
+  const style =
+    level === 3
+      ? 'bg-red-500/15 text-red-400 border-red-500/40'
+      : level === 2
+        ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/40'
+        : level === 1
+          ? 'bg-green-500/10 text-green-400 border-green-500/30'
+          : 'bg-muted/30 text-muted-foreground border-muted'
+  return (
+    <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border whitespace-nowrap', style)} title={value}>
+      {label}
+    </span>
   )
 }
 

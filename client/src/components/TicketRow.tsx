@@ -33,6 +33,12 @@ export interface TicketRowData {
   fixVersions: string[]
   targetFixVersions: string[]
   releases: ReleaseMembership[]
+  /** Built-in JIRA priority (Urgent/Highest/High/Medium/Low/Lowest) */
+  priority?: string | null
+  /** "Risk Level" custom field — e.g. "1 - Low Risk", "2 - Medium Risk", "3 - High Risk" */
+  riskLevel?: string | null
+  /** "Primary Customer Priority" custom field — URGENT/High/Medium/Low/Internal Only */
+  customerPriority?: string | null
 }
 
 // ── TicketRow ─────────────────────────────────────────

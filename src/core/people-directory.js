@@ -1,9 +1,11 @@
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const log = require('./log');
 
-const DEFAULT_PATH = path.join(os.homedir(), 'dev/agents/slack/slack-ids.json');
+// Primary: bundled with the repo so production has it.
+// Override with SLACK_IDS_PATH env var for alternative locations.
+const BUNDLED_PATH = path.join(__dirname, '..', '..', 'config', 'slack-ids.json');
+const DEFAULT_PATH = BUNDLED_PATH;
 
 /**
  * PeopleDirectory — resolves JIRA display names to Slack user IDs.
@@ -23,7 +25,7 @@ class PeopleDirectory {
   }
 
   /**
-   * Load (or reload) the slack-ids.json file.
+   * Load (or reload) the directory from the bundled slack-ids.json file.
    * @returns {number} count of users loaded
    */
   load() {
@@ -53,11 +55,9 @@ class PeopleDirectory {
 
         this._all.push(record);
 
-        // Index by normalized full name
         const norm = this._normalize(entry.name);
         this._byNameNorm.set(norm, record);
 
-        // Index by first + last initial (handles minor spelling differences)
         const tokens = norm.split(/\s+/).filter(Boolean);
         if (tokens.length >= 2) {
           const key = tokens[0] + '|' + tokens[tokens.length - 1][0];
@@ -65,7 +65,7 @@ class PeopleDirectory {
         }
       }
 
-      this._loaded = true;
+      this._loaded = this._all.length > 0;
       log.info(`People directory: loaded ${this._all.length} users from ${filePath}`);
       return this._all.length;
     } catch (err) {
