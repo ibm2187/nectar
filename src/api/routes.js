@@ -2229,6 +2229,13 @@ module.exports = function createRoutes(services, config) {
         { key: 'AWS_CROSS_ACCOUNT_ROLES', label: 'Cross-Account Roles (Customer:ARN,...)', secret: false },
       ],
     },
+    bamboohr: {
+      label: 'BambooHR (Who\'s Out + Holidays)',
+      vars: [
+        { key: 'BAMBOOHR_WHOSOUT_URL', label: 'Who\'s Out Feed URL', secret: true },
+        { key: 'BAMBOOHR_HOLIDAYS_URL', label: 'Holidays Feed URL', secret: true },
+      ],
+    },
   };
 
   /** Read .env file into a Map of key → value */
@@ -2478,6 +2485,33 @@ module.exports = function createRoutes(services, config) {
           const resp = await cb.send(new ListProjectsCommand({}));
           const count = (resp.projects || []).length;
           result = { ok: true, detail: `Connected to AWS ${region} — ${count} CodeBuild projects found` };
+          break;
+        }
+        case 'bamboohr': {
+          const feeds = [
+            { name: 'Who\'s Out', url: process.env.BAMBOOHR_WHOSOUT_URL },
+            { name: 'Holidays', url: process.env.BAMBOOHR_HOLIDAYS_URL },
+          ].filter(f => f.url);
+
+          if (feeds.length === 0) throw new Error('No BambooHR feed URLs configured');
+
+          const checkFeed = async ({ name, url }) => {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 10000);
+            try {
+              const resp = await fetch(url, { signal: controller.signal });
+              if (!resp.ok) throw new Error(`${name}: HTTP ${resp.status}`);
+              const text = await resp.text();
+              if (!text.includes('BEGIN:VCALENDAR')) throw new Error(`${name}: not an iCal feed`);
+              const eventCount = (text.match(/BEGIN:VEVENT/g) || []).length;
+              return `${name}: ${eventCount} event${eventCount !== 1 ? 's' : ''}`;
+            } finally {
+              clearTimeout(timeout);
+            }
+          };
+
+          const details = await Promise.all(feeds.map(checkFeed));
+          result = { ok: true, detail: details.join(' · ') };
           break;
         }
         default:
