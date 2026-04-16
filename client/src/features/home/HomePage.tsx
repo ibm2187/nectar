@@ -11,7 +11,7 @@ import { JiraLink } from '../../components/JiraLink'
 import { ZohoImpactBadge } from '../releases/CustomerImpact'
 import { PipelineBadge } from '../releases/PipelineView'
 import { PrDetailPanel, type PrInfo } from '../../components/PrDetailPanel'
-import { TicketRow, type TicketRowData } from '../../components/TicketRow'
+import { ReleaseBadge, TicketDeployedCell as SharedDeployedCell, type TicketRowData } from '../../components/TicketRow'
 import { SortableHeader, useSortableData, useSortState } from '../../components/SortableHeader'
 
 // ── Types ────────────────────────────────────────────────
@@ -906,50 +906,241 @@ function CustomerGroupedView({ releases }: { releases: HomeRelease[] }) {
 
 // ── Tickets Table (group-by-tickets mode) ──────────────
 
+/**
+ * Extract the "next release" — the earliest non-shipped release for a ticket.
+ * Releases come pre-sorted from /api/tickets/home (overdue first, then upcoming, shipped last).
+ */
+function getNextRelease(ticket: TicketRowData): TicketRowData['releases'][number] | null {
+  for (const r of (ticket.releases || [])) {
+    if (!r.isShipped) return r
+  }
+  return null
+}
+
 function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
-  type TicketSortKey = 'key' | 'summary' | 'status' | 'assignee' | 'qa' | 'deployed' | 'releases'
-  const [sortState, onSort] = useSortState<TicketSortKey>(null)
+  type TicketSortKey = 'key' | 'summary' | 'status' | 'assignee' | 'qa' | 'deployed' | 'nextRelease' | 'nextDate' | 'releases'
+  // Default: earliest release date first
+  const [sortState, onSort] = useSortState<TicketSortKey>('nextDate', 'asc')
+
+  // Release filter chips — multi-select with OR semantics
+  const [selectedReleases, setSelectedReleases] = useState<Set<string>>(new Set())
+  const toggleRelease = (version: string) => {
+    setSelectedReleases(prev => {
+      const next = new Set(prev)
+      if (next.has(version)) next.delete(version)
+      else next.add(version)
+      return next
+    })
+  }
+
+  // All non-shipped releases that appear across tickets — for the chip bar
+  const releaseChips = useMemo(() => {
+    const seen = new Map<string, { version: string; jiraReleaseDate: string | null; isOverdue: boolean }>()
+    for (const t of tickets) {
+      for (const r of (t.releases || [])) {
+        if (r.isShipped) continue
+        if (!seen.has(r.version)) {
+          seen.set(r.version, {
+            version: r.version,
+            jiraReleaseDate: r.jiraReleaseDate || null,
+            isOverdue: !!r.isOverdue,
+          })
+        }
+      }
+    }
+    return Array.from(seen.values()).sort((a, b) => {
+      const aDate = a.jiraReleaseDate || 'zzzz'
+      const bDate = b.jiraReleaseDate || 'zzzz'
+      return aDate.localeCompare(bDate)
+    })
+  }, [tickets])
+
+  const filteredByChips = useMemo(() => {
+    if (selectedReleases.size === 0) return tickets
+    return tickets.filter(t => (t.releases || []).some(r => selectedReleases.has(r.version)))
+  }, [tickets, selectedReleases])
+
   const accessors = useMemo(() => ({
-    key:       (t: TicketRowData) => t.key,
-    summary:   (t: TicketRowData) => t.summary,
-    status:    (t: TicketRowData) => t.jiraStatus,
-    assignee:  (t: TicketRowData) => t.assignee,
-    qa:        (t: TicketRowData) => t.qaAssignee,
-    deployed:  (t: TicketRowData) => (t.deployedEnvironments || []).length,
-    releases:  (t: TicketRowData) => (t.releases || []).length,
+    key:         (t: TicketRowData) => t.key,
+    summary:     (t: TicketRowData) => t.summary,
+    status:      (t: TicketRowData) => t.jiraStatus,
+    assignee:    (t: TicketRowData) => t.assignee,
+    qa:          (t: TicketRowData) => t.qaAssignee,
+    deployed:    (t: TicketRowData) => (t.deployedEnvironments || []).length,
+    nextRelease: (t: TicketRowData) => getNextRelease(t)?.version || null,
+    nextDate:    (t: TicketRowData) => getNextRelease(t)?.jiraReleaseDate || null,
+    releases:    (t: TicketRowData) => (t.releases || []).length,
   }), [])
-  const sorted = useSortableData<TicketRowData, TicketSortKey>(tickets, sortState, accessors)
+  const sorted = useSortableData<TicketRowData, TicketSortKey>(filteredByChips, sortState, accessors)
+
   return (
-    <Card>
-      <CardContent className="p-0">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <colgroup>
-              <col className="w-28" />
-              <col />{/* summary */}
-              <col className="w-40" />
-              <col className="w-32" />
-              <col className="w-28" />
-              <col className="w-28" />
-              <col />{/* releases */}
-            </colgroup>
-            <thead className="sticky top-0 bg-background z-10">
-              <tr className="border-b text-left">
-                <SortableHeader label="Key"       sortKey="key"      state={sortState} onSort={k => onSort(k as TicketSortKey)} />
-                <SortableHeader label="Summary"   sortKey="summary"  state={sortState} onSort={k => onSort(k as TicketSortKey)} />
-                <SortableHeader label="Status"    sortKey="status"   state={sortState} onSort={k => onSort(k as TicketSortKey)} />
-                <SortableHeader label="Assignee"  sortKey="assignee" state={sortState} onSort={k => onSort(k as TicketSortKey)} />
-                <SortableHeader label="QA"        sortKey="qa"       state={sortState} onSort={k => onSort(k as TicketSortKey)} className="hidden md:table-cell" />
-                <SortableHeader label="Deployed"  sortKey="deployed" state={sortState} onSort={k => onSort(k as TicketSortKey)} className="hidden md:table-cell" />
-                <SortableHeader label="Releases"  sortKey="releases" state={sortState} onSort={k => onSort(k as TicketSortKey)} />
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map(t => <TicketRow key={t.key} ticket={t} />)}
-            </tbody>
-          </table>
+    <div className="space-y-3">
+      {/* Release filter chips */}
+      {releaseChips.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+          {releaseChips.map(c => {
+            const isSelected = selectedReleases.has(c.version)
+            return (
+              <button
+                key={c.version}
+                type="button"
+                onClick={() => toggleRelease(c.version)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs transition-colors font-mono',
+                  isSelected
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : c.isOverdue
+                      ? 'bg-red-500/10 text-red-400 border-red-500/40 hover:bg-red-500/20'
+                      : 'bg-muted/30 border-muted hover:bg-accent/50'
+                )}
+                title={c.jiraReleaseDate ? `${c.version} — ${c.jiraReleaseDate}${c.isOverdue ? ' (OVERDUE)' : ''}` : c.version}
+              >
+                <span>{c.version}</span>
+                {c.jiraReleaseDate && (
+                  <span className="text-[10px] opacity-70">{c.jiraReleaseDate.slice(5)}</span>
+                )}
+              </button>
+            )
+          })}
+          {selectedReleases.size > 0 && (
+            <button
+              type="button"
+              onClick={() => setSelectedReleases(new Set())}
+              className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-accent/50"
+            >
+              Clear
+            </button>
+          )}
         </div>
-      </CardContent>
-    </Card>
+      )}
+
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <colgroup>
+                <col className="w-28" />
+                <col />{/* summary */}
+                <col className="w-40" />
+                <col className="w-32" />
+                <col className="w-28" />
+                <col className="w-28" />
+                <col className="w-24" />{/* next release version */}
+                <col className="w-24" />{/* next release date */}
+                <col />{/* releases */}
+              </colgroup>
+              <thead className="sticky top-0 bg-background z-10">
+                <tr className="border-b text-left">
+                  <SortableHeader label="Key"           sortKey="key"         state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Summary"       sortKey="summary"     state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Status"        sortKey="status"      state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Assignee"      sortKey="assignee"    state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="QA"            sortKey="qa"          state={sortState} onSort={k => onSort(k as TicketSortKey)} className="hidden md:table-cell" />
+                  <SortableHeader label="Deployed"      sortKey="deployed"    state={sortState} onSort={k => onSort(k as TicketSortKey)} className="hidden md:table-cell" />
+                  <SortableHeader label="Next Release"  sortKey="nextRelease" state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Date"          sortKey="nextDate"    state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Releases"      sortKey="releases"    state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map(t => (
+                  <HomeTicketRow key={t.key} ticket={t} onReleaseClick={toggleRelease} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   )
+}
+
+// HomeTicketRow — wraps TicketRow but injects a Next Release column.
+// Inlined here (not in shared TicketRow) because the column relies on
+// /api/tickets/home enrichment fields that the /tickets page doesn't carry.
+function HomeTicketRow({ ticket: t, onReleaseClick }: {
+  ticket: TicketRowData
+  onReleaseClick: (version: string) => void
+}) {
+  const next = getNextRelease(t)
+  return (
+    <tr className="border-b border-border/30 hover:bg-accent/30 transition-colors">
+      <td className="px-3 py-2 align-top">
+        <JiraLink jiraKey={t.key} />
+      </td>
+      <td className="px-3 py-2 align-top">
+        <div className="line-clamp-2" title={t.summary}>{t.summary}</div>
+        <div className="text-xs text-muted-foreground mt-0.5">{t.type || 'Task'}</div>
+      </td>
+      <td className="px-3 py-2 align-top">
+        <span className="text-xs">{t.jiraStatus}</span>
+      </td>
+      <td className="px-3 py-2 align-top">
+        <span className="text-xs">{t.assignee || <span className="text-muted-foreground italic">—</span>}</span>
+      </td>
+      <td className="px-3 py-2 align-top hidden md:table-cell">
+        <span className="text-xs text-muted-foreground">{t.qaAssignee || '—'}</span>
+      </td>
+      <td className="px-3 py-2 align-top hidden md:table-cell">
+        <NextReleaseCellDeployed envs={t.deployedEnvironments} jiraStatus={t.jiraStatus} />
+      </td>
+      <td className="px-3 py-2 align-top">
+        <NextReleaseVersionCell next={next} onClick={onReleaseClick} />
+      </td>
+      <td className="px-3 py-2 align-top">
+        <NextReleaseDateCell next={next} />
+      </td>
+      <td className="px-3 py-2 align-top">
+        <div className="flex flex-wrap gap-1">
+          {t.releases.map(r => (
+            <ReleaseBadge
+              key={`${r.repo}:${r.version}`}
+              release={r}
+              onClick={() => onReleaseClick(r.version)}
+            />
+          ))}
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+function NextReleaseVersionCell({ next, onClick }: {
+  next: TicketRowData['releases'][number] | null
+  onClick: (version: string) => void
+}) {
+  if (!next) return <span className="text-xs text-muted-foreground italic">—</span>
+  const isOverdue = next.isOverdue
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(next.version)}
+      className={cn(
+        'inline-flex items-center px-2 py-0.5 rounded text-xs font-mono border cursor-pointer transition-colors',
+        isOverdue
+          ? 'bg-red-500/10 text-red-400 border-red-500/40 hover:bg-red-500/20'
+          : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/40 hover:bg-yellow-500/20'
+      )}
+      title={`${next.version}${next.jiraReleaseDate ? ' — ' + next.jiraReleaseDate : ''}${isOverdue ? ' (OVERDUE)' : ''} · click to filter`}
+    >
+      {next.version}
+    </button>
+  )
+}
+
+function NextReleaseDateCell({ next }: { next: TicketRowData['releases'][number] | null }) {
+  if (!next || !next.jiraReleaseDate) {
+    return <span className="text-xs text-muted-foreground italic">—</span>
+  }
+  return (
+    <span className={cn('text-xs whitespace-nowrap', next.isOverdue && 'text-red-400 font-medium')}>
+      {next.jiraReleaseDate}
+    </span>
+  )
+}
+
+// Reuse the existing TicketDeployedCell rendering by importing the shared one
+// (renamed locally so we don't shadow the symbol).
+function NextReleaseCellDeployed(props: { envs: string[]; jiraStatus: string }) {
+  return <SharedDeployedCell {...props} />
 }
