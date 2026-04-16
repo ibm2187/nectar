@@ -465,10 +465,14 @@ class NotificationEngine {
    * @param {Array} buildProjects - from pipelineSync.buildProjects
    */
   async checkBuildTransitions(buildProjects) {
-    if (!this.settings.get('buildFailures')) return;
+    if (!this.settings.get('buildFailures')) {
+      log.info('Build alerts: disabled by notification settings');
+      return;
+    }
     if (!buildProjects || buildProjects.length === 0) return;
 
-    const alerts = []; // { type: 'failure'|'recovery', project, jiraKeys, version }
+    const isBaseline = this._previousBuildStatus.size === 0;
+    const alerts = [];
 
     for (const project of buildProjects) {
       const prevStatus = this._previousBuildStatus.get(project.projectName);
@@ -488,6 +492,10 @@ class NotificationEngine {
       }
     }
 
+    if (isBaseline) {
+      log.info(`Build alerts: cold start baseline set for ${this._previousBuildStatus.size} projects (no alerts on first observation)`);
+    }
+
     if (alerts.length === 0) return;
 
     log.info(`Build alerts: ${alerts.length} transition(s) detected`);
@@ -501,11 +509,17 @@ class NotificationEngine {
     const { type, project, version } = alert;
     const jiraKeys = project.jiraKeys || [];
 
-    if (jiraKeys.length === 0) return;
+    if (jiraKeys.length === 0) {
+      log.warn(`Build alert: ${type} for ${project.projectName} but no JIRA keys in build — skipping`);
+      return;
+    }
 
     // Find the release to look up ticket assignees
     const release = version ? this.releases.get(version) : null;
-    if (!release) return;
+    if (!release) {
+      log.warn(`Build alert: ${type} for ${project.projectName} (version=${version}) but release not found — skipping`);
+      return;
+    }
 
     // Collect unique people affected
     const people = new Set();
@@ -519,7 +533,10 @@ class NotificationEngine {
       ticketSummaries.push(`${key} — ${ticket.summary || 'Unknown'}`);
     }
 
-    if (people.size === 0) return;
+    if (people.size === 0) {
+      log.warn(`Build alert: ${type} for ${version} — found ${jiraKeys.length} JIRA keys but none matched release tickets or had assignees`);
+      return;
+    }
 
     const emoji = type === 'failure' ? ':x:' : ':white_check_mark:';
     const verb = type === 'failure' ? 'failed' : 'recovered';
@@ -537,15 +554,23 @@ class NotificationEngine {
 
     const message = lines.join('\n');
 
+    let dmsSent = 0;
     for (const person of people) {
       const resolved = this.people.resolveSlackId(person);
-      if (!resolved) continue;
-      if (!this._isUserEnabled(resolved.slackId, 'buildFailures')) continue;
+      if (!resolved) {
+        log.warn(`Build alert: could not resolve Slack ID for "${person}" — skipping DM`);
+        continue;
+      }
+      if (!this._isUserEnabled(resolved.slackId, 'buildFailures')) {
+        log.info(`Build alert: ${person} has buildFailures disabled — skipping DM`);
+        continue;
+      }
       await this.slack.dmUser(resolved.slackId, message);
+      dmsSent++;
       await new Promise(r => setTimeout(r, 500));
     }
 
-    log.info(`Build alert: ${type} for ${version}, notified ${people.size} people`);
+    log.info(`Build alert: ${type} for ${version} — ${people.size} affected, ${dmsSent} DMs sent`);
   }
 
   // ════════════════════════════════════════════════════════
