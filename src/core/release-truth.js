@@ -227,7 +227,7 @@ class ReleaseTruth {
           const pruned = before - release.tickets.length;
           if (pruned > 0) {
             log.info(`Truth ${repo}:${version}: pruned ${pruned} tickets no longer referencing this version`);
-            this.releases._debounceSave();
+            this.releases.persist(release);
           }
 
           log.info(`Truth ${repo}:${version}: refreshed ${freshByKey.size}/${keys.length} ticket statuses from JIRA`);

@@ -134,8 +134,7 @@ class Discovery extends EventEmitter {
         } catch { /* ok */ }
         existing.branch = branch;
         if (cutFrom) existing.cutFrom = cutFrom;
-        existing.updatedAt = new Date().toISOString();
-        this.releases._debounceSave();
+        this.releases.persist(existing);
       }
 
       // Only sync the most recent 20 releases (git log is expensive)

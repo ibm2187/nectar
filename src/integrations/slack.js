@@ -148,6 +148,13 @@ class SlackNotifier {
 
   notifyCherryPickConflict(release, cherryPick, author) {
     if (!author) return; // DM-only — no channel fallback
+    // Skip GitHub bot accounts (e.g. "dependabot[bot]", "viv-tech-dev[bot]")
+    if (/\[bot\]$/.test(author)) return;
+    // Skip non-Slack identifiers (GitHub usernames etc. don't start with U/W).
+    // A proper fix would resolve the GitHub login to a Slack ID via
+    // PeopleDirectory, but for now we avoid spamming bad channel_not_found
+    // errors by requiring a Slack-shaped ID.
+    if (!/^[UW][A-Z0-9]{6,}$/.test(author)) return;
     const text = `:warning: Cherry-pick conflict on *${release.version}*\nPR #${cherryPick.pr} (${cherryPick.ticket || 'no ticket'})\nPlease resolve manually.`;
     return this.dmUser(author, text);
   }

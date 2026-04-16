@@ -41,6 +41,7 @@ describe('NotificationEngine', () => {
       peopleDirectory: mockPeople,
       userStore: mockUserStore,
       notificationSettings: mockSettings,
+      availability: null,
       config: {},
     });
   });
@@ -317,6 +318,102 @@ describe('NotificationEngine', () => {
       await promise;
 
       expect(mockSlack.dmUser).not.toHaveBeenCalled();
+    });
+  });
+
+  // ────────────────────────────────────────────────────
+  // Daily digest + availability
+  // ────────────────────────────────────────────────────
+
+  describe('sendDailyDigests + availability', () => {
+    const future = () => new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+    it('skips DM for a person who is out today', async () => {
+      vi.useFakeTimers();
+      engine.availability = {
+        isHoliday: () => false,
+        isPersonOut: (name) => name === 'Alice',
+        getPersonOut: () => null,
+        nextBusinessDays: () => [future(), future()],
+      };
+      mockReleases.list.mockReturnValue([
+        {
+          version: '4.2.0', state: 'stabilizing', jiraReleaseDate: future(),
+          tickets: [{ key: 'DEV-1', summary: 'X', assignee: 'Alice', jiraStatus: 'In Progress' }],
+        },
+      ]);
+      mockPeople.resolveSlackId.mockReturnValue({ slackId: 'U_ALICE' });
+
+      const promise = engine.sendDailyDigests();
+      await vi.runAllTimersAsync();
+      await promise;
+      expect(mockSlack.dmUser).not.toHaveBeenCalled();
+    });
+
+    it('skips the entire digest on a company holiday', async () => {
+      vi.useFakeTimers();
+      engine.availability = {
+        isHoliday: () => true,
+        isPersonOut: () => false,
+        getPersonOut: () => null,
+        nextBusinessDays: () => [future()],
+      };
+      mockReleases.list.mockReturnValue([
+        {
+          version: '4.2.0', state: 'stabilizing', jiraReleaseDate: future(),
+          tickets: [{ key: 'DEV-1', assignee: 'Alice', jiraStatus: 'In Progress' }],
+        },
+      ]);
+      mockPeople.resolveSlackId.mockReturnValue({ slackId: 'U_ALICE' });
+
+      const promise = engine.sendDailyDigests();
+      await vi.runAllTimersAsync();
+      await promise;
+      expect(mockSlack.dmUser).not.toHaveBeenCalled();
+    });
+
+    it('annotates a dev digest when their QA is out (cross-role awareness)', async () => {
+      vi.useFakeTimers();
+      engine.availability = {
+        isHoliday: () => false,
+        isPersonOut: () => false,
+        getPersonOut: (name) => name === 'Carol'
+          ? { startDate: '2026-04-10', endDate: '2026-04-15', summary: 'Vac' }
+          : null,
+        nextBusinessDays: () => [future()],
+      };
+      mockReleases.list.mockReturnValue([
+        {
+          version: '4.2.0', state: 'stabilizing', jiraReleaseDate: future(),
+          tickets: [
+            // Alice is the dev; Carol is the QA, out. Ticket is in Blocked (dev-actionable).
+            { key: 'DEV-1', summary: 'X', assignee: 'Alice', qaAssignee: 'Carol', jiraStatus: 'Blocked' },
+          ],
+        },
+      ]);
+      mockPeople.resolveSlackId.mockImplementation(n => n === 'Alice' ? { slackId: 'U_ALICE' } : null);
+
+      const promise = engine.sendDailyDigests();
+      await vi.runAllTimersAsync();
+      await promise;
+      const [, message] = mockSlack.dmUser.mock.calls[0];
+      expect(message).toMatch(/QA Carol out until 2026-04-15/);
+    });
+
+    it('uses next-business-days window when availability is provided', async () => {
+      vi.useFakeTimers();
+      const bizDays = ['2099-06-01', '2099-06-02'];
+      engine.availability = {
+        isHoliday: () => false,
+        isPersonOut: () => false,
+        getPersonOut: () => null,
+        nextBusinessDays: vi.fn(() => bizDays),
+      };
+      mockReleases.list.mockReturnValue([]);
+      const promise = engine.sendDailyDigests();
+      await vi.runAllTimersAsync();
+      await promise;
+      expect(engine.availability.nextBusinessDays).toHaveBeenCalledWith(2, expect.any(String));
     });
   });
 

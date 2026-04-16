@@ -430,9 +430,9 @@ class PipelineSync extends EventEmitter {
         if (release) {
           release.buildByJiraKey = card.buildByJiraKey;
           release.buildSyncedAt = new Date().toISOString();
+          this.releases.persist?.(release);
         }
       }
-      this.releases._debounceSave?.();
     } catch (err) {
       log.warn(`Pipeline sync: failed to write buildByJiraKey: ${err.message}`);
     }

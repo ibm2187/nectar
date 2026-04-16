@@ -275,6 +275,7 @@ class PrSync extends EventEmitter {
 
       release.prsByJiraKey = prsByJiraKey;
       release.prSyncedAt = new Date().toISOString();
+      this.releases.persist(release);
       results.releasesUpdated++;
     }
 
@@ -284,11 +285,8 @@ class PrSync extends EventEmitter {
       if (!releaseMap.has(key) && release.prsByJiraKey && Object.keys(release.prsByJiraKey).length > 0) {
         release.prsByJiraKey = {};
         release.prSyncedAt = new Date().toISOString();
+        this.releases.persist(release);
       }
-    }
-
-    if (results.releasesUpdated > 0) {
-      this.releases._debounceSave();
     }
   }
 
