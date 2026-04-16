@@ -12,7 +12,7 @@ import { SortableHeader, useSortableData, useSortState } from '../../components/
 
 // ── Tab types ─────────────────────────────────────────
 
-type Tab = 'themes' | 'api-keys' | 'users' | 'connections' | 'notifications' | 'backfills' | 'update'
+type Tab = 'themes' | 'api-keys' | 'users' | 'connections' | 'notifications' | 'logs' | 'backfills' | 'update'
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'themes', label: 'Themes' },
@@ -20,6 +20,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'users', label: 'Users' },
   { key: 'connections', label: 'Connections' },
   { key: 'notifications', label: 'Notifications' },
+  { key: 'logs', label: 'Logs' },
   { key: 'backfills', label: 'Backfills' },
   { key: 'update', label: 'Update' },
 ]
@@ -70,6 +71,7 @@ export function ConfigPage() {
       {activeTab === 'users' && <UsersTab />}
       {activeTab === 'connections' && <IntegrationsConfigPage />}
       {activeTab === 'notifications' && <NotificationsTab />}
+      {activeTab === 'logs' && <LogsTab />}
       {activeTab === 'backfills' && <BackfillsTab />}
       {activeTab === 'update' && <UpdatePage />}
     </div>
@@ -1318,6 +1320,144 @@ function NotificationsTab() {
           </CardContent>
         </Card>
       )}
+    </div>
+  )
+}
+
+// ── Logs Tab ──────────────────────────────────────────
+
+interface LogEntry {
+  ts: string
+  level: 'INFO' | 'WARN' | 'ERROR'
+  message: string
+}
+
+function LogsTab() {
+  const [entries, setEntries] = useState<LogEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [levelFilter, setLevelFilter] = useState<string>('')
+  const [search, setSearch] = useState('')
+  const [autoRefresh, setAutoRefresh] = useState(true)
+
+  const load = async () => {
+    try {
+      const params = new URLSearchParams()
+      params.set('limit', '500')
+      if (levelFilter) params.set('level', levelFilter)
+      if (search) params.set('q', search)
+      const data = await apiFetch<{ entries: LogEntry[] }>(`/admin/logs?${params}`)
+      setEntries(data.entries || [])
+    } catch { /* ignore */ }
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [levelFilter, search])
+
+  // Auto-refresh every 5 seconds
+  useEffect(() => {
+    if (!autoRefresh) return
+    const timer = setInterval(load, 5000)
+    return () => clearInterval(timer)
+  }, [autoRefresh, levelFilter, search])
+
+  const levelCounts = useMemo(() => {
+    const c = { INFO: 0, WARN: 0, ERROR: 0 }
+    for (const e of entries) {
+      if (c[e.level] !== undefined) c[e.level]++
+    }
+    return c
+  }, [entries])
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
+          {(['', 'ERROR', 'WARN', 'ERROR,WARN', 'INFO'] as const).map(lvl => {
+            const label = lvl === '' ? 'All' : lvl === 'ERROR,WARN' ? 'Errors + Warnings' : lvl
+            const count = lvl === '' ? entries.length
+              : lvl === 'ERROR,WARN' ? levelCounts.ERROR + levelCounts.WARN
+              : levelCounts[lvl as keyof typeof levelCounts] || 0
+            return (
+              <button
+                key={lvl}
+                onClick={() => setLevelFilter(lvl)}
+                className={cn(
+                  'px-2.5 py-1 text-xs font-medium rounded-md transition-colors',
+                  levelFilter === lvl
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {label}
+                <span className="ml-1 opacity-60">{count}</span>
+              </button>
+            )
+          })}
+        </div>
+
+        <Input
+          placeholder="Search logs..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="h-7 text-xs max-w-xs"
+        />
+
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground ml-auto cursor-pointer">
+          <input
+            type="checkbox"
+            checked={autoRefresh}
+            onChange={e => setAutoRefresh(e.target.checked)}
+            className="rounded border-border"
+          />
+          Auto-refresh (5s)
+        </label>
+
+        <Button variant="outline" size="sm" onClick={load} className="text-xs h-7">
+          Refresh
+        </Button>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          <div className="max-h-[600px] overflow-y-auto font-mono text-[11px] leading-relaxed">
+            {loading && entries.length === 0 ? (
+              <div className="p-4 text-center text-muted-foreground text-xs">Loading logs...</div>
+            ) : entries.length === 0 ? (
+              <div className="p-4 text-center text-muted-foreground text-xs italic">No log entries match the current filter.</div>
+            ) : (
+              <table className="w-full">
+                <tbody>
+                  {entries.map((e, i) => (
+                    <tr
+                      key={`${e.ts}-${i}`}
+                      className={cn(
+                        'border-b border-border/10 hover:bg-accent/20',
+                        e.level === 'ERROR' && 'bg-red-500/5',
+                        e.level === 'WARN' && 'bg-yellow-500/5'
+                      )}
+                    >
+                      <td className="px-2 py-1 text-muted-foreground whitespace-nowrap align-top w-40 select-all">
+                        {e.ts.slice(11, 19)}
+                      </td>
+                      <td className={cn(
+                        'px-2 py-1 w-12 text-center align-top font-semibold',
+                        e.level === 'ERROR' ? 'text-red-400' :
+                        e.level === 'WARN' ? 'text-yellow-400' :
+                        'text-muted-foreground'
+                      )}>
+                        {e.level === 'ERROR' ? 'ERR' : e.level === 'WARN' ? 'WRN' : 'INF'}
+                      </td>
+                      <td className="px-2 py-1 text-foreground break-all">
+                        {e.message}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

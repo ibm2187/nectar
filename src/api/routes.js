@@ -2617,6 +2617,21 @@ module.exports = function createRoutes(services, config) {
     }
   }));
 
+  // ── Admin — Logs ────────────────────────────────────────
+
+  router.get('/admin/logs', requireAdmin, (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+    const level = req.query.level || null; // 'ERROR', 'WARN', 'INFO', or comma-separated
+    const levelFilter = level ? level.split(',').map(l => l.trim().toUpperCase()) : null;
+    const search = (req.query.q || '').toLowerCase().trim();
+
+    let entries = log.getRecentLogs(limit, levelFilter);
+    if (search) {
+      entries = entries.filter(e => e.message.toLowerCase().includes(search));
+    }
+    res.json({ entries, total: entries.length });
+  });
+
   // ── Admin — Version & Update ──────────────────────────
 
   router.get('/admin/version', requireAdmin, (req, res) => {
