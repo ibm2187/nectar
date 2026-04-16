@@ -8,6 +8,7 @@ import { Button } from '../../components/ui/button'
 import { NectarLoader } from '../../components/NectarLoader'
 import { cn } from '../../lib/utils'
 import { SavedViews } from '../../components/SavedViews'
+import { useAvailabilityStore } from '../../stores/availabilityStore'
 
 /**
  * Combined Releases page with two view modes:
@@ -528,7 +529,8 @@ function CalendarView({ releases, zoom, offsetParam, now, onOpenRelease }: {
                 zoom === 'day' ? "min-w-[70px] md:min-w-[90px]" : zoom === 'week' ? "min-w-[90px] md:min-w-[110px]" : "min-w-[110px] md:min-w-[140px]"
               )}
             >
-              {col.label}
+              <div>{col.label}</div>
+              {zoom === 'day' && <CalendarDayChips isoDate={col.start} />}
             </div>
           ))}
         </div>
@@ -981,5 +983,40 @@ function AgendaReleaseRow({ release, now, onClick }: {
         </div>
       </div>
     </button>
+  )
+}
+
+// ── Calendar day chips — OOO count + holidays ────────────
+
+function CalendarDayChips({ isoDate }: { isoDate: string }) {
+  const load = useAvailabilityStore(s => s.load)
+  const data = useAvailabilityStore(s => s.data)
+
+  useEffect(() => { if (!data.loaded) load() }, [data.loaded, load])
+
+  const holiday = data.upcomingHolidays.find(h => h.date === isoDate)
+  const outOnDate = (data.currentlyOut || []).filter(e => e.startDate <= isoDate && isoDate <= e.endDate)
+
+  if (!holiday && outOnDate.length === 0) return null
+
+  return (
+    <div className="mt-1 flex items-center justify-center gap-1 text-[10px] font-normal normal-case tracking-normal">
+      {holiday && (
+        <span
+          className="inline-flex items-center px-1 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/30"
+          title={`${holiday.name}${holiday.countries.length ? ' (' + holiday.countries.join(', ') + ')' : ''}`}
+        >
+          🎉
+        </span>
+      )}
+      {outOnDate.length > 0 && (
+        <span
+          className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded bg-yellow-500/10 text-yellow-400 border border-yellow-500/30"
+          title={outOnDate.map(e => `${e.name} → ${e.endDate}`).join('\n')}
+        >
+          🌴 {outOnDate.length}
+        </span>
+      )}
+    </div>
   )
 }

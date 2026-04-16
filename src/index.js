@@ -168,9 +168,12 @@ const peopleDirectory = new PeopleDirectory(config);
 const NotificationSettings = require('./core/notification-settings');
 const notificationSettings = new NotificationSettings();
 
+const Availability = require('./core/availability');
+const availability = new Availability();
+
 const NotificationEngine = require('./core/notification-engine');
 const notificationEngine = new NotificationEngine({
-  slack, releases, releaseNotifier, peopleDirectory, userStore, notificationSettings, config,
+  slack, releases, releaseNotifier, peopleDirectory, userStore, notificationSettings, availability, config,
 });
 
 // ── Wire Slack lifecycle notifications ──────────────────
@@ -224,7 +227,7 @@ const services = {
   prSync,
   aws, pipelineSync,
   releaseNotifier,
-  peopleDirectory, notificationSettings, notificationEngine,
+  peopleDirectory, notificationSettings, notificationEngine, availability,
 };
 const webServer = createWebServer(services, config);
 
@@ -270,6 +273,9 @@ const webServer = createWebServer(services, config);
   });
   notificationEngine.start();
 
+  // Start availability (BambooHR Who's Out + Holidays, refreshed hourly)
+  availability.start().catch(err => log.error(`Availability start failed: ${err.message}`));
+
   // Start pipeline sync (CodeBuild + CodePipeline status)
   pipelineSync.start();
 
@@ -314,6 +320,7 @@ function shutdown() {
   datadogPoller.stop();
   notificationEngine.stop();
   notificationSettings.flush();
+  availability.stop();
   slack.stop().catch(() => {});
   releases.flush();
   customerStore.flush();

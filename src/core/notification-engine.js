@@ -101,13 +101,14 @@ function qaBucketFor(status)  { return _qaStatusMap.get(status || '') || null; }
  *   5. Channel notification toggles (via notificationSettings)
  */
 class NotificationEngine {
-  constructor({ slack, releases, releaseNotifier, peopleDirectory, userStore, notificationSettings, config }) {
+  constructor({ slack, releases, releaseNotifier, peopleDirectory, userStore, notificationSettings, availability, config }) {
     this.slack = slack;
     this.releases = releases;
     this.releaseNotifier = releaseNotifier;
     this.people = peopleDirectory;
     this.userStore = userStore;
     this.settings = notificationSettings;
+    this.availability = availability || null;
     this.config = config;
 
     // Feature 2: build status cache (transient — no persistence needed)
@@ -168,17 +169,35 @@ class NotificationEngine {
   // ════════════════════════════════════════════════════════
 
   /**
+   * Compute the digest cutoff date — latest release date to include.
+   * "Next 2 business days" — skips weekends and holidays.
+   */
+  _digestCutoff(todayIso) {
+    if (this.availability) {
+      const biz = this.availability.nextBusinessDays(2, todayIso);
+      if (biz.length) return biz[biz.length - 1];
+    }
+    // Fallback: next 2 days (weekdays approximation)
+    const d = new Date(todayIso + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + 2);
+    return d.toISOString().slice(0, 10);
+  }
+
+  /**
    * Send daily DM to each developer/QA person with their undone tickets
    * across upcoming releases.
    */
   async sendDailyDigests() {
-    const now = new Date();
-    const dayOfWeek = now.getDay(); // 0=Sun, 6=Sat
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-    const windowDays = isWeekend ? 3 : 7;
+    const todayIso = new Date().toISOString().slice(0, 10);
 
-    const cutoff = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000)
-      .toISOString().slice(0, 10);
+    // Skip entirely on company holidays — treat like a weekend
+    if (this.availability && this.availability.isHoliday(todayIso)) {
+      log.info(`Daily digest: skipping — today (${todayIso}) is a holiday`);
+      return;
+    }
+
+    // Window = next 2 business days (skips weekends + holidays)
+    const cutoff = this._digestCutoff(todayIso);
 
     // Find releases with release date within window that aren't done
     const allReleases = this.releases.list();
@@ -226,6 +245,13 @@ class NotificationEngine {
       // Resolve Slack ID
       const resolved = this.people.resolveSlackId(person);
       if (!resolved) {
+        skipped++;
+        continue;
+      }
+
+      // Skip if the person is out of office today
+      if (this.availability && this.availability.isPersonOut(person)) {
+        log.info(`Daily digest: skipping ${person} — out of office`);
         skipped++;
         continue;
       }
@@ -325,7 +351,18 @@ class NotificationEngine {
 
       const visible = entry.tickets.slice(0, SHOW_LIMIT);
       for (const t of visible) {
-        lines.push(`  <${jiraBaseUrl}/browse/${t.key}|${t.key}> — ${t.summary} _(${t.jiraStatus || 'Unknown'})_`);
+        // Cross-role awareness: if I'm a dev, call out if the QA is out; vice versa.
+        let oooNote = '';
+        if (this.availability) {
+          if (role === 'dev' && t.qaAssignee) {
+            const qaOut = this.availability.getPersonOut(t.qaAssignee);
+            if (qaOut) oooNote = ` ⚠ QA ${t.qaAssignee} out until ${qaOut.endDate}`;
+          } else if (role === 'qa' && t.assignee) {
+            const devOut = this.availability.getPersonOut(t.assignee);
+            if (devOut) oooNote = ` ⚠ Dev ${t.assignee} out until ${devOut.endDate}`;
+          }
+        }
+        lines.push(`  <${jiraBaseUrl}/browse/${t.key}|${t.key}> — ${t.summary} _(${t.jiraStatus || 'Unknown'})_${oooNote}`);
       }
       if (entry.tickets.length > SHOW_LIMIT) {
         lines.push(`  _+${entry.tickets.length - SHOW_LIMIT} more — <${sectionLink}|see all>_`);

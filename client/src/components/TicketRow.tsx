@@ -1,4 +1,5 @@
 import { JiraLink } from './JiraLink'
+import { OutIcon } from './PersonBadge'
 import { cn } from '../lib/utils'
 import type { ZohoRef } from '../api/client'
 
@@ -63,9 +64,11 @@ export function TicketRow({ ticket: t, onReleaseClick }: {
         <span className="text-xs">
           {t.assignee || <span className="text-muted-foreground italic">—</span>}
         </span>
+        <OutIcon name={t.assignee} />
       </td>
       <td className="px-3 py-2 align-top hidden md:table-cell">
         <span className="text-xs text-muted-foreground">{t.qaAssignee || '—'}</span>
+        <OutIcon name={t.qaAssignee} />
       </td>
       <td className="px-3 py-2 align-top hidden md:table-cell">
         <TicketDeployedCell envs={t.deployedEnvironments} jiraStatus={t.jiraStatus} />

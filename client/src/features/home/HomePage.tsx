@@ -13,6 +13,9 @@ import { PipelineBadge } from '../releases/PipelineView'
 import { PrDetailPanel, type PrInfo } from '../../components/PrDetailPanel'
 import { ReleaseBadge, TicketDeployedCell as SharedDeployedCell, type TicketRowData } from '../../components/TicketRow'
 import { SortableHeader, useSortableData, useSortState } from '../../components/SortableHeader'
+import { CurrentlyOutBanner } from '../../components/CurrentlyOutBanner'
+import { OutIcon } from '../../components/PersonBadge'
+import { useAvailabilityStore } from '../../stores/availabilityStore'
 
 // ── Types ────────────────────────────────────────────────
 
@@ -27,6 +30,12 @@ interface HomeRelease extends Release {
   zohoTicketCount: number
   zohoTickets: Array<{ id: string; ticketNumber: string | null; subject: string; status: string; priority: string | null; departmentId: string | null; webUrl: string | null }>
   isOverdue: boolean
+  oooRisk?: Array<{
+    name: string
+    role: 'dev' | 'qa'
+    endDate: string
+    blockingTickets: string[]
+  }>
 }
 
 // ── View config ──────────────────────────────────────────
@@ -331,6 +340,12 @@ export function HomePage() {
 
   return (
     <div className="space-y-4">
+      {/* OOO awareness banner — dismissible, only renders when relevant */}
+      <CurrentlyOutBanner />
+
+      {/* OOO release-impact warning — only for releases due today/tomorrow */}
+      <OooReleaseRiskBanner releases={releases} />
+
       {/* Header */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
@@ -730,10 +745,12 @@ function ReleasePanel({
                           />
                           <BuildStatusCell build={ticket.build} />
                           <td className="px-2 py-1.5 align-middle text-right whitespace-nowrap">
-                            <span className={cn('text-xs truncate max-w-[110px] inline-block', dev.className)}>{dev.text}</span>
+                            <span className={cn('text-xs truncate max-w-[110px] inline-block align-middle', dev.className)}>{dev.text}</span>
+                            <OutIcon name={ticket.assignee} blockingRelease={ticket.assigneeOut?.blockingRelease} />
                           </td>
                           <td className="px-2 pr-4 py-1.5 align-middle text-right whitespace-nowrap">
-                            <span className={cn('text-xs truncate max-w-[110px] inline-block', qa.className)}>{qa.text}</span>
+                            <span className={cn('text-xs truncate max-w-[110px] inline-block align-middle', qa.className)}>{qa.text}</span>
+                            <OutIcon name={ticket.qaAssignee} blockingRelease={ticket.qaAssigneeOut?.blockingRelease} />
                           </td>
                         </tr>
                       )
@@ -1241,4 +1258,56 @@ function NextReleaseDateCell({ next }: { next: TicketRowData['releases'][number]
 // (renamed locally so we don't shadow the symbol).
 function NextReleaseCellDeployed(props: { envs: string[]; jiraStatus: string }) {
   return <SharedDeployedCell {...props} />
+}
+
+// ── OOO release-risk banner ──────────────────────────────
+// Renders a red banner when any release due today/tomorrow has an assignee
+// or QA who's out and blocking. Single conspicuous warning at the top of Home.
+
+function OooReleaseRiskBanner({ releases }: { releases: HomeRelease[] }) {
+  // Ensure availability data is loaded (CurrentlyOutBanner triggers it too —
+  // using the same store means this re-renders when that fetch completes).
+  useAvailabilityStore(s => s.data)
+
+  const atRisk = releases.filter(r => (r.oooRisk || []).length > 0)
+  if (atRisk.length === 0) return null
+
+  return (
+    <div className="rounded-md border border-red-500/40 bg-red-500/10 px-4 py-3">
+      <div className="flex items-start gap-3">
+        <span className="text-xl shrink-0" aria-hidden="true">🚨</span>
+        <div className="flex-1 min-w-0 space-y-1.5">
+          <p className="text-sm font-semibold text-red-400">
+            {atRisk.length === 1
+              ? `Release ${atRisk[0].version} is at risk — assignees are OOO`
+              : `${atRisk.length} imminent releases have OOO assignees`}
+          </p>
+          {atRisk.map(r => (
+            <div key={r.id} className="text-xs">
+              <span className="font-semibold text-foreground">{r.version}</span>
+              <span className="text-muted-foreground ml-1">
+                {r.jiraReleaseDate && `(${r.jiraReleaseDate})`} —
+              </span>
+              <ul className="ml-5 mt-1 space-y-0.5">
+                {(r.oooRisk || []).map(risk => (
+                  <li key={risk.name + risk.role} className="text-muted-foreground">
+                    <span className="font-medium text-foreground">{risk.name}</span>
+                    {' '}
+                    ({risk.role === 'dev' ? 'dev' : 'QA'})
+                    {' — back '}<span className="font-medium">{risk.endDate}</span>
+                    {risk.blockingTickets.length > 0 && (
+                      <span className="text-[11px] opacity-70 ml-1">
+                        · {risk.blockingTickets.slice(0, 5).join(', ')}
+                        {risk.blockingTickets.length > 5 && ` +${risk.blockingTickets.length - 5}`}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
 }

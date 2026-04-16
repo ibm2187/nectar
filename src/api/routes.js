@@ -13,6 +13,12 @@ const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
 };
 
+/** Statuses treated as "done" — excluded from OOO risk calculation. */
+const DONE_STATUSES_FOR_RISK = new Set([
+  'QA Certified', 'No QA - Certified', 'QA Done', 'Done', 'Closed',
+  'Resolved', 'Released', 'Resolved Without Code', 'Completed',
+]);
+
 /**
  * REST API routes — primary consumer is Hive.
  * @param {object} services - All initialized services
@@ -95,17 +101,50 @@ module.exports = function createRoutes(services, config) {
     const annotated = annotateReleases(list, environments);
 
     // Build response with ticket filtering per view/person
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const availability = services.availability;
+
+    // Helper: does a person's OOO overlap with the release date window?
+    const releaseImpactingOut = (name, releaseDate) => {
+      if (!availability || !name || !releaseDate) return null;
+      // Impact window is today through release date (if within 2 days)
+      if (releaseDate > tomorrow) return null;
+      return availability.getPersonOutInRange(name, today, releaseDate);
+    };
+
     let result = annotated.map(release => {
       let tickets = release.tickets || [];
 
-      // Enrich tickets with PR data + build status
+      // Enrich tickets with PR data + build status + OOO annotations
       const prsByJiraKey = release.prsByJiraKey || {};
       const buildByJiraKey = release.buildByJiraKey || {};
-      tickets = tickets.map(t => ({
-        ...t,
-        prs: prsByJiraKey[t.key] || [],
-        build: buildByJiraKey[t.key] || null,
-      }));
+      const releaseDate = release.jiraReleaseDate;
+      const isImminentRelease = releaseDate && releaseDate <= tomorrow && release.state !== 'done';
+
+      tickets = tickets.map(t => {
+        const enriched = {
+          ...t,
+          prs: prsByJiraKey[t.key] || [],
+          build: buildByJiraKey[t.key] || null,
+        };
+        if (availability) {
+          const assigneeOut = t.assignee ? availability.getPersonOut(t.assignee) : null;
+          const qaOut = t.qaAssignee ? availability.getPersonOut(t.qaAssignee) : null;
+          if (assigneeOut) {
+            enriched.assigneeOut = {
+              startDate: assigneeOut.startDate, endDate: assigneeOut.endDate,
+              blockingRelease: isImminentRelease,
+            };
+          }
+          if (qaOut) {
+            enriched.qaAssigneeOut = {
+              startDate: qaOut.startDate, endDate: qaOut.endDate,
+              blockingRelease: isImminentRelease,
+            };
+          }
+        }
+        return enriched;
+      });
 
       // Filter tickets by person + view role
       if (person && view) {
@@ -126,6 +165,36 @@ module.exports = function createRoutes(services, config) {
         });
       }
 
+      // Release-impact OOO risk — only for releases due today or tomorrow
+      const oooRisk = [];
+      if (isImminentRelease && availability) {
+        const seen = new Set();
+        for (const t of tickets) {
+          const status = t.jiraStatus || '';
+          if (DONE_STATUSES_FOR_RISK.has(status)) continue;
+          const addRisk = (name, role, outEvent) => {
+            if (!outEvent) return;
+            const key = `${name}:${role}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            oooRisk.push({
+              name, role,
+              endDate: outEvent.endDate,
+              blockingTickets: tickets
+                .filter(x => (role === 'dev' ? x.assignee : x.qaAssignee) === name)
+                .map(x => x.key)
+                .slice(0, 20),
+            });
+          };
+          if (t.assigneeOut && t.assigneeOut.blockingRelease) {
+            addRisk(t.assignee, 'dev', availability.getPersonOut(t.assignee));
+          }
+          if (t.qaAssigneeOut && t.qaAssigneeOut.blockingRelease) {
+            addRisk(t.qaAssignee, 'qa', availability.getPersonOut(t.qaAssignee));
+          }
+        }
+      }
+
       return {
         ...release,
         tickets,
@@ -135,6 +204,7 @@ module.exports = function createRoutes(services, config) {
         zohoTickets: release.zohoTickets || [],
         pipeline: release.pipeline || null,
         isOverdue: release.jiraReleaseDate && release.jiraReleaseDate < today,
+        oooRisk,
       };
     });
 
@@ -1064,11 +1134,34 @@ module.exports = function createRoutes(services, config) {
         }
       }
     }
+    const availability = services.availability;
     const result = Array.from(people.values())
-      .map(p => ({ name: p.name, roles: Array.from(p.roles) }))
+      .map(p => {
+        const out = availability ? availability.getPersonOut(p.name) : null;
+        return {
+          name: p.name,
+          roles: Array.from(p.roles),
+          out: out ? { startDate: out.startDate, endDate: out.endDate, summary: out.summary } : null,
+        };
+      })
       .sort((a, b) => a.name.localeCompare(b.name));
     res.json(result);
   });
+
+  // ── Availability (BambooHR Who's Out + Holidays) ──────
+
+  router.get('/availability', (req, res) => {
+    const availability = services.availability;
+    if (!availability) return res.json({ loaded: false, currentlyOut: [], upcomingHolidays: [] });
+    res.json(availability.snapshot());
+  });
+
+  router.post('/availability/refresh', requireAdmin, asyncHandler(async (req, res) => {
+    const availability = services.availability;
+    if (!availability) return res.status(503).json({ error: 'Availability not configured' });
+    const result = await availability.refresh();
+    res.json({ ok: true, ...result });
+  }));
 
   // ── People Directory (Slack ID resolution) ────────────
 
