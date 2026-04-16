@@ -12,6 +12,7 @@ interface WsState {
   customers: Customer[]
   environments: Environment[]
   config: AppConfig
+  pipelineSyncTick: number
   setConnected: (v: boolean) => void
   setReleases: (r: Release[]) => void
   setCustomers: (c: Customer[]) => void
@@ -21,6 +22,7 @@ interface WsState {
   removeRelease: (version: string) => void
   upsertCustomer: (c: Customer) => void
   upsertEnvironment: (e: Environment) => void
+  bumpPipelineSyncTick: () => void
 }
 
 export const useWsStore = create<WsState>((set) => ({
@@ -29,6 +31,8 @@ export const useWsStore = create<WsState>((set) => ({
   customers: [],
   environments: [],
   config: { jiraBaseUrl: '' },
+  pipelineSyncTick: 0,
+  bumpPipelineSyncTick: () => set((state) => ({ pipelineSyncTick: state.pipelineSyncTick + 1 })),
   setConnected: (connected) => set({ connected }),
   setReleases: (releases) => set({ releases }),
   setCustomers: (customers) => set({ customers }),
@@ -153,6 +157,10 @@ export function connectWebSocket() {
       case 'discovery:completed':
       case 'jira:sync-completed':
         if (msg.releases) s.setReleases(msg.releases)
+        break
+      case 'pipeline:sync-completed':
+        if (msg.releases) s.setReleases(msg.releases)
+        s.bumpPipelineSyncTick()
         break
     }
   }
