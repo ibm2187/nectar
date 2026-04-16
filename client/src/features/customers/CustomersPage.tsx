@@ -4,7 +4,6 @@ import { useWsStore } from '../../stores/wsStore'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
-import { Input } from '../../components/ui/input'
 import { apiFetch } from '../../api/client'
 import type { Customer, Environment, EnvTier } from '../../api/client'
 import { cn, timeAgo, exportToCsv } from '../../lib/utils'
@@ -42,11 +41,25 @@ const TIER_COLORS: Record<string, string> = {
   other: 'bg-muted text-muted-foreground border-border',
 }
 
+const ALL_KEY = 'all'
+
+const CUSTOMER_LABELS: Record<string, string> = {
+  bayada: 'Bayada',
+  ck: 'Comfort Keepers',
+  tribute: 'Tribute',
+  lumen: 'Lumen',
+  qualitycare: 'Quality Care',
+  viv: 'Viv',
+}
+
+// Haven is under the Tribute AWS account and no longer served separately — hide from pills
+const HIDDEN_CUSTOMER_IDS = new Set(['haven'])
+
 export function CustomersPage() {
   const customers = useWsStore(s => s.customers)
   const environments = useWsStore(s => s.environments)
   const [search, setSearch] = useState('')
-  const [showInternalEnvs, setShowInternalEnvs] = useState(false)
+  const [activeCustomer, setActiveCustomer] = useState<string>(ALL_KEY)
   const [expandedFranchises, setExpandedFranchises] = useState<Set<string>>(new Set())
   const [scanning, setScanning] = useState(false)
 
@@ -78,19 +91,20 @@ export function CustomersPage() {
   }, [environments])
 
   const filteredCustomers = useMemo(() => {
-    let list = customers
-    if (search) {
-      const q = search.toLowerCase()
-      list = list.filter(c =>
+    const q = search.toLowerCase()
+    return customers.filter(c => {
+      if (HIDDEN_CUSTOMER_IDS.has(c.id)) return false
+      if (activeCustomer === ALL_KEY ? c.id === 'viv' : c.id !== activeCustomer) return false
+      if (q && !(
         c.id.toLowerCase().includes(q) ||
         c.name.toLowerCase().includes(q) ||
         (envsByCustomer.get(c.id) || []).some(e =>
           e.id.toLowerCase().includes(q) || e.name.toLowerCase().includes(q)
         )
-      )
-    }
-    return list
-  }, [customers, search, envsByCustomer])
+      )) return false
+      return true
+    })
+  }, [customers, activeCustomer, search, envsByCustomer])
 
   async function handleScan() {
     setScanning(true)
@@ -159,21 +173,41 @@ export function CustomersPage() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 mb-4">
-        <Input
+      <div className="flex items-center gap-3 flex-wrap mb-4">
+        <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
+          {[
+            { id: ALL_KEY, label: 'All' },
+            ...customers
+              .filter(c => !HIDDEN_CUSTOMER_IDS.has(c.id) && c.id !== 'viv')
+              .map(c => ({ id: c.id, label: CUSTOMER_LABELS[c.id] || c.name })),
+            ...customers
+              .filter(c => c.id === 'viv')
+              .map(c => ({ id: c.id, label: CUSTOMER_LABELS[c.id] || c.name })),
+          ].map(pill => (
+            <button
+              key={pill.id}
+              type="button"
+              onClick={() => setActiveCustomer(pill.id)}
+              className={cn(
+                'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                activeCustomer === pill.id
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {pill.label}
+            </button>
+          ))}
+        </div>
+
+        <input
+          type="text"
           placeholder="Search customers, environments..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className="max-w-sm"
+          className="h-8 px-3 text-sm rounded-md border bg-background text-foreground w-64"
+          aria-label="Search environments"
         />
-        <label className="flex items-center gap-2 text-sm text-muted-foreground ml-auto cursor-pointer">
-          <input
-            type="checkbox"
-            checked={showInternalEnvs}
-            onChange={e => setShowInternalEnvs(e.target.checked)}
-          />
-          Show internal/dev envs
-        </label>
       </div>
 
       {filteredCustomers.length === 0 ? (
@@ -188,9 +222,6 @@ export function CustomersPage() {
             const allEnvs = envsByCustomer.get(customer.id) || []
             const mainEnvs = allEnvs.filter(e => !e.franchise)
             const franchiseEnvs = allEnvs.filter(e => !!e.franchise)
-
-            // Hide customer if it's viv and not showing internal
-            if (!showInternalEnvs && customer.id === 'viv') return null
 
             return (
               <CustomerCard
