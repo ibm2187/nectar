@@ -273,6 +273,7 @@ class ZohoSync extends EventEmitter {
       release.zohoTickets = Array.from(data.zohoTickets.values());
       release.zohoByJiraKey = data.zohoByJiraKey;
       release.zohoSyncedAt = new Date().toISOString();
+      this.releases.persist(release);
       results.releasesUpdated++;
     }
 
@@ -283,11 +284,8 @@ class ZohoSync extends EventEmitter {
         release.zohoTickets = [];
         release.zohoByJiraKey = {};
         release.zohoSyncedAt = new Date().toISOString();
+        this.releases.persist(release);
       }
-    }
-
-    if (results.releasesUpdated > 0) {
-      this.releases._debounceSave();
     }
   }
 

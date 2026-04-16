@@ -1687,7 +1687,7 @@ module.exports = function createRoutes(services, config) {
       }
     }
 
-    customerStore._debounceSave();
+    // customerStore writes are synchronous now (SQLite-backed) — no explicit flush needed
 
     res.json({
       ok: true,
