@@ -194,7 +194,9 @@ function IntegrationCard({ integration, onSaved }: {
                 />
               )}
               {varDef.hasValue && (
-                <span className="text-xs text-muted-foreground">set</span>
+                <span className="text-xs text-muted-foreground font-mono" title="Last 3 chars of stored value">
+                  {varDef.secret && varDef.value ? varDef.value : 'set'}
+                </span>
               )}
             </div>
           ))}
