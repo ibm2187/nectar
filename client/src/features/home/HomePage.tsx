@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useHomeStore, type HomeView } from '../../stores/homeStore'
 import { apiFetch } from '../../api/client'
 import type { Release } from '../../api/client'
@@ -87,6 +87,33 @@ function relativeDate(dateStr: string): { label: string; color: string } {
 export function HomePage() {
   const { view, person, groupBy, isFirstVisit, setView, setPerson, setGroupBy, dismissFirstVisit } = useHomeStore()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // URL params take precedence over localStorage on mount — lets external links
+  // (e.g. from Slack digest DMs) deep-link to a specific role + person.
+  useEffect(() => {
+    const urlView = searchParams.get('view') as HomeView | null
+    const urlPerson = searchParams.get('person')
+    let changed = false
+    const VALID_VIEWS: HomeView[] = ['dev', 'qa', 'pm', 'support', 'cs']
+    if (urlView && VALID_VIEWS.includes(urlView) && urlView !== view) {
+      setView(urlView)
+      dismissFirstVisit()
+      changed = true
+    }
+    if (urlPerson !== null && urlPerson !== person) {
+      setPerson(urlPerson || null)
+      changed = true
+    }
+    // Strip params from URL after applying so reloads use the persisted localStorage state
+    if (changed && (urlView || urlPerson !== null)) {
+      const next = new URLSearchParams(searchParams)
+      next.delete('view')
+      next.delete('person')
+      setSearchParams(next, { replace: true })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const [releases, setReleases] = useState<HomeRelease[]>([])
   const [people, setPeople] = useState<Person[]>([])

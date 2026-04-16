@@ -90,7 +90,7 @@ describe('NotificationEngine', () => {
       expect(mockSlack.dmUser).not.toHaveBeenCalled();
     });
 
-    it('sends DMs grouped by assignee for undone tickets', async () => {
+    it('sends DMs to assignees with dev-actionable statuses', async () => {
       vi.useFakeTimers();
       const future = new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10);
       mockReleases.list.mockReturnValue([
@@ -100,7 +100,7 @@ describe('NotificationEngine', () => {
           jiraReleaseDate: future,
           tickets: [
             { key: 'DEV-1', summary: 'Fix bug', assignee: 'Alice', jiraStatus: 'In Progress' },
-            { key: 'DEV-2', summary: 'Other bug', assignee: 'Bob', jiraStatus: 'Ready For Testing' },
+            { key: 'DEV-2', summary: 'Blocked', assignee: 'Bob',   jiraStatus: 'Blocked' },
           ],
         },
       ]);
@@ -118,7 +118,7 @@ describe('NotificationEngine', () => {
       expect(mockSlack.dmUser).toHaveBeenCalledWith('U_BOB', expect.stringContaining('DEV-2'));
     });
 
-    it('includes QA assignees as separate recipients', async () => {
+    it('routes a ticket in QA status to the QA assignee only, not the dev', async () => {
       vi.useFakeTimers();
       const future = new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10);
       mockReleases.list.mockReturnValue([
@@ -127,6 +127,7 @@ describe('NotificationEngine', () => {
           state: 'stabilizing',
           jiraReleaseDate: future,
           tickets: [
+            // In Testing is QA's job — Alice (dev) should NOT get this
             { key: 'DEV-1', summary: 'Bug', assignee: 'Alice', qaAssignee: 'Carol', jiraStatus: 'In Testing' },
           ],
         },
@@ -140,7 +141,111 @@ describe('NotificationEngine', () => {
       await vi.runAllTimersAsync();
       await promise;
 
-      expect(mockSlack.dmUser).toHaveBeenCalledTimes(2);
+      expect(mockSlack.dmUser).toHaveBeenCalledTimes(1);
+      expect(mockSlack.dmUser).toHaveBeenCalledWith('U_CAROL', expect.stringContaining('DEV-1'));
+      // And Alice (dev) gets nothing
+      expect(mockSlack.dmUser).not.toHaveBeenCalledWith('U_ALICE', expect.anything());
+    });
+
+    it('routes a ticket in Testing Failed to the dev assignee, not the QA', async () => {
+      vi.useFakeTimers();
+      const future = new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10);
+      mockReleases.list.mockReturnValue([
+        {
+          version: '4.2.0', state: 'stabilizing', jiraReleaseDate: future,
+          tickets: [
+            // Testing Failed = dev needs to fix
+            { key: 'DEV-1', summary: 'Broken', assignee: 'Alice', qaAssignee: 'Carol', jiraStatus: 'Testing Failed' },
+          ],
+        },
+      ]);
+
+      mockPeople.resolveSlackId
+        .mockImplementation(name => name === 'Alice' ? { slackId: 'U_ALICE' } :
+                                     name === 'Carol' ? { slackId: 'U_CAROL' } : null);
+
+      const promise = engine.sendDailyDigests();
+      await vi.runAllTimersAsync();
+      await promise;
+
+      expect(mockSlack.dmUser).toHaveBeenCalledTimes(1);
+      expect(mockSlack.dmUser).toHaveBeenCalledWith('U_ALICE', expect.stringContaining('Needs attention'));
+      expect(mockSlack.dmUser).not.toHaveBeenCalledWith('U_CAROL', expect.anything());
+    });
+
+    it('skips person entirely when they have no actionable tickets for their role', async () => {
+      vi.useFakeTimers();
+      const future = new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10);
+      mockReleases.list.mockReturnValue([
+        {
+          version: '4.2.0', state: 'stabilizing', jiraReleaseDate: future,
+          tickets: [
+            // Alice is the dev, but the ticket is in QA — nothing she can do
+            { key: 'DEV-1', summary: 'X', assignee: 'Alice', jiraStatus: 'In Testing' },
+          ],
+        },
+      ]);
+
+      mockPeople.resolveSlackId.mockImplementation(name =>
+        name === 'Alice' ? { slackId: 'U_ALICE' } : null);
+
+      const promise = engine.sendDailyDigests();
+      await vi.runAllTimersAsync();
+      await promise;
+
+      expect(mockSlack.dmUser).not.toHaveBeenCalled();
+    });
+
+    it('includes a Nectar deep link with view and person in the DM', async () => {
+      vi.useFakeTimers();
+      const future = new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10);
+      mockReleases.list.mockReturnValue([
+        {
+          version: '4.2.0', state: 'stabilizing', jiraReleaseDate: future,
+          tickets: [
+            { key: 'DEV-1', summary: 'X', assignee: 'Alice', jiraStatus: 'In Progress' },
+          ],
+        },
+      ]);
+      mockPeople.resolveSlackId.mockReturnValue({ slackId: 'U_ALICE' });
+
+      const promise = engine.sendDailyDigests();
+      await vi.runAllTimersAsync();
+      await promise;
+
+      const [, message] = mockSlack.dmUser.mock.calls[0];
+      expect(message).toMatch(/view=dev&person=Alice/);
+      expect(message).toMatch(/Open in Nectar/);
+    });
+
+    it('primary header link uses the role with more tickets', async () => {
+      vi.useFakeTimers();
+      const future = new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10);
+      mockReleases.list.mockReturnValue([
+        {
+          version: '4.2.0', state: 'stabilizing', jiraReleaseDate: future,
+          tickets: [
+            // Alice has 1 dev-actionable and 3 qa-actionable
+            { key: 'DEV-1', summary: 'X', assignee: 'Alice', jiraStatus: 'In Progress' },
+            { key: 'DEV-2', summary: 'Y', qaAssignee: 'Alice', jiraStatus: 'In Testing' },
+            { key: 'DEV-3', summary: 'Z', qaAssignee: 'Alice', jiraStatus: 'Ready For Testing' },
+            { key: 'DEV-4', summary: 'W', qaAssignee: 'Alice', jiraStatus: 'In Testing' },
+          ],
+        },
+      ]);
+      mockPeople.resolveSlackId.mockReturnValue({ slackId: 'U_ALICE' });
+
+      const promise = engine.sendDailyDigests();
+      await vi.runAllTimersAsync();
+      await promise;
+
+      const [, message] = mockSlack.dmUser.mock.calls[0];
+      // QA has more tickets (3) than dev (1) — header link should be view=qa
+      // Message format: <URL?view=qa&person=...|Open in Nectar>
+      const headerMatch = message.match(/<([^|]+)\|Open in Nectar>/);
+      expect(headerMatch).not.toBeNull();
+      expect(headerMatch[1]).toContain('view=qa');
+      expect(headerMatch[1]).toContain('person=Alice');
     });
 
     it('skips people who cannot be resolved to Slack IDs', async () => {

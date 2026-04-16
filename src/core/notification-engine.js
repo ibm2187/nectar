@@ -7,6 +7,89 @@ const DONE_STATUSES = new Set([
   'Resolved', 'Released', 'Resolved Without Code',
 ]);
 
+// Role-based status buckets for the daily digest.
+// A ticket shows under the DEV section only when it's in a dev-actionable status,
+// and under the QA section only when it's in a QA-actionable status. A status
+// appears in at most one bucket — so a ticket is never in both sections.
+
+const DEV_BUCKETS = [
+  // High-priority — red section, shown first
+  {
+    key: 'needs-attention',
+    label: 'Needs attention (as dev)',
+    emoji: '🔴',
+    statuses: [
+      'Blocked', 'Testing Failed', 'Test Failed', 'Pending Bug Fix',
+      'Re-verify Bug', 'Needs Re-verification',
+    ],
+  },
+  // Active development
+  {
+    key: 'in-dev',
+    label: 'In Dev (as dev)',
+    emoji: '🛠',
+    statuses: [
+      'Development In Progress', 'In Progress', 'In Review', 'Development',
+      'Design In Progress', 'Design In Review', 'Design Review',
+      'Implementing', 'Remediation in Progress', 'Defect Remediation in Progress',
+      'Code Review',
+    ],
+  },
+  // Awaiting the dev to cherry-pick
+  {
+    key: 'awaiting-cp',
+    label: 'Awaiting Cherry Pick (as dev)',
+    emoji: '⏳',
+    statuses: [
+      'Waiting for Cherry Pick', 'Ready for Cherry Pick',
+    ],
+  },
+  // Pre-dev — queued but not started
+  {
+    key: 'pre-dev',
+    label: 'Pre-Dev (as dev)',
+    emoji: '⏸',
+    statuses: [
+      'Open', 'To Do', 'Backlog', 'Planning', 'Requirements', 'Needs Requirements',
+      'Ready to Develop', 'Ready For Estimation', 'Reopened', 'Pending',
+      'Pending Dev Investigation', 'Pending Defect Remediation', 'Pending Configuration',
+      'Pending Prioritization', 'Investigating Issue', 'Escalated',
+    ],
+  },
+];
+
+const QA_BUCKETS = [
+  // Ready to test
+  {
+    key: 'ready-for-qa',
+    label: 'Ready for QA (as qa)',
+    emoji: '🔵',
+    statuses: [
+      'Ready For Testing', 'Cherry Picked', 'Cherrypick is Building',
+      'Retest After Cherrypick', 'DQA Required',
+    ],
+  },
+  // Actively testing
+  {
+    key: 'in-qa',
+    label: 'In QA (as qa)',
+    emoji: '🟣',
+    statuses: [
+      'In Testing', 'Testing in Branch', 'Testing',
+      'Validating', 'Pending Customer QA/UAT',
+    ],
+  },
+];
+
+// Fast reverse lookup: status → { role, bucketKey, bucketIndex }
+const _devStatusMap = new Map();
+DEV_BUCKETS.forEach((b, i) => b.statuses.forEach(s => _devStatusMap.set(s, { bucketKey: b.key, bucketIndex: i })));
+const _qaStatusMap = new Map();
+QA_BUCKETS.forEach((b, i) => b.statuses.forEach(s => _qaStatusMap.set(s, { bucketKey: b.key, bucketIndex: i })));
+
+function devBucketFor(status) { return _devStatusMap.get(status || '') || null; }
+function qaBucketFor(status)  { return _qaStatusMap.get(status || '') || null; }
+
 /**
  * NotificationEngine — central coordinator for all notification features.
  *
@@ -135,9 +218,9 @@ class NotificationEngine {
 
     log.info(`Daily digest: sending to ${byPerson.size} people across ${relevant.length} releases`);
 
-    const jiraBaseUrl = process.env.JIRA_URL || process.env.JIRA_BASE_URL || 'https://vivtechnologies.atlassian.net';
     let sent = 0;
     let skipped = 0;
+    let filteredOut = 0;
 
     for (const [person, items] of byPerson) {
       // Resolve Slack ID
@@ -153,35 +236,115 @@ class NotificationEngine {
         continue;
       }
 
-      // Group items by release
-      const byRelease = new Map();
-      for (const item of items) {
-        const ver = item.release.version;
-        if (!byRelease.has(ver)) byRelease.set(ver, { release: item.release, tickets: [] });
-        byRelease.get(ver).tickets.push(item.ticket);
+      const message = this._buildPersonDigest(person, items);
+      if (!message) {
+        // All their tickets were in non-actionable statuses for their role(s)
+        filteredOut++;
+        continue;
       }
 
-      // Format DM
-      const lines = [`📋 *Your tickets this week* — ${items.length} item${items.length !== 1 ? 's' : ''} need attention`, ''];
-
-      for (const [version, group] of byRelease) {
-        const dateStr = group.release.jiraReleaseDate || 'Unscheduled';
-        lines.push(`*${version}* (due ${dateStr})`);
-        for (const t of group.tickets) {
-          const emoji = this._statusEmoji(t.jiraStatus);
-          lines.push(`  ${emoji} <${jiraBaseUrl}/browse/${t.key}|${t.key}> — ${t.summary} _(${t.jiraStatus || 'Unknown'})_`);
-        }
-        lines.push('');
-      }
-
-      await this.slack.dmUser(resolved.slackId, lines.join('\n'));
+      await this.slack.dmUser(resolved.slackId, message);
       sent++;
 
       // Rate limit: 1 DM per second
       await new Promise(r => setTimeout(r, 1000));
     }
 
-    log.info(`Daily digest: sent ${sent}, skipped ${skipped} (${byPerson.size} total people)`);
+    log.info(`Daily digest: sent ${sent}, skipped ${skipped}, filtered-out ${filteredOut} (${byPerson.size} total people)`);
+  }
+
+  /**
+   * Build a role-bucketed digest DM for one person.
+   *
+   * @param {string} person - JIRA display name
+   * @param {Array<{ release, ticket }>} items - tickets where they're assignee or qaAssignee
+   * @returns {string|null} formatted Slack message, or null if no tickets pass role filters
+   */
+  _buildPersonDigest(person, items) {
+    const personLower = person.toLowerCase();
+    const jiraBaseUrl = process.env.JIRA_URL || process.env.JIRA_BASE_URL || 'https://vivtechnologies.atlassian.net';
+    const nectarBaseUrl = process.env.NECTAR_URL || 'https://nectar.vivtechnologies.com';
+
+    // Bucket tickets by (role, bucketKey). A ticket appears once under whichever
+    // role matches its status.
+    const sections = new Map(); // bucketKey → { role, label, emoji, tickets: [] }
+    let devTotal = 0;
+    let qaTotal = 0;
+
+    for (const { ticket } of items) {
+      const isAssignee = ticket.assignee && ticket.assignee.toLowerCase() === personLower;
+      const isQa = ticket.qaAssignee && ticket.qaAssignee.toLowerCase() === personLower;
+
+      if (isAssignee) {
+        const b = devBucketFor(ticket.jiraStatus);
+        if (b) {
+          const bucket = DEV_BUCKETS[b.bucketIndex];
+          this._addToBucket(sections, 'dev', bucket, ticket);
+          devTotal++;
+          continue; // this ticket is accounted for in dev bucket
+        }
+      }
+
+      if (isQa) {
+        const b = qaBucketFor(ticket.jiraStatus);
+        if (b) {
+          const bucket = QA_BUCKETS[b.bucketIndex];
+          this._addToBucket(sections, 'qa', bucket, ticket);
+          qaTotal++;
+        }
+      }
+    }
+
+    const totalTickets = devTotal + qaTotal;
+    if (totalTickets === 0) return null;
+
+    // Build the message
+    const primaryRole = devTotal >= qaTotal ? 'dev' : 'qa';
+    const headerLink = `${nectarBaseUrl}/?view=${primaryRole}&person=${encodeURIComponent(person)}`;
+    const lines = [
+      `📋 *Your tickets this week* — ${totalTickets} item${totalTickets !== 1 ? 's' : ''}`,
+      `🔗 <${headerLink}|Open in Nectar>`,
+      '',
+    ];
+
+    // Render sections in the order defined by DEV_BUCKETS / QA_BUCKETS,
+    // skipping empty ones.
+    const orderedSections = [
+      ...DEV_BUCKETS.map(b => ({ role: 'dev', bucket: b })),
+      ...QA_BUCKETS.map(b => ({ role: 'qa', bucket: b })),
+    ];
+
+    const SHOW_LIMIT = 10;
+
+    for (const { role, bucket } of orderedSections) {
+      const entry = sections.get(bucket.key);
+      if (!entry || entry.tickets.length === 0) continue;
+
+      const sectionLink = `${nectarBaseUrl}/?view=${role}&person=${encodeURIComponent(person)}`;
+      lines.push(`${bucket.emoji} *${bucket.label}* — ${entry.tickets.length}`);
+
+      const visible = entry.tickets.slice(0, SHOW_LIMIT);
+      for (const t of visible) {
+        lines.push(`  <${jiraBaseUrl}/browse/${t.key}|${t.key}> — ${t.summary} _(${t.jiraStatus || 'Unknown'})_`);
+      }
+      if (entry.tickets.length > SHOW_LIMIT) {
+        lines.push(`  _+${entry.tickets.length - SHOW_LIMIT} more — <${sectionLink}|see all>_`);
+      } else {
+        lines.push(`  <${sectionLink}|See all your ${role} tickets>`);
+      }
+      lines.push('');
+    }
+
+    return lines.join('\n');
+  }
+
+  _addToBucket(sections, role, bucket, ticket) {
+    let entry = sections.get(bucket.key);
+    if (!entry) {
+      entry = { role, label: bucket.label, emoji: bucket.emoji, tickets: [] };
+      sections.set(bucket.key, entry);
+    }
+    entry.tickets.push(ticket);
   }
 
   /**
@@ -241,28 +404,17 @@ class NotificationEngine {
       return { ok: false, message: 'No undone tickets for this user' };
     }
 
-    // Group by release
-    const jiraBaseUrl = process.env.JIRA_URL || process.env.JIRA_BASE_URL || 'https://vivtechnologies.atlassian.net';
-    const byRelease = new Map();
-    for (const item of items) {
-      const ver = item.release.version;
-      if (!byRelease.has(ver)) byRelease.set(ver, { release: item.release, tickets: [] });
-      byRelease.get(ver).tickets.push(item.ticket);
+    // Pick any one of the matching names (usually just one) for the digest header
+    const primaryName = matchingNames.values().next().value;
+    const message = this._buildPersonDigest(primaryName, items);
+    if (!message) {
+      return { ok: false, message: 'This user has tickets, but none in actionable statuses for their role(s)' };
     }
 
-    const lines = [`📋 *Your tickets this week* — ${items.length} item${items.length !== 1 ? 's' : ''} need attention`, ''];
-    for (const [version, group] of byRelease) {
-      const dateStr = group.release.jiraReleaseDate || 'Unscheduled';
-      lines.push(`*${version}* (due ${dateStr})`);
-      for (const t of group.tickets) {
-        const emoji = this._statusEmoji(t.jiraStatus);
-        lines.push(`  ${emoji} <${jiraBaseUrl}/browse/${t.key}|${t.key}> — ${t.summary} _(${t.jiraStatus || 'Unknown'})_`);
-      }
-      lines.push('');
-    }
-
-    await this.slack.dmUser(targetSlackId, lines.join('\n'));
-    return { ok: true, message: `Sent digest with ${items.length} tickets`, ticketCount: items.length };
+    await this.slack.dmUser(targetSlackId, message);
+    // Count visible tickets in the message (approximation: count ticket lines)
+    const visibleCount = (message.match(/\|DEV-/g) || []).length;
+    return { ok: true, message: `Sent digest with ${visibleCount} tickets`, ticketCount: visibleCount };
   }
 
   // ════════════════════════════════════════════════════════
