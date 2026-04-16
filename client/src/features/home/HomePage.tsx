@@ -695,8 +695,8 @@ function ReleasePanel({
               <col style={{ width: '75px' }} />
               <col style={{ width: '35px' }} />
               <col style={{ width: '50px' }} />
-              <col style={{ width: '110px' }} />
-              <col style={{ width: '110px' }} />
+              <col style={{ width: '130px' }} />
+              <col style={{ width: '130px' }} />
             </colgroup>
             <thead>
               <tr className="border-b border-border/20 text-left">
@@ -744,13 +744,17 @@ function ReleasePanel({
                             onClick={() => onClickPr(ticket.key, ticket.summary, ticket.prs || [], r.repo || 'webplatform', r.version)}
                           />
                           <BuildStatusCell build={ticket.build} />
-                          <td className="px-2 py-1.5 align-middle text-right whitespace-nowrap">
-                            <span className={cn('text-xs truncate max-w-[110px] inline-block align-middle', dev.className)}>{dev.text}</span>
-                            <OutIcon name={ticket.assignee} blockingRelease={ticket.assigneeOut?.blockingRelease} />
+                          <td className="px-2 py-1.5 align-middle whitespace-nowrap">
+                            <div className="flex items-center justify-end gap-0.5">
+                              <span className={cn('text-xs truncate', dev.className)} title={dev.text}>{dev.text}</span>
+                              <OutIcon name={ticket.assignee} blockingRelease={ticket.assigneeOut?.blockingRelease} className="ml-0 shrink-0" />
+                            </div>
                           </td>
-                          <td className="px-2 pr-4 py-1.5 align-middle text-right whitespace-nowrap">
-                            <span className={cn('text-xs truncate max-w-[110px] inline-block align-middle', qa.className)}>{qa.text}</span>
-                            <OutIcon name={ticket.qaAssignee} blockingRelease={ticket.qaAssigneeOut?.blockingRelease} />
+                          <td className="px-2 pr-4 py-1.5 align-middle whitespace-nowrap">
+                            <div className="flex items-center justify-end gap-0.5">
+                              <span className={cn('text-xs truncate', qa.className)} title={qa.text}>{qa.text}</span>
+                              <OutIcon name={ticket.qaAssignee} blockingRelease={ticket.qaAssigneeOut?.blockingRelease} className="ml-0 shrink-0" />
+                            </div>
                           </td>
                         </tr>
                       )
@@ -1149,11 +1153,17 @@ function HomeTicketRow({ ticket: t, onReleaseClick }: {
       <td className="px-3 py-2 align-top"><PriorityBadge value={t.priority} /></td>
       <td className="px-3 py-2 align-top"><RiskBadge value={t.riskLevel} /></td>
       <td className="px-3 py-2 align-top hidden md:table-cell"><PriorityBadge value={t.customerPriority} /></td>
-      <td className="px-3 py-2 align-top">
-        <span className="text-xs">{t.assignee || <span className="text-muted-foreground italic">—</span>}</span>
+      <td className="px-3 py-2 align-top whitespace-nowrap">
+        <span className="text-xs inline-flex items-center gap-0.5">
+          <span>{t.assignee || <span className="text-muted-foreground italic">—</span>}</span>
+          <OutIcon name={t.assignee} blockingRelease={(t as any).assigneeOut?.blockingRelease} className="ml-0" />
+        </span>
       </td>
-      <td className="px-3 py-2 align-top hidden md:table-cell">
-        <span className="text-xs text-muted-foreground">{t.qaAssignee || '—'}</span>
+      <td className="px-3 py-2 align-top whitespace-nowrap hidden md:table-cell">
+        <span className="text-xs text-muted-foreground inline-flex items-center gap-0.5">
+          <span>{t.qaAssignee || '—'}</span>
+          <OutIcon name={t.qaAssignee} blockingRelease={(t as any).qaAssigneeOut?.blockingRelease} className="ml-0" />
+        </span>
       </td>
       <td className="px-3 py-2 align-top hidden md:table-cell">
         <NextReleaseCellDeployed envs={t.deployedEnvironments} jiraStatus={t.jiraStatus} />
