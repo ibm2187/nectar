@@ -3,9 +3,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
 const JiraSync = require('../../src/core/jira-sync');
+const { createTestDb } = require('../../src/core/db');
 
 describe('JiraSync', () => {
-  let audit, releases, jiraSync;
+  let audit, releases, jiraSync, db;
   let mockJira;
 
   const config = {
@@ -19,10 +20,9 @@ describe('JiraSync', () => {
   };
 
   beforeEach(() => {
-    audit = new Audit();
-    releases = new ReleaseManager(audit);
-    releases.releases.clear();
-    audit.entries = [];
+    db = createTestDb();
+    audit = new Audit({ db });
+    releases = new ReleaseManager(audit, { db });
 
     mockJira = {
       isConfigured: () => true,

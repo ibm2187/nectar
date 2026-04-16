@@ -38,6 +38,23 @@ if (!fs.existsSync(configPath)) {
 }
 const config = require(configPath);
 
+// ── Open SQLite DB + migrate from legacy JSON if needed ──
+// This must happen BEFORE any store is constructed, since store
+// constructors eagerly load from the DB.
+const { getDb } = require('./core/db');
+const { migrateFromJson } = require('./core/migrate');
+const db = getDb();
+try {
+  const migrated = migrateFromJson(db, path.join(__dirname, '..'));
+  const totalMoved = Object.values(migrated).reduce((a, b) => a + b, 0);
+  if (totalMoved === 0) {
+    log.info('DB migration: up to date (no JSON records to import)');
+  }
+} catch (err) {
+  log.error(`DB migration failed: ${err.message}`);
+  if (err.stack) log.error(err.stack);
+}
+
 // ── Initialize core services ──────────────────────────────
 const Audit = require('./core/audit');
 const audit = new Audit();

@@ -31,6 +31,12 @@ Thumbs.db
 *.swp
 .nectar-users.json
 .nectar-state.json.tmp
+.nectar-notification-settings.json
+.nectar.db
+.nectar.db-wal
+.nectar.db-shm
+.nectar.db-journal
+.nectar-*.json.bak
 
 # Plans (ignore future additions; already-committed files remain tracked)
 docs/plans/

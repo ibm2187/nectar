@@ -1,21 +1,25 @@
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const log = require('./log');
+const { getDb } = require('./db');
 
-const STATE_FILE = path.join(__dirname, '..', '..', '.nectar-api-keys.json');
 const KEY_PREFIX = 'nectar_';
 
 /**
  * ApiKeyManager — create, validate, list, and revoke API keys.
  *
- * Keys are stored hashed (SHA-256) in .nectar-api-keys.json.
+ * Keys are stored hashed (SHA-256) in the `api_keys` table.
  * The raw key is only returned once at creation time.
  *
  * Key format: nectar_<base64url-encoded-32-bytes>
  */
 class ApiKeyManager {
-  constructor() {
+  /**
+   * @param {object} [opts]
+   * @param {import('better-sqlite3').Database} [opts.db] — inject a DB (tests)
+   */
+  constructor(opts = {}) {
+    this.db = opts.db || getDb();
+    // In-memory mirror for backwards compat with tests that poke `.keys`.
     this.keys = new Map(); // id → { id, label, hash, createdAt, createdBy, lastUsedAt }
     this._loadState();
   }
@@ -45,8 +49,11 @@ class ApiKeyManager {
       lastUsedAt: null,
     };
 
+    this.db.prepare(`
+      INSERT INTO api_keys (id, label, hash, createdAt, createdBy, lastUsedAt)
+      VALUES (@id, @label, @hash, @createdAt, @createdBy, @lastUsedAt)
+    `).run(entry);
     this.keys.set(id, entry);
-    this._save();
     log.info(`API key created: ${id} (${label})`);
 
     return {
@@ -69,16 +76,15 @@ class ApiKeyManager {
     }
 
     const hash = this._hash(rawKey);
-    for (const entry of this.keys.values()) {
-      if (entry.hash === hash) {
-        // Update last used timestamp
-        entry.lastUsedAt = new Date().toISOString();
-        this._debounceSave();
-        return { valid: true, keyId: entry.id, label: entry.label };
-      }
-    }
+    const row = this.db.prepare('SELECT id, label FROM api_keys WHERE hash = ?').get(hash);
+    if (!row) return { valid: false, keyId: null, label: null };
 
-    return { valid: false, keyId: null, label: null };
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE api_keys SET lastUsedAt = ? WHERE id = ?').run(now, row.id);
+    const mirrored = this.keys.get(row.id);
+    if (mirrored) mirrored.lastUsedAt = now;
+
+    return { valid: true, keyId: row.id, label: row.label };
   }
 
   /**
@@ -86,11 +92,11 @@ class ApiKeyManager {
    * @returns {Array<{ id, label, createdAt, createdBy, lastUsedAt }>}
    */
   list() {
-    return Array.from(this.keys.values())
-      .map(({ id, label, createdAt, createdBy, lastUsedAt }) => ({
-        id, label, createdAt, createdBy, lastUsedAt,
-      }))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return this.db.prepare(`
+      SELECT id, label, createdAt, createdBy, lastUsedAt
+      FROM api_keys
+      ORDER BY createdAt DESC
+    `).all();
   }
 
   /**
@@ -99,11 +105,10 @@ class ApiKeyManager {
    * @returns {boolean} - true if the key was found and deleted
    */
   revoke(keyId) {
-    const existed = this.keys.delete(keyId);
-    if (existed) {
-      this._save();
-      log.info(`API key revoked: ${keyId}`);
-    }
+    const result = this.db.prepare('DELETE FROM api_keys WHERE id = ?').run(keyId);
+    const existed = result.changes > 0;
+    this.keys.delete(keyId);
+    if (existed) log.info(`API key revoked: ${keyId}`);
     return existed;
   }
 
@@ -136,35 +141,12 @@ class ApiKeyManager {
 
   _loadState() {
     try {
-      if (fs.existsSync(STATE_FILE)) {
-        const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-        if (Array.isArray(data.keys)) {
-          for (const entry of data.keys) {
-            this.keys.set(entry.id, entry);
-          }
-        }
-        log.info(`Loaded ${this.keys.size} API keys`);
-      }
+      const rows = this.db.prepare('SELECT id, label, hash, createdAt, createdBy, lastUsedAt FROM api_keys').all();
+      for (const row of rows) this.keys.set(row.id, row);
+      log.info(`Loaded ${this.keys.size} API keys`);
     } catch (err) {
       log.error(`Failed to load API keys: ${err.message}`);
     }
-  }
-
-  _save() {
-    try {
-      const data = { keys: Array.from(this.keys.values()) };
-      fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
-    } catch (err) {
-      log.error(`Failed to save API keys: ${err.message}`);
-    }
-  }
-
-  _debounceSave() {
-    if (this._saveTimer) return;
-    this._saveTimer = setTimeout(() => {
-      this._saveTimer = null;
-      this._save();
-    }, 5000);
   }
 }
 

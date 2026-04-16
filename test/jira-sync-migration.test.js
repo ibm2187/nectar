@@ -17,12 +17,18 @@ describe('JiraSync — stale shared ticket migration', () => {
     for (const r of releaseList) {
       map.set(`${r.repo}:${r.version}`, r);
     }
+    // Stub the better-sqlite3 prepare/run chain so jira-sync's direct DB
+    // delete call succeeds in the unit test without spinning up a real DB.
+    const dbRunSpy = vi.fn();
+    const db = { prepare: () => ({ run: dbRunSpy }) };
     return {
       list: () => Array.from(map.values()),
       get: (version, repo) => map.get(`${repo}:${version}`) || null,
       releases: map,
       _key: (repo, version) => `${repo}:${version}`,
-      _debounceSave: vi.fn(),
+      db,
+      dbRunSpy, // expose for assertions
+      persist: vi.fn(),
       addTicket: vi.fn(),
       create: vi.fn(),
     };
@@ -59,7 +65,8 @@ describe('JiraSync — stale shared ticket migration', () => {
     // bluesummit releases deleted entirely
     expect(releases.releases.get('bluesummit:4.2.1')).toBeUndefined();
     expect(releases.releases.get('bluesummit:4.1.0')).toBeUndefined();
-    expect(releases._debounceSave).toHaveBeenCalled();
+    // Each deleted release should have hit the DB
+    expect(releases.dbRunSpy).toHaveBeenCalled();
   });
 
   it('does not delete if sharesVersionsWith is still active', () => {
@@ -100,7 +107,7 @@ describe('JiraSync — stale shared ticket migration', () => {
     expect(releases.releases.has('bluesummit:4.2.1')).toBe(true);
   });
 
-  it('does not call debounceSave when nothing to clean', () => {
+  it('does not touch the DB when nothing to clean', () => {
     const releases = makeMockReleases([
       makeRelease('webplatform', '4.2.1', []),
     ]);
@@ -110,6 +117,6 @@ describe('JiraSync — stale shared ticket migration', () => {
     const sync = new JiraSync(releases, jira, config);
 
     sync._migrateStaleSharedTickets();
-    expect(releases._debounceSave).not.toHaveBeenCalled();
+    expect(releases.dbRunSpy).not.toHaveBeenCalled();
   });
 });

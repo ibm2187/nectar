@@ -1,23 +1,18 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import fs from 'fs';
 
 const CustomerStore = require('../../src/core/customer-store');
+const { createTestDb } = require('../../src/core/db');
 
 describe('CustomerStore', () => {
   let store;
+  let db;
 
   beforeEach(() => {
-    vi.useFakeTimers();
-    store = new CustomerStore();
-    // Clear any state loaded from disk
-    store.customers.clear();
-    store.environments.clear();
-    store.deployments = [];
-    store.mobile.clear();
+    db = createTestDb();
+    store = new CustomerStore({ db });
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -161,36 +156,149 @@ describe('CustomerStore', () => {
     });
   });
 
-  describe('persistence', () => {
-    it('uses atomic writes', () => {
-      const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
-      const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {});
+  describe('deployments', () => {
+    // Each version change should produce a deployment row.
+    it('records a deployment when version changes via poll', () => {
+      store.upsertEnvironment({ id: 'ck-615', customerId: 'ck', currentVersion: '4.1.0' });
+      store.updateLiveState('ck-615', { version: '4.2.0', branch: 'release/4.2.0', reachable: true });
 
-      store.upsertCustomer({ id: 'test-ck', name: 'CK' });
-      writeSpy.mockClear();
-      renameSpy.mockClear();
-
-      store.flush();
-      expect(writeSpy).toHaveBeenCalled();
-      expect(renameSpy).toHaveBeenCalled();
-      expect(writeSpy.mock.calls[0][0]).toMatch(/\.tmp$/);
-
-      writeSpy.mockRestore();
-      renameSpy.mockRestore();
+      const deployments = store.listDeployments({ environmentId: 'ck-615' });
+      expect(deployments).toHaveLength(1);
+      expect(deployments[0].version).toBe('4.2.0');
+      expect(deployments[0].previousVersion).toBe('4.1.0');
+      expect(deployments[0].source).toBe('api-poll');
     });
 
-    it('flush saves immediately', () => {
-      const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
-      const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {});
+    it('records manual-source deployments via setManualVersion', () => {
+      store.upsertEnvironment({ id: 'ck-615', customerId: 'ck', currentVersion: '4.1.0' });
+      store.setManualVersion('ck-615', { version: '4.2.0', setBy: 'nukul' });
 
-      store.upsertCustomer({ id: 'test-ck2' });
-      writeSpy.mockClear();
-      // Debounce hasn't fired yet
-      store.flush();
-      expect(writeSpy).toHaveBeenCalled();
+      const deployments = store.listDeployments({ environmentId: 'ck-615' });
+      expect(deployments).toHaveLength(1);
+      expect(deployments[0].source).toBe('manual');
+    });
 
-      writeSpy.mockRestore();
-      renameSpy.mockRestore();
+    it('ends previous active deployment when a new one starts', () => {
+      store.upsertEnvironment({ id: 'ck-615', customerId: 'ck', currentVersion: '4.1.0' });
+      store.updateLiveState('ck-615', { version: '4.2.0', reachable: true });
+      store.updateLiveState('ck-615', { version: '4.3.0', reachable: true });
+
+      const active = store.listDeployments({ environmentId: 'ck-615', active: true });
+      expect(active).toHaveLength(1);
+      expect(active[0].version).toBe('4.3.0');
+
+      const all = store.listDeployments({ environmentId: 'ck-615' });
+      expect(all).toHaveLength(2);
+      // The older one should have an endedAt
+      expect(all.find(d => d.version === '4.2.0').endedAt).toBeTruthy();
+    });
+
+    it('filter by customerId', () => {
+      store.upsertEnvironment({ id: 'ck-615', customerId: 'ck', currentVersion: '4.1.0' });
+      store.upsertEnvironment({ id: 'bayada-100', customerId: 'bayada', currentVersion: '4.1.0' });
+      store.updateLiveState('ck-615', { version: '4.2.0', reachable: true });
+      store.updateLiveState('bayada-100', { version: '4.2.0', reachable: true });
+
+      expect(store.listDeployments({ customerId: 'ck' })).toHaveLength(1);
+      expect(store.listDeployments({ customerId: 'bayada' })).toHaveLength(1);
+    });
+
+    it('countDeployments respects filters', () => {
+      store.upsertEnvironment({ id: 'ck-615', customerId: 'ck' });
+      store.upsertEnvironment({ id: 'bayada-100', customerId: 'bayada' });
+      store.updateLiveState('ck-615', { version: '4.2.0', reachable: true });
+      store.updateLiveState('bayada-100', { version: '4.2.0', reachable: true });
+      store.updateLiveState('ck-615', { version: '4.3.0', reachable: true });
+
+      expect(store.countDeployments()).toBe(3);
+      expect(store.countDeployments({ customerId: 'ck' })).toBe(2);
+      expect(store.countDeployments({ active: true })).toBe(2);
+    });
+
+    it('supports pagination', () => {
+      store.upsertEnvironment({ id: 'ck-615', customerId: 'ck' });
+      for (let i = 0; i < 5; i++) {
+        store.updateLiveState('ck-615', { version: `4.${i}.0`, reachable: true });
+      }
+      const page = store.listDeployments({ limit: 2 });
+      expect(page).toHaveLength(2);
+    });
+  });
+
+  describe('health / features / integrations / upgrades', () => {
+    beforeEach(() => {
+      store.upsertEnvironment({ id: 'ck-615', customerId: 'ck' });
+    });
+
+    it('updateHealth persists structured payload as JSON', () => {
+      store.updateHealth('ck-615', {
+        status: 'degraded',
+        checks: { mongo: 'ok', redis: 'fail' },
+        summary: { totalChecks: 2, passed: 1, failed: 1, degraded: 0, skipped: 0 },
+        responseTimeMs: 120,
+        checkedAt: '2026-04-15T00:00:00.000Z',
+      });
+      const env = store.getEnvironment('ck-615');
+      expect(env.health.status).toBe('degraded');
+      expect(env.health.checks.redis).toBe('fail');
+    });
+
+    it('updateFeatures stores the array', () => {
+      store.updateFeatures('ck-615', [{ flag: 'foo', enabled: true }]);
+      expect(store.getEnvironment('ck-615').features).toEqual([{ flag: 'foo', enabled: true }]);
+    });
+
+    it('updateIntegrations stores the array', () => {
+      store.updateIntegrations('ck-615', [{ name: 'zoho', status: 'connected' }]);
+      expect(store.getEnvironment('ck-615').integrations[0].name).toBe('zoho');
+    });
+
+    it('updateUpgrades stores the array', () => {
+      store.updateUpgrades('ck-615', [{ version: '4.3.0', status: 'pending' }]);
+      expect(store.getEnvironment('ck-615').upgrades[0].status).toBe('pending');
+    });
+  });
+
+  describe('persistence', () => {
+    it('customers and environments survive a reload from DB', () => {
+      store.upsertCustomer({ id: 'ck', name: 'CK', active: true, hasFranchises: true });
+      store.upsertEnvironment({
+        id: 'ck-615',
+        customerId: 'ck',
+        tier: 'production',
+        franchise: true,
+        currentVersion: '4.2.0',
+        reachable: true,
+      });
+      store.updateHealth('ck-615', { status: 'healthy', checks: {}, summary: {}, responseTimeMs: 50 });
+
+      const store2 = new CustomerStore({ db });
+      const c = store2.getCustomer('ck');
+      expect(c.name).toBe('CK');
+      expect(c.active).toBe(true);
+      expect(c.hasFranchises).toBe(true);
+
+      const env = store2.getEnvironment('ck-615');
+      expect(env.currentVersion).toBe('4.2.0');
+      expect(env.reachable).toBe(true);
+      expect(env.franchise).toBe(true);
+      expect(env.health.status).toBe('healthy');
+    });
+
+    it('deployments are not loaded into memory (queried on demand)', () => {
+      store.upsertEnvironment({ id: 'ck-615', customerId: 'ck' });
+      store.updateLiveState('ck-615', { version: '4.2.0', reachable: true });
+
+      const store2 = new CustomerStore({ db });
+      // The in-memory array is empty by design
+      expect(store2.deployments).toEqual([]);
+      // But the data is still queryable
+      expect(store2.listDeployments({ environmentId: 'ck-615' })).toHaveLength(1);
+    });
+
+    it('flush is a no-op', () => {
+      store.upsertCustomer({ id: 'test-ck', name: 'CK' });
+      expect(() => store.flush()).not.toThrow();
     });
   });
 });

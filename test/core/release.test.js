@@ -1,23 +1,19 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import fs from 'fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
+const { createTestDb } = require('../../src/core/db');
 
 describe('ReleaseManager', () => {
-  let audit, rm;
+  let audit, rm, db;
 
   beforeEach(() => {
-    vi.useFakeTimers();
-    audit = new Audit();
-    rm = new ReleaseManager(audit);
-    // Clear any state loaded from the real .nectar-state.json
-    rm.releases.clear();
-    audit.entries = [];
+    db = createTestDb();
+    audit = new Audit({ db });
+    rm = new ReleaseManager(audit, { db });
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -301,81 +297,67 @@ describe('ReleaseManager', () => {
   });
 
   describe('persistence', () => {
-    it('debounce save triggers after 5s', () => {
-      const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
-      const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {});
-
+    it('every mutation writes through to the DB immediately', () => {
       rm.create({ version: '4.9.0' });
-      // writeFileSync may have been called during state load — clear
-      writeSpy.mockClear();
-
-      vi.advanceTimersByTime(5000);
-      expect(writeSpy).toHaveBeenCalled();
-
-      writeSpy.mockRestore();
-      renameSpy.mockRestore();
+      // Row should already be in SQLite
+      const row = db.prepare('SELECT * FROM releases WHERE version = ?').get('4.9.0');
+      expect(row).toBeTruthy();
+      expect(row.state).toBe('planning');
     });
 
-    it('flush saves immediately using atomic write', () => {
-      const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
-      const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {});
-
+    it('flush is a no-op (writes are synchronous)', () => {
       rm.create({ version: '4.9.1' });
-      writeSpy.mockClear();
-      renameSpy.mockClear();
-
-      rm.flush();
-      expect(writeSpy).toHaveBeenCalled();
-      expect(renameSpy).toHaveBeenCalled();
-      // Verify tmp file pattern
-      expect(writeSpy.mock.calls[0][0]).toMatch(/\.tmp$/);
-
-      writeSpy.mockRestore();
-      renameSpy.mockRestore();
+      expect(() => rm.flush()).not.toThrow();
     });
   });
 
   describe('persistence round-trip', () => {
-    it('_saveState/_loadState preserves releases and audit', () => {
-      const writeSpy = vi.spyOn(fs, 'writeFileSync');
-      const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {});
-
+    it('releases with tickets, deployments, and audit survive a reload', () => {
       // Create releases with tickets and deployments
       rm.create({ version: '4.2.0', repo: 'webplatform', branch: 'releases/4.2.0' });
       rm.addTicket('4.2.0', { key: 'DEV-100', summary: 'Test ticket' });
       rm.addDeployment('4.2.0', { customer: 'CK', env: 'staging', status: 'success' });
       rm.transition('4.2.0', 'cutting');
 
-      // Capture what _saveState writes
-      writeSpy.mockClear();
-      rm._saveState();
+      // Reload from the same DB
+      const audit2 = new Audit({ db });
+      const rm2 = new ReleaseManager(audit2, { db });
 
-      // Extract the JSON that was written
-      expect(writeSpy).toHaveBeenCalled();
-      const writtenJson = writeSpy.mock.calls[0][1];
-      const data = JSON.parse(writtenJson);
+      const reloaded = rm2.get('4.2.0');
+      expect(reloaded).not.toBeNull();
+      expect(reloaded.state).toBe('cutting');
+      expect(reloaded.tickets).toHaveLength(1);
+      expect(reloaded.tickets[0].key).toBe('DEV-100');
+      expect(reloaded.deployments).toHaveLength(1);
+      expect(reloaded.deployments[0].status).toBe('success');
 
-      // Verify structure
-      expect(data.releases).toHaveLength(1);
-      expect(data.releases[0].version).toBe('4.2.0');
-      expect(data.releases[0].tickets).toHaveLength(1);
-      expect(data.releases[0].deployments).toHaveLength(1);
-      expect(data.releases[0].state).toBe('cutting');
-      expect(data.audit).toBeDefined();
-      expect(data.savedAt).toBeTruthy();
+      // Audit should carry entries for created, transition, ticket:added, deployment:added
+      expect(audit2.entries.length).toBeGreaterThanOrEqual(4);
+      const actions = audit2.entries.map(e => e.action);
+      expect(actions).toContain('release:created');
+      expect(actions).toContain('state:transition');
+      expect(actions).toContain('ticket:added');
+      expect(actions).toContain('deployment:added');
+    });
 
-      // Now simulate loading that data into a fresh manager
-      const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(writtenJson);
-      const audit2 = new Audit();
-      const rm2 = new ReleaseManager(audit2);
+    it('composite repo:version key is preserved across reload', () => {
+      rm.create({ version: '4.2.0', repo: 'webplatform' });
+      rm.create({ version: '4.2.0', repo: 'android' });
 
-      expect(rm2.get('4.2.0')).not.toBeNull();
-      expect(rm2.get('4.2.0').state).toBe('cutting');
-      expect(rm2.get('4.2.0').tickets).toHaveLength(1);
+      const audit2 = new Audit({ db });
+      const rm2 = new ReleaseManager(audit2, { db });
 
-      writeSpy.mockRestore();
-      renameSpy.mockRestore();
-      readSpy.mockRestore();
+      expect(rm2.releases.size).toBe(2);
+      expect(rm2.get('4.2.0', 'webplatform')).not.toBeNull();
+      expect(rm2.get('4.2.0', 'android')).not.toBeNull();
+    });
+
+    it('delete removes the row from the DB', () => {
+      rm.create({ version: '4.2.0', repo: 'webplatform' });
+      rm.delete('4.2.0', 'webplatform');
+
+      const row = db.prepare('SELECT * FROM releases WHERE version = ?').get('4.2.0');
+      expect(row).toBeUndefined();
     });
   });
 

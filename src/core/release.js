@@ -1,9 +1,6 @@
-const fs = require('fs');
-const path = require('path');
 const { EventEmitter } = require('events');
 const log = require('./log');
-
-const STATE_FILE = path.join(__dirname, '..', '..', '.nectar-state.json');
+const { getDb } = require('./db');
 
 // ── State machine definition ────────────────────────────────────────────────
 
@@ -17,6 +14,21 @@ const TRANSITIONS = {
   deploying:   ['done', 'stabilizing'], // can regress on deploy failure
   done:        [],
 };
+
+// Fields that the `update` method is allowed to touch.
+const UPDATABLE_FIELDS = ['branch', 'cutFrom', 'cutBy', 'ci', 'risk', 'notes', 'presentationUrl'];
+
+// Fields that are first-class columns in the `releases` table.
+// Anything outside this set (that we also preserve on load) is stashed in `extra`.
+const KNOWN_COLUMNS = [
+  'id','repo','version','state','branch','cutFrom','cutAt','cutBy',
+  'tickets','cherryPicks','ci','risk','comments','deployments','approvals',
+  'notes','presentationUrl',
+  'jiraVersionId','jiraVersionName','jiraReleased','jiraReleaseDate','jiraArchived',
+  'createdAt','updatedAt',
+];
+
+const JSON_COLUMNS = ['tickets','cherryPicks','ci','risk','comments','deployments','approvals'];
 
 // ── Release factory ─────────────────────────────────────────────────────────
 
@@ -54,6 +66,9 @@ function createRelease({ repo, version, branch, cutFrom, cutBy }) {
  * Manages all releases: CRUD, state transitions, persistence.
  * Extends EventEmitter for loose coupling with WebSocket/Slack/etc.
  *
+ * Persistence: rows live in the `releases` SQLite table. An in-memory
+ * Map mirrors the DB for fast lookups; every mutation writes through.
+ *
  * Events emitted:
  *   release:created   (release)
  *   release:updated   (release, changes)
@@ -67,11 +82,16 @@ function createRelease({ repo, version, branch, cutFrom, cutBy }) {
  *   comment:deleted  (release, commentId)
  */
 class ReleaseManager extends EventEmitter {
-  constructor(audit) {
+  /**
+   * @param {Audit} audit
+   * @param {object} [opts]
+   * @param {import('better-sqlite3').Database} [opts.db]
+   */
+  constructor(audit, opts = {}) {
     super();
+    this.db = opts.db || getDb();
     this.releases = new Map(); // id → release object
     this.audit = audit;
-    this._saveTimer = null;
     this._loadState();
   }
 
@@ -121,13 +141,13 @@ class ReleaseManager extends EventEmitter {
     }
     const release = createRelease({ repo, version, branch, cutFrom, cutBy });
     this.releases.set(key, release);
+    this._upsertRow(key, release);
 
     this.audit.record(version, 'release:created', {
       branch: release.branch, cutFrom, cutBy,
     }, cutBy);
 
     this.emit('release:created', release);
-    this._debounceSave();
     return release;
   }
 
@@ -152,9 +172,9 @@ class ReleaseManager extends EventEmitter {
       release.cutAt = release.updatedAt;
     }
 
+    this._upsertRow(this._keyOf(release), release);
     this.audit.record(version, 'state:transition', { from, to: toState }, user);
     this.emit('release:transition', release, { from, to: toState, user });
-    this._debounceSave();
     return release;
   }
 
@@ -164,9 +184,8 @@ class ReleaseManager extends EventEmitter {
     const release = this._getOrThrow(version);
 
     // Only allow updating safe fields
-    const allowed = ['branch', 'cutFrom', 'cutBy', 'ci', 'risk', 'notes', 'presentationUrl'];
     const applied = {};
-    for (const key of allowed) {
+    for (const key of UPDATABLE_FIELDS) {
       if (key in changes) {
         release[key] = changes[key];
         applied[key] = changes[key];
@@ -174,9 +193,9 @@ class ReleaseManager extends EventEmitter {
     }
 
     release.updatedAt = new Date().toISOString();
+    this._upsertRow(this._keyOf(release), release);
     this.audit.record(version, 'release:updated', applied, user);
     this.emit('release:updated', release, applied);
-    this._debounceSave();
     return release;
   }
 
@@ -196,9 +215,9 @@ class ReleaseManager extends EventEmitter {
       });
     }
     release.updatedAt = new Date().toISOString();
+    this._upsertRow(this._keyOf(release), release);
     this.audit.record(version, 'ticket:added', { key: ticket.key }, user);
     this.emit('release:updated', release, { tickets: release.tickets });
-    this._debounceSave();
     return release;
   }
 
@@ -206,9 +225,9 @@ class ReleaseManager extends EventEmitter {
     const release = this._getOrThrow(version);
     release.tickets = release.tickets.filter(t => t.key !== ticketKey);
     release.updatedAt = new Date().toISOString();
+    this._upsertRow(this._keyOf(release), release);
     this.audit.record(version, 'ticket:removed', { key: ticketKey }, user);
     this.emit('release:updated', release, { tickets: release.tickets });
-    this._debounceSave();
     return release;
   }
 
@@ -238,11 +257,11 @@ class ReleaseManager extends EventEmitter {
     }
 
     release.updatedAt = new Date().toISOString();
+    this._upsertRow(this._keyOf(release), release);
     this.audit.record(version, 'cherry-pick:added', {
       sha: cp.sha, ticket: cp.ticket, status: cp.status,
     }, user);
     this.emit('cherry-pick:added', release, cp);
-    this._debounceSave();
     return release;
   }
 
@@ -260,9 +279,9 @@ class ReleaseManager extends EventEmitter {
     release.approvals.push(record);
 
     release.updatedAt = new Date().toISOString();
+    this._upsertRow(this._keyOf(release), release);
     this.audit.record(version, 'approval:added', record, approval.user);
     this.emit('approval:added', release, record);
-    this._debounceSave();
     return release;
   }
 
@@ -279,9 +298,9 @@ class ReleaseManager extends EventEmitter {
     if (!release.comments) release.comments = [];
     release.comments.push(comment);
     release.updatedAt = new Date().toISOString();
+    this._upsertRow(this._keyOf(release), release);
     this.audit.record(version, 'comment:added', { commentId: comment.id }, user);
     this.emit('comment:added', release, comment);
-    this._debounceSave();
     return comment;
   }
 
@@ -293,9 +312,9 @@ class ReleaseManager extends EventEmitter {
     // Authorization (author vs admin) is handled by the API layer
     release.comments.splice(idx, 1);
     release.updatedAt = new Date().toISOString();
+    this._upsertRow(this._keyOf(release), release);
     this.audit.record(version, 'comment:deleted', { commentId }, user);
     this.emit('comment:deleted', release, commentId);
-    this._debounceSave();
     return { ok: true };
   }
 
@@ -324,7 +343,7 @@ class ReleaseManager extends EventEmitter {
     }
 
     release.updatedAt = new Date().toISOString();
-    this._debounceSave();
+    this._upsertRow(this._keyOf(release), release);
     return release;
   }
 
@@ -332,76 +351,39 @@ class ReleaseManager extends EventEmitter {
 
   delete(version, repo = null, user = null) {
     const key = this._key(repo, version);
+    let actualKey = null;
     // Try repo-scoped key first, then plain version
     if (this.releases.has(key)) {
-      this.releases.delete(key);
+      actualKey = key;
     } else if (this.releases.has(version)) {
-      this.releases.delete(version);
+      actualKey = version;
     } else {
       throw new Error(`Release ${version} not found`);
     }
+    this.releases.delete(actualKey);
+    this.db.prepare('DELETE FROM releases WHERE key = ?').run(actualKey);
     this.audit.record(version, 'release:deleted', { repo }, user);
     this.emit('release:deleted', version);
-    this._debounceSave();
   }
 
-  // ── Persistence (mirrors Hive's .hive-state.json pattern) ─────────────
+  // ── Persistence ─────────────────────────────────────────
 
-  _loadState() {
-    try {
-      const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-
-      if (Array.isArray(data.releases)) {
-        for (const r of data.releases) {
-          const key = this._key(r.repo, r.version);
-          this.releases.set(key, r);
-        }
-      }
-
-      if (Array.isArray(data.audit)) {
-        this.audit.loadState(data.audit);
-      }
-
-      log.info(`Loaded state: ${this.releases.size} releases, ${this.audit.entries.length} audit entries`);
-    } catch {
-      // No state file yet — that's fine
-    }
+  /**
+   * Write through a release that was mutated in place.
+   * Prefer the typed mutation methods (addTicket, removeTicket, etc.) —
+   * this hook exists for external callers (jira-sync) that need to bulk
+   * edit release fields and then flush.
+   */
+  persist(release) {
+    if (!release || !release.version) return;
+    release.updatedAt = new Date().toISOString();
+    this._upsertRow(this._keyOf(release), release);
   }
 
-  _saveState() {
-    const data = {
-      releases: Array.from(this.releases.values()),
-      audit: this.audit.toJSON(),
-      savedAt: new Date().toISOString(),
-    };
-    try {
-      const json = JSON.stringify(data, null, 2);
-      const tmpFile = STATE_FILE + '.tmp';
-      fs.writeFileSync(tmpFile, json);
-      fs.renameSync(tmpFile, STATE_FILE);
-    } catch (err) {
-      log.error('Failed to save state:', err.message);
-      // Clean up tmp file if rename failed
-      try { fs.unlinkSync(STATE_FILE + '.tmp'); } catch { /* ok */ }
-    }
-  }
-
-  _debounceSave() {
-    if (this._saveTimer) return;
-    this._saveTimer = setTimeout(() => {
-      this._saveTimer = null;
-      this._saveState();
-    }, 5000);
-  }
-
-  /** Force immediate save (for shutdown). */
-  flush() {
-    if (this._saveTimer) {
-      clearTimeout(this._saveTimer);
-      this._saveTimer = null;
-    }
-    this._saveState();
-  }
+  /**
+   * Backwards-compat no-op — writes are synchronous with SQLite.
+   */
+  flush() { /* no-op */ }
 
   // ── Helpers ─────────────────────────────────────────────
 
@@ -411,6 +393,140 @@ class ReleaseManager extends EventEmitter {
     if (!release) throw new Error(`Release ${version} not found`);
     return release;
   }
+
+  _keyOf(release) {
+    return this._key(release.repo, release.version);
+  }
+
+  _loadState() {
+    try {
+      const rows = this.db.prepare('SELECT * FROM releases').all();
+      for (const row of rows) {
+        const release = rowToRelease(row);
+        this.releases.set(row.key, release);
+      }
+      log.info(`Loaded state: ${this.releases.size} releases, ${this.audit.entries.length} audit entries`);
+    } catch (err) {
+      log.warn(`Failed to load releases: ${err.message}`);
+    }
+  }
+
+  _upsertRow(key, release) {
+    const row = releaseToRow(key, release);
+    this.db.prepare(`
+      INSERT INTO releases (key, id, repo, version, state, branch, cutFrom, cutAt, cutBy,
+                            tickets, cherryPicks, ci, risk, comments, deployments, approvals,
+                            notes, presentationUrl,
+                            jiraVersionId, jiraVersionName, jiraReleased, jiraReleaseDate, jiraArchived,
+                            extra, createdAt, updatedAt)
+      VALUES (@key, @id, @repo, @version, @state, @branch, @cutFrom, @cutAt, @cutBy,
+              @tickets, @cherryPicks, @ci, @risk, @comments, @deployments, @approvals,
+              @notes, @presentationUrl,
+              @jiraVersionId, @jiraVersionName, @jiraReleased, @jiraReleaseDate, @jiraArchived,
+              @extra, @createdAt, @updatedAt)
+      ON CONFLICT(key) DO UPDATE SET
+        id              = excluded.id,
+        repo            = excluded.repo,
+        version         = excluded.version,
+        state           = excluded.state,
+        branch          = excluded.branch,
+        cutFrom         = excluded.cutFrom,
+        cutAt           = excluded.cutAt,
+        cutBy           = excluded.cutBy,
+        tickets         = excluded.tickets,
+        cherryPicks     = excluded.cherryPicks,
+        ci              = excluded.ci,
+        risk            = excluded.risk,
+        comments        = excluded.comments,
+        deployments     = excluded.deployments,
+        approvals       = excluded.approvals,
+        notes           = excluded.notes,
+        presentationUrl = excluded.presentationUrl,
+        jiraVersionId   = excluded.jiraVersionId,
+        jiraVersionName = excluded.jiraVersionName,
+        jiraReleased    = excluded.jiraReleased,
+        jiraReleaseDate = excluded.jiraReleaseDate,
+        jiraArchived    = excluded.jiraArchived,
+        extra           = excluded.extra,
+        updatedAt       = excluded.updatedAt
+    `).run(row);
+  }
+}
+
+// ── Row ↔ object mapping ────────────────────────────────────────────────────
+
+function releaseToRow(key, release) {
+  // Preserve any unknown fields in `extra` so round-trips don't lose data.
+  const extra = {};
+  for (const k of Object.keys(release)) {
+    if (!KNOWN_COLUMNS.includes(k)) extra[k] = release[k];
+  }
+
+  return {
+    key,
+    id: release.id,
+    repo: release.repo ?? null,
+    version: release.version,
+    state: release.state || 'planning',
+    branch: release.branch ?? null,
+    cutFrom: release.cutFrom ?? null,
+    cutAt: release.cutAt ?? null,
+    cutBy: release.cutBy ?? null,
+    tickets: JSON.stringify(release.tickets || []),
+    cherryPicks: JSON.stringify(release.cherryPicks || []),
+    ci: JSON.stringify(release.ci || {}),
+    risk: JSON.stringify(release.risk || {}),
+    comments: JSON.stringify(release.comments || []),
+    deployments: JSON.stringify(release.deployments || []),
+    approvals: JSON.stringify(release.approvals || []),
+    notes: release.notes ?? null,
+    presentationUrl: release.presentationUrl ?? null,
+    jiraVersionId: release.jiraVersionId ?? null,
+    jiraVersionName: release.jiraVersionName ?? null,
+    jiraReleased: release.jiraReleased == null ? null : (release.jiraReleased ? 1 : 0),
+    jiraReleaseDate: release.jiraReleaseDate ?? null,
+    jiraArchived: release.jiraArchived == null ? null : (release.jiraArchived ? 1 : 0),
+    extra: Object.keys(extra).length ? JSON.stringify(extra) : null,
+    createdAt: release.createdAt,
+    updatedAt: release.updatedAt,
+  };
+}
+
+function rowToRelease(row) {
+  const release = {
+    id: row.id,
+    repo: row.repo,
+    version: row.version,
+    state: row.state,
+    branch: row.branch,
+    cutFrom: row.cutFrom,
+    cutAt: row.cutAt,
+    cutBy: row.cutBy,
+    notes: row.notes,
+    presentationUrl: row.presentationUrl,
+    jiraVersionId: row.jiraVersionId,
+    jiraVersionName: row.jiraVersionName,
+    jiraReleased: row.jiraReleased == null ? null : !!row.jiraReleased,
+    jiraReleaseDate: row.jiraReleaseDate,
+    jiraArchived: row.jiraArchived == null ? null : !!row.jiraArchived,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+  for (const col of JSON_COLUMNS) {
+    release[col] = safeParse(row[col], col === 'ci' || col === 'risk' ? {} : []);
+  }
+  // Spread `extra` fields back onto the object
+  if (row.extra) {
+    try {
+      const extra = JSON.parse(row.extra);
+      if (extra && typeof extra === 'object') Object.assign(release, extra);
+    } catch { /* ignore malformed */ }
+  }
+  return release;
+}
+
+function safeParse(value, fallback) {
+  try { return JSON.parse(value); } catch { return fallback; }
 }
 
 // Export state constants for API validation

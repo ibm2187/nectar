@@ -81,9 +81,9 @@ class JiraSync extends EventEmitter {
         for (const release of toDelete) {
           const key = this.releases._key(release.repo, release.version);
           this.releases.releases.delete(key);
+          this.releases.db.prepare('DELETE FROM releases WHERE key = ?').run(key);
         }
         log.info(`Migration: removed ${toDelete.length} bluesummit releases (repo no longer shares versions)`);
-        this.releases._debounceSave();
       }
     }
   }
@@ -396,7 +396,7 @@ class JiraSync extends EventEmitter {
     const pruned = before - release.tickets.length;
     if (pruned > 0) {
       log.info(`JIRA sync: ${versionName} — pruned ${pruned} stale tickets`);
-      this.releases._debounceSave();
+      this.releases.persist(release);
     }
 
     // Emit ticket add/remove details for notification engine

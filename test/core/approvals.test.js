@@ -3,9 +3,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
 const ApprovalEngine = require('../../src/core/approvals');
+const { createTestDb } = require('../../src/core/db');
 
 describe('ApprovalEngine', () => {
-  let audit, releases, approvals;
+  let audit, releases, approvals, db;
 
   const config = {
     approvals: {
@@ -15,10 +16,9 @@ describe('ApprovalEngine', () => {
   };
 
   beforeEach(() => {
-    audit = new Audit();
-    releases = new ReleaseManager(audit);
-    releases.releases.clear();
-    audit.entries = [];
+    db = createTestDb();
+    audit = new Audit({ db });
+    releases = new ReleaseManager(audit, { db });
     approvals = new ApprovalEngine(releases, config);
   });
 

@@ -6,6 +6,7 @@ import express from 'express';
 const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
 const createWebhookRoutes = require('../../src/api/webhooks');
+const { createTestDb } = require('../../src/core/db');
 
 async function request(app, method, path, body, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -44,11 +45,9 @@ describe('Webhook Routes', () => {
   let app, releases, audit;
 
   beforeEach(() => {
-    audit = new Audit();
-    releases = new ReleaseManager(audit);
-    // Clear disk-loaded state
-    releases.releases.clear();
-    audit.entries = [];
+    const db = createTestDb();
+    audit = new Audit({ db });
+    releases = new ReleaseManager(audit, { db });
     const github = {
       isConfigured: () => true,
       cherryPickLabel: 'cherry-pick',

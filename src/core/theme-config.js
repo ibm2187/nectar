@@ -1,15 +1,12 @@
-const fs = require('fs');
-const path = require('path');
 const log = require('./log');
-
-const CONFIG_FILE = path.join(process.cwd(), '.nectar-themes.json');
+const { getDb } = require('./db');
 
 /**
  * Theme configuration for the roadmap view.
  *
  * Maps JIRA component values (customfield_10463) to display-friendly theme
- * names. Persisted to .nectar-themes.json, editable via the API (and
- * eventually a config UI).
+ * names. Persisted as a single row in the theme_config table. Editable via
+ * the API (and eventually a config UI).
  *
  * Shape:
  *   {
@@ -22,7 +19,12 @@ const CONFIG_FILE = path.join(process.cwd(), '.nectar-themes.json');
  *   }
  */
 class ThemeConfig {
-  constructor() {
+  /**
+   * @param {object} [opts]
+   * @param {import('better-sqlite3').Database} [opts.db] — inject a DB (tests)
+   */
+  constructor(opts = {}) {
+    this.db = opts.db || getDb();
     this.themes = [];
     this.unmappedLabel = 'Other';
     this.updatedAt = null;
@@ -31,34 +33,32 @@ class ThemeConfig {
 
   _load() {
     try {
-      if (fs.existsSync(CONFIG_FILE)) {
-        const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-        this.themes = raw.themes || [];
-        this.unmappedLabel = raw.unmappedLabel || 'Other';
-        this.updatedAt = raw.updatedAt || null;
+      const row = this.db.prepare('SELECT themes, unmappedLabel, updatedAt FROM theme_config WHERE id = 1').get();
+      if (row) {
+        this.themes = JSON.parse(row.themes || '[]');
+        this.unmappedLabel = row.unmappedLabel || 'Other';
+        this.updatedAt = row.updatedAt || null;
         log.info(`Theme config loaded: ${this.themes.length} themes`);
       }
     } catch (err) {
-      log.warn('Failed to load theme config:', err.message);
+      log.warn(`Failed to load theme config: ${err.message}`);
     }
   }
 
   _save() {
     this.updatedAt = new Date().toISOString();
-    const data = {
-      themes: this.themes,
+    this.db.prepare(`
+      INSERT INTO theme_config (id, themes, unmappedLabel, updatedAt)
+      VALUES (1, @themes, @unmappedLabel, @updatedAt)
+      ON CONFLICT(id) DO UPDATE SET
+        themes = excluded.themes,
+        unmappedLabel = excluded.unmappedLabel,
+        updatedAt = excluded.updatedAt
+    `).run({
+      themes: JSON.stringify(this.themes),
       unmappedLabel: this.unmappedLabel,
       updatedAt: this.updatedAt,
-    };
-    try {
-      const json = JSON.stringify(data, null, 2);
-      const tmpFile = CONFIG_FILE + '.tmp';
-      fs.writeFileSync(tmpFile, json);
-      fs.renameSync(tmpFile, CONFIG_FILE);
-    } catch (err) {
-      log.error('Failed to save theme config:', err.message);
-      try { fs.unlinkSync(CONFIG_FILE + '.tmp'); } catch { /* ok */ }
-    }
+    });
   }
 
   /**

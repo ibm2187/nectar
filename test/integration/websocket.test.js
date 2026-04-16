@@ -5,14 +5,13 @@ import { EventEmitter } from 'events';
 
 const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
+const { createTestDb } = require('../../src/core/db');
 
 // Create lightweight services once for all tests in this suite
 function createMinimalServices() {
-  const audit = new Audit();
-  const releases = new ReleaseManager(audit);
-  // Clear disk-loaded state
-  releases.releases.clear();
-  audit.entries = [];
+  const db = createTestDb();
+  const audit = new Audit({ db });
+  const releases = new ReleaseManager(audit, { db });
 
   const customerStore = new EventEmitter();
   customerStore.listCustomers = () => [];

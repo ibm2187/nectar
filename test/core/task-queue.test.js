@@ -1,32 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import fs from 'fs';
-import path from 'path';
 
 const TaskQueue = require('../../src/core/task-queue');
-
-const STATE_FILE = path.join(__dirname, '..', '..', '.nectar-tasks.json');
+const { createTestDb } = require('../../src/core/db');
 
 describe('TaskQueue', () => {
   let queue;
-  let originalState;
+  let db;
 
   beforeEach(() => {
-    // Preserve any existing state file
-    if (fs.existsSync(STATE_FILE)) {
-      originalState = fs.readFileSync(STATE_FILE, 'utf8');
-    }
-    queue = new TaskQueue();
-    queue.tasks.clear();
+    db = createTestDb();
+    queue = new TaskQueue({ db });
   });
 
   afterEach(() => {
-    // Restore original state file
-    if (originalState) {
-      fs.writeFileSync(STATE_FILE, originalState);
-    } else if (fs.existsSync(STATE_FILE)) {
-      fs.unlinkSync(STATE_FILE);
-    }
-    originalState = undefined;
     vi.restoreAllMocks();
   });
 
@@ -381,6 +367,35 @@ describe('TaskQueue', () => {
       expect(() => queue.claim(task.id)).toThrow();
       expect(() => queue.complete(task.id, {})).toThrow();
       expect(() => queue.fail(task.id, 'again')).toThrow();
+    });
+  });
+
+  describe('persistence', () => {
+    // TESTING: A new TaskQueue reads prior tasks from the same DB
+    // EXPECTED: Tasks, status, input, output all round-trip
+    it('reloads tasks across instances', () => {
+      const task = queue.createTask('release-notes', { version: '9.9.9' }, 'nukul@test.com');
+      queue.claim(task.id);
+      queue.complete(task.id, { gammaUrl: 'https://example.com', notes: '# Done' });
+
+      const q2 = new TaskQueue({ db });
+      const loaded = q2.getTask(task.id);
+      expect(loaded).toBeTruthy();
+      expect(loaded.status).toBe('completed');
+      expect(loaded.input.version).toBe('9.9.9');
+      expect(loaded.output.gammaUrl).toBe('https://example.com');
+      expect(loaded.requestedBy).toBe('nukul@test.com');
+    });
+
+    // TESTING: Failing a task persists the error
+    it('persists failure error', () => {
+      const task = queue.createTask('release-notes', { version: '1.0' });
+      queue.fail(task.id, 'Superseded by newer task');
+
+      const q2 = new TaskQueue({ db });
+      const loaded = q2.getTask(task.id);
+      expect(loaded.status).toBe('failed');
+      expect(loaded.error).toBe('Superseded by newer task');
     });
   });
 });

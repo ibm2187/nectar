@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 const Audit = require('../../src/core/audit');
+const { createTestDb } = require('../../src/core/db');
 
 describe('Audit', () => {
   let audit;
+  let db;
 
   beforeEach(() => {
-    audit = new Audit();
+    db = createTestDb();
+    audit = new Audit({ db });
   });
 
   it('records an entry with all fields', () => {
@@ -50,6 +53,7 @@ describe('Audit', () => {
   });
 
   it('toJSON caps at 5000 entries', () => {
+    // Push directly to the mirror to avoid 5050 inserts
     for (let i = 0; i < 5050; i++) {
       audit.entries.push({ id: `aud-${i}`, version: 'v', action: 'a', detail: {}, user: null, at: '' });
     }
@@ -61,7 +65,7 @@ describe('Audit', () => {
 
   it('loadState restores entries', () => {
     const entries = [
-      { id: 'aud-1', version: '4.2.0', action: 'test', detail: {}, user: null, at: '' },
+      { id: 'aud-1', version: '4.2.0', action: 'test', detail: {}, user: null, at: '2026-01-01T00:00:00Z' },
     ];
     audit.loadState(entries);
     expect(audit.entries).toHaveLength(1);
@@ -71,5 +75,36 @@ describe('Audit', () => {
   it('loadState handles non-array gracefully', () => {
     audit.loadState('garbage');
     expect(audit.entries).toHaveLength(0);
+  });
+
+  it('entries setter replaces both mirror and DB', () => {
+    audit.record('v1', 'a', {});
+    audit.record('v2', 'b', {});
+    expect(db.prepare('SELECT COUNT(*) AS n FROM audit').get().n).toBe(2);
+
+    audit.entries = [{ id: 'aud-x', version: 'vx', action: 'replaced', detail: {}, user: null, at: '2026-01-01T00:00:00Z' }];
+
+    expect(audit.entries).toHaveLength(1);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM audit').get().n).toBe(1);
+    expect(db.prepare('SELECT action FROM audit').get().action).toBe('replaced');
+  });
+
+  it('record persists to DB', () => {
+    audit.record('4.2.0', 'release:created', { branch: 'x' }, 'me');
+    const rows = db.prepare('SELECT * FROM audit').all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].action).toBe('release:created');
+    expect(JSON.parse(rows[0].detail)).toEqual({ branch: 'x' });
+  });
+
+  it('loads existing entries from DB on construction', () => {
+    audit.record('4.2.0', 'first', { a: 1 });
+    audit.record('4.2.0', 'second', { b: 2 });
+
+    const audit2 = new Audit({ db });
+    expect(audit2.entries).toHaveLength(2);
+    expect(audit2.entries[0].action).toBe('first');
+    expect(audit2.entries[1].action).toBe('second');
+    expect(audit2.entries[1].detail).toEqual({ b: 2 });
   });
 });

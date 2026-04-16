@@ -1,44 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import fs from 'fs';
-import path from 'path';
 
-const STATE_FILE = path.join(__dirname, '..', '..', '.nectar-users.json');
-
-// Must require after potential mocking
 const UserStore = require('../../src/core/user-store');
+const { createTestDb } = require('../../src/core/db');
 
 describe('UserStore', () => {
   let store;
-  let originalState;
+  let db;
   let originalEnv;
 
   beforeEach(() => {
-    // Preserve original env
     originalEnv = { ...process.env };
-
-    // Preserve any existing state file
-    if (fs.existsSync(STATE_FILE)) {
-      originalState = fs.readFileSync(STATE_FILE, 'utf8');
-    }
-
     // Clear NECTAR_ADMINS so tests can set it explicitly
     delete process.env.NECTAR_ADMINS;
 
-    store = new UserStore();
-    store.users.clear();
+    db = createTestDb();
+    store = new UserStore({ db });
   });
 
   afterEach(() => {
-    // Restore env
     process.env = originalEnv;
-
-    // Restore original state file
-    if (originalState) {
-      fs.writeFileSync(STATE_FILE, originalState);
-    } else if (fs.existsSync(STATE_FILE)) {
-      fs.unlinkSync(STATE_FILE);
-    }
-    originalState = undefined;
     vi.restoreAllMocks();
   });
 
@@ -449,11 +429,8 @@ describe('UserStore', () => {
         permissions: { releases: false },
       });
 
-      // Force save
-      store._save();
-
-      // Create a new store that loads from file
-      const store2 = new UserStore();
+      // Create a new store that loads from the same DB
+      const store2 = new UserStore({ db });
 
       expect(store2.getUser('alice@test.com')).not.toBeNull();
       expect(store2.getUser('alice@test.com').name).toBe('Alice');
@@ -463,21 +440,13 @@ describe('UserStore', () => {
     });
 
     it('ensures all permission keys exist on loaded users', () => {
-      // Simulate a state file with a user missing some permission keys
-      const data = {
-        users: [{
-          email: 'old@test.com',
-          name: 'Old User',
-          picture: null,
-          role: 'user',
-          permissions: { releases: true },
-          lastLoginAt: '2026-01-01T00:00:00Z',
-          createdAt: '2026-01-01T00:00:00Z',
-        }],
-      };
-      fs.writeFileSync(STATE_FILE, JSON.stringify(data));
+      // Directly insert a user row with partial permissions to simulate a legacy row
+      db.prepare(`
+        INSERT INTO users (email, name, picture, role, permissions, notificationPrefs, lastLoginAt, createdAt)
+        VALUES ('old@test.com', 'Old User', NULL, 'user', '{"releases":true}', '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+      `).run();
 
-      const store2 = new UserStore();
+      const store2 = new UserStore({ db });
       const user = store2.getUser('old@test.com');
 
       expect(user).not.toBeNull();
@@ -489,21 +458,14 @@ describe('UserStore', () => {
     });
 
     it('backfills notificationPrefs on loaded users that lack it', () => {
-      const data = {
-        users: [{
-          email: 'old@test.com',
-          name: 'Old User',
-          picture: null,
-          role: 'user',
-          permissions: { releases: true, roadmap: true, tickets: true, environments: true, health: true, features: true, integrations: true, issues: true, tasks: true },
-          lastLoginAt: '2026-01-01T00:00:00Z',
-          createdAt: '2026-01-01T00:00:00Z',
-          // no notificationPrefs field
-        }],
-      };
-      fs.writeFileSync(STATE_FILE, JSON.stringify(data));
+      db.prepare(`
+        INSERT INTO users (email, name, picture, role, permissions, notificationPrefs, lastLoginAt, createdAt)
+        VALUES ('old@test.com', 'Old User', NULL, 'user',
+                '{"releases":true,"roadmap":true,"tickets":true,"environments":true,"health":true,"features":true,"integrations":true,"issues":true,"tasks":true}',
+                '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+      `).run();
 
-      const store2 = new UserStore();
+      const store2 = new UserStore({ db });
       const user = store2.getUser('old@test.com');
 
       expect(user.notificationPrefs).toBeDefined();
@@ -511,30 +473,14 @@ describe('UserStore', () => {
       expect(user.notificationPrefs.buildFailures).toBe(true);
     });
 
-    it('handles missing state file gracefully', () => {
-      // Delete the state file if it exists
-      if (fs.existsSync(STATE_FILE)) {
-        fs.unlinkSync(STATE_FILE);
-      }
-
-      // Creating a new store should not throw
-      const store2 = new UserStore();
+    it('handles empty DB gracefully', () => {
+      const store2 = new UserStore({ db: createTestDb() });
       expect(store2.listUsers()).toEqual([]);
     });
 
-    it('handles corrupted state file gracefully', () => {
-      fs.writeFileSync(STATE_FILE, '{invalid json!!!}');
-
-      // Should not throw
-      const store2 = new UserStore();
-      expect(store2.listUsers()).toEqual([]);
-    });
-
-    it('flush calls _save', () => {
+    it('flush is a no-op (writes are synchronous)', () => {
       store.upsertOnLogin('test@test.com', 'Test', null);
-      const spy = vi.spyOn(store, '_save');
-      store.flush();
-      expect(spy).toHaveBeenCalled();
+      expect(() => store.flush()).not.toThrow();
     });
   });
 });

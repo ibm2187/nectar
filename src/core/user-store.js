@@ -1,8 +1,5 @@
-const fs = require('fs');
-const path = require('path');
 const log = require('./log');
-
-const STATE_FILE = path.join(__dirname, '..', '..', '.nectar-users.json');
+const { getDb } = require('./db');
 
 const DEFAULT_NOTIFICATION_PREFS = {
   dailyDigest: true,
@@ -26,7 +23,7 @@ const DEFAULT_PERMISSIONS = {
 const ALL_PERMISSION_KEYS = Object.keys(DEFAULT_PERMISSIONS);
 
 /**
- * UserStore -- manages user records persisted in .nectar-users.json.
+ * UserStore -- manages user records persisted in the `users` SQLite table.
  *
  * Every user who logs in via Google SSO gets recorded here. Admins can
  * then set each user's role and control which pages they can access.
@@ -34,9 +31,18 @@ const ALL_PERMISSION_KEYS = Object.keys(DEFAULT_PERMISSIONS);
  * The NECTAR_ADMINS env var remains the primary admin source. The stored
  * role is a secondary mechanism so admins can promote other users from
  * the UI without restarting the server.
+ *
+ * Architecture: rows live in SQLite; an in-memory Map mirror is kept for
+ * fast lookups and for backwards compatibility with tests that poke
+ * `store.users` directly.
  */
 class UserStore {
-  constructor() {
+  /**
+   * @param {object} [opts]
+   * @param {import('better-sqlite3').Database} [opts.db] — inject a DB (tests)
+   */
+  constructor(opts = {}) {
+    this.db = opts.db || getDb();
     this.users = new Map(); // email -> user record
     this._loadState();
   }
@@ -58,7 +64,7 @@ class UserStore {
       existing.name = name || existing.name;
       existing.picture = picture || existing.picture;
       existing.lastLoginAt = new Date().toISOString();
-      this._save();
+      this._upsertRow(existing);
       return existing;
     }
 
@@ -74,7 +80,7 @@ class UserStore {
     };
 
     this.users.set(key, user);
-    this._save();
+    this._upsertRow(user);
     log.info(`New user recorded: ${key}`);
     return user;
   }
@@ -99,11 +105,10 @@ class UserStore {
   }
 
   /**
-   * Update a user's role and/or permissions.
-   * Only 'role' and 'permissions' fields can be updated.
+   * Update a user's role, permissions, and/or notification prefs.
    *
    * @param {string} email
-   * @param {object} updates - { role?, permissions? }
+   * @param {object} updates - { role?, permissions?, notificationPrefs? }
    * @returns {object|null} updated user or null if not found
    */
   updateUser(email, updates) {
@@ -132,7 +137,7 @@ class UserStore {
       }
     }
 
-    this._save();
+    this._upsertRow(user);
     return user;
   }
 
@@ -214,51 +219,74 @@ class UserStore {
   }
 
   /**
-   * Flush state to disk (called on shutdown).
+   * No-op retained for backward compatibility. Writes are synchronous.
    */
-  flush() {
-    this._save();
-  }
+  flush() { /* no-op with SQLite */ }
 
   // ── Internal ────────────────────────────────────────────
 
+  _upsertRow(user) {
+    this.db.prepare(`
+      INSERT INTO users (email, name, picture, role, permissions, notificationPrefs, lastLoginAt, createdAt)
+      VALUES (@email, @name, @picture, @role, @permissions, @notificationPrefs, @lastLoginAt, @createdAt)
+      ON CONFLICT(email) DO UPDATE SET
+        name              = excluded.name,
+        picture           = excluded.picture,
+        role              = excluded.role,
+        permissions       = excluded.permissions,
+        notificationPrefs = excluded.notificationPrefs,
+        lastLoginAt       = excluded.lastLoginAt
+    `).run({
+      email: user.email,
+      name: user.name ?? null,
+      picture: user.picture ?? null,
+      role: user.role || 'user',
+      permissions: JSON.stringify(user.permissions || {}),
+      notificationPrefs: JSON.stringify(user.notificationPrefs || {}),
+      lastLoginAt: user.lastLoginAt ?? null,
+      createdAt: user.createdAt,
+    });
+  }
+
   _loadState() {
     try {
-      if (fs.existsSync(STATE_FILE)) {
-        const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-        if (Array.isArray(data.users)) {
-          for (const user of data.users) {
-            // Ensure permissions object has all keys
-            if (!user.permissions) user.permissions = { ...DEFAULT_PERMISSIONS };
-            for (const pKey of ALL_PERMISSION_KEYS) {
-              if (typeof user.permissions[pKey] !== 'boolean') {
-                user.permissions[pKey] = true;
-              }
-            }
-            // Backfill notification preferences
-            if (!user.notificationPrefs) user.notificationPrefs = { ...DEFAULT_NOTIFICATION_PREFS };
-            for (const nKey of ALL_NOTIFICATION_PREF_KEYS) {
-              if (typeof user.notificationPrefs[nKey] !== 'boolean') {
-                user.notificationPrefs[nKey] = DEFAULT_NOTIFICATION_PREFS[nKey];
-              }
-            }
-            this.users.set(user.email.toLowerCase(), user);
-          }
+      const rows = this.db.prepare('SELECT * FROM users').all();
+      for (const row of rows) {
+        const permissions = safeParseObj(row.permissions, DEFAULT_PERMISSIONS);
+        // Fill in any missing permission keys with default true
+        for (const pKey of ALL_PERMISSION_KEYS) {
+          if (typeof permissions[pKey] !== 'boolean') permissions[pKey] = true;
         }
-        log.info(`Loaded ${this.users.size} users`);
+
+        const notificationPrefs = safeParseObj(row.notificationPrefs, DEFAULT_NOTIFICATION_PREFS);
+        for (const nKey of ALL_NOTIFICATION_PREF_KEYS) {
+          if (typeof notificationPrefs[nKey] !== 'boolean') notificationPrefs[nKey] = DEFAULT_NOTIFICATION_PREFS[nKey];
+        }
+
+        this.users.set(row.email.toLowerCase(), {
+          email: row.email,
+          name: row.name,
+          picture: row.picture,
+          role: row.role,
+          permissions,
+          notificationPrefs,
+          lastLoginAt: row.lastLoginAt,
+          createdAt: row.createdAt,
+        });
       }
+      log.info(`Loaded ${this.users.size} users`);
     } catch (err) {
       log.error(`Failed to load users: ${err.message}`);
     }
   }
+}
 
-  _save() {
-    try {
-      const data = { users: Array.from(this.users.values()) };
-      fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
-    } catch (err) {
-      log.error(`Failed to save users: ${err.message}`);
-    }
+function safeParseObj(value, fallback) {
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return parsed && typeof parsed === 'object' ? parsed : { ...fallback };
+  } catch {
+    return { ...fallback };
   }
 }
 

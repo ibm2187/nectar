@@ -1,19 +1,18 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 
 const ThemeConfig = require('../../src/core/theme-config');
+const { createTestDb } = require('../../src/core/db');
 
 describe('ThemeConfig', () => {
   let tc;
+  let db;
 
   beforeEach(() => {
-    tc = new ThemeConfig();
-    // Reset to clean state regardless of what was loaded from disk
-    tc.themes = [];
-    tc.unmappedLabel = 'Other';
-    tc.updatedAt = null;
+    db = createTestDb();
+    tc = new ThemeConfig({ db });
   });
 
-  it('starts with defaults after reset', () => {
+  it('starts with defaults on an empty DB', () => {
     expect(tc.themes).toEqual([]);
     expect(tc.unmappedLabel).toBe('Other');
   });
@@ -80,19 +79,23 @@ describe('ThemeConfig', () => {
     expect(cfg.unmappedLabel).toBe('Other');
   });
 
-  it('autoGenerate persists to disk', () => {
-    const fs = require('fs');
-    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
-    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {});
+  it('autoGenerate persists to DB', () => {
+    tc.autoGenerate(['RCM - Billing', 'RCM - Payroll']);
+    // Reopen from same DB — should reload the saved themes
+    const tc2 = new ThemeConfig({ db });
+    expect(tc2.themes.length).toBeGreaterThan(0);
+    expect(tc2.themes.find(t => t.name === 'RCM')).toBeDefined();
+  });
 
-    tc.autoGenerate(['RCM - Billing']);
-    expect(writeSpy).toHaveBeenCalled();
-    expect(renameSpy).toHaveBeenCalled();
-    // Verify tmp file pattern
-    expect(writeSpy.mock.calls[0][0]).toMatch(/\.tmp$/);
-
-    writeSpy.mockRestore();
-    renameSpy.mockRestore();
+  it('persists full config across instances', () => {
+    tc.setConfig({
+      themes: [{ name: 'Custom', components: ['foo'], icon: '🧩' }],
+      unmappedLabel: 'Misc',
+    });
+    const tc2 = new ThemeConfig({ db });
+    expect(tc2.themes).toEqual([{ name: 'Custom', components: ['foo'], icon: '🧩' }]);
+    expect(tc2.unmappedLabel).toBe('Misc');
+    expect(tc2.updatedAt).toBeTruthy();
   });
 
   describe('suggestThemes (static)', () => {

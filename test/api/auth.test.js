@@ -192,8 +192,8 @@ describe('Auth', () => {
       process.env.ENABLE_GOOGLE_SSO = 'true';
 
       const ApiKeyManager = require('../../src/core/api-keys');
-      const apiKeys = new ApiKeyManager();
-      apiKeys.keys.clear();
+      const { createTestDb } = require('../../src/core/db');
+      const apiKeys = new ApiKeyManager({ db: createTestDb() });
       const { rawKey } = apiKeys.create('test-key');
 
       const { createAuthMiddleware } = require('../../src/api/auth');

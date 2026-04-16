@@ -3,9 +3,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
 const Discovery = require('../../src/core/discovery');
+const { createTestDb } = require('../../src/core/db');
 
 describe('Discovery', () => {
-  let audit, releases, discovery;
+  let audit, releases, discovery, db;
   let mockRepoManager;
 
   const config = {
@@ -28,10 +29,9 @@ describe('Discovery', () => {
   };
 
   beforeEach(() => {
-    audit = new Audit();
-    releases = new ReleaseManager(audit);
-    releases.releases.clear();
-    audit.entries = [];
+    db = createTestDb();
+    audit = new Audit({ db });
+    releases = new ReleaseManager(audit, { db });
 
     mockRepoManager = {
       fetch: vi.fn().mockResolvedValue(undefined),

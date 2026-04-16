@@ -1,19 +1,17 @@
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const { EventEmitter } = require('events');
 const log = require('./log');
-
-const STATE_FILE = path.join(__dirname, '..', '..', '.nectar-tasks.json');
+const { getDb } = require('./db');
 
 const VALID_TYPES = ['release-notes', 'release-presentation'];
+// Exposed for anyone who wants to introspect available statuses.
 const VALID_STATUSES = ['pending', 'in-progress', 'completed', 'failed'];
 
 /**
  * TaskQueue — persistent async task queue for Hive-executed work.
  *
  * Tasks flow through: pending → in-progress → completed | failed
- * Persisted to .nectar-tasks.json.
+ * Persisted to the `tasks` SQLite table.
  *
  * Events:
  *   task:created    (task)
@@ -22,10 +20,16 @@ const VALID_STATUSES = ['pending', 'in-progress', 'completed', 'failed'];
  *   task:failed     (task)
  */
 class TaskQueue extends EventEmitter {
-  constructor() {
+  /**
+   * @param {object} [opts]
+   * @param {import('better-sqlite3').Database} [opts.db] — inject a DB (tests)
+   */
+  constructor(opts = {}) {
     super();
-    this.tasks = new Map(); // id → task
-    this._saveTimer = null;
+    this.db = opts.db || getDb();
+    // In-memory mirror keyed by id. Kept in sync on every mutation so
+    // tests that inspect `queue.tasks.get(id)` still work.
+    this.tasks = new Map();
     this._loadState();
   }
 
@@ -61,8 +65,8 @@ class TaskQueue extends EventEmitter {
       error: null,
     };
 
+    this._insert(task);
     this.tasks.set(id, task);
-    this._save();
     this.emit('task:created', task);
     log.info(`Task created: ${id} (${type}) by ${requestedBy || 'anonymous'}`);
     return { ...task };
@@ -94,18 +98,14 @@ class TaskQueue extends EventEmitter {
 
     task.status = 'in-progress';
     task.startedAt = new Date().toISOString();
-    this._save();
+    this._update(task);
     this.emit('task:claimed', task);
-    log.info(`Task claimed: ${taskId} (caller: ${new Error().stack.split('\n')[2].trim()})`);
+    log.info(`Task claimed: ${taskId}`);
     return { ...task };
   }
 
   /**
    * Complete a task — set status, output, and completedAt.
-   * @param {string} taskId
-   * @param {object} output - Task output (gammaUrl, notes, perTicketSummaries, etc.)
-   * @returns {object} The updated task
-   * @throws {Error} If task not found or not in-progress
    */
   complete(taskId, output) {
     const task = this.tasks.get(taskId);
@@ -117,7 +117,7 @@ class TaskQueue extends EventEmitter {
     task.status = 'completed';
     task.output = output || {};
     task.completedAt = new Date().toISOString();
-    this._save();
+    this._update(task);
     this.emit('task:completed', task);
     log.info(`Task completed: ${taskId}`);
     return { ...task };
@@ -125,10 +125,6 @@ class TaskQueue extends EventEmitter {
 
   /**
    * Fail a task — set status and error message.
-   * @param {string} taskId
-   * @param {string} error - Error message
-   * @returns {object} The updated task
-   * @throws {Error} If task not found or not in-progress
    */
   fail(taskId, error) {
     const task = this.tasks.get(taskId);
@@ -140,7 +136,7 @@ class TaskQueue extends EventEmitter {
     task.status = 'failed';
     task.error = error || 'Unknown error';
     task.completedAt = new Date().toISOString();
-    this._save();
+    this._update(task);
     this.emit('task:failed', task);
     log.warn(`Task failed: ${taskId} — ${error}`);
     return { ...task };
@@ -148,8 +144,6 @@ class TaskQueue extends EventEmitter {
 
   /**
    * Get a single task by ID.
-   * @param {string} taskId
-   * @returns {object|null}
    */
   getTask(taskId) {
     const task = this.tasks.get(taskId);
@@ -158,22 +152,12 @@ class TaskQueue extends EventEmitter {
 
   /**
    * List tasks with optional filters.
-   * @param {object} [filters]
-   * @param {string} [filters.status] - Filter by status
-   * @param {string} [filters.type] - Filter by type
-   * @param {number} [filters.limit] - Max results (default 100)
-   * @param {number} [filters.offset] - Skip first N results (default 0)
-   * @returns {{ tasks: object[], total: number, hasMore: boolean }}
    */
   listTasks(filters = {}) {
     let tasks = Array.from(this.tasks.values());
 
-    if (filters.status) {
-      tasks = tasks.filter(t => t.status === filters.status);
-    }
-    if (filters.type) {
-      tasks = tasks.filter(t => t.type === filters.type);
-    }
+    if (filters.status) tasks = tasks.filter(t => t.status === filters.status);
+    if (filters.type) tasks = tasks.filter(t => t.type === filters.type);
 
     // Sort newest first
     tasks.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -183,19 +167,11 @@ class TaskQueue extends EventEmitter {
     const limit = filters.limit || 100;
     const sliced = tasks.slice(offset, offset + limit).map(t => ({ ...t }));
 
-    return {
-      tasks: sliced,
-      total,
-      hasMore: offset + limit < total,
-    };
+    return { tasks: sliced, total, hasMore: offset + limit < total };
   }
 
   /**
    * Find an existing task for a given release version and type.
-   * Useful to prevent creating duplicates.
-   * @param {string} type
-   * @param {string} version - Release version from input
-   * @returns {object|null} The most recent matching task, or null
    */
   findByRelease(type, version) {
     const matching = Array.from(this.tasks.values())
@@ -205,42 +181,87 @@ class TaskQueue extends EventEmitter {
   }
 
   /**
-   * Flush state to disk immediately (for shutdown).
+   * Backwards-compat no-op — writes are synchronous with SQLite.
    */
-  flush() {
-    if (this._saveTimer) {
-      clearTimeout(this._saveTimer);
-      this._saveTimer = null;
-    }
-    this._save();
-  }
+  flush() { /* no-op */ }
 
   // ── Internal ────────────────────────────────────────────
 
+  _insert(task) {
+    this.db.prepare(`
+      INSERT INTO tasks (id, type, status, input, output, requestedBy, slackUserId,
+                         createdAt, startedAt, completedAt, error)
+      VALUES (@id, @type, @status, @input, @output, @requestedBy, @slackUserId,
+              @createdAt, @startedAt, @completedAt, @error)
+    `).run(toRow(task));
+  }
+
+  _update(task) {
+    this.db.prepare(`
+      UPDATE tasks SET
+        type = @type,
+        status = @status,
+        input = @input,
+        output = @output,
+        requestedBy = @requestedBy,
+        slackUserId = @slackUserId,
+        startedAt = @startedAt,
+        completedAt = @completedAt,
+        error = @error
+      WHERE id = @id
+    `).run(toRow(task));
+  }
+
   _loadState() {
     try {
-      if (fs.existsSync(STATE_FILE)) {
-        const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-        if (Array.isArray(data.tasks)) {
-          for (const task of data.tasks) {
-            this.tasks.set(task.id, task);
-          }
-        }
-        log.info(`Loaded ${this.tasks.size} tasks`);
+      const rows = this.db.prepare('SELECT * FROM tasks').all();
+      for (const row of rows) {
+        this.tasks.set(row.id, fromRow(row));
       }
+      log.info(`Loaded ${this.tasks.size} tasks`);
     } catch (err) {
       log.error(`Failed to load tasks: ${err.message}`);
     }
   }
-
-  _save() {
-    try {
-      const data = { tasks: Array.from(this.tasks.values()) };
-      fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
-    } catch (err) {
-      log.error(`Failed to save tasks: ${err.message}`);
-    }
-  }
 }
+
+function toRow(task) {
+  return {
+    id: task.id,
+    type: task.type,
+    status: task.status,
+    input: JSON.stringify(task.input || {}),
+    output: task.output == null ? null : JSON.stringify(task.output),
+    requestedBy: task.requestedBy ?? null,
+    slackUserId: task.slackUserId ?? null,
+    createdAt: task.createdAt,
+    startedAt: task.startedAt ?? null,
+    completedAt: task.completedAt ?? null,
+    error: task.error ?? null,
+  };
+}
+
+function fromRow(row) {
+  return {
+    id: row.id,
+    type: row.type,
+    status: row.status,
+    input: safeParse(row.input, {}),
+    output: row.output == null ? null : safeParse(row.output, null),
+    requestedBy: row.requestedBy,
+    slackUserId: row.slackUserId,
+    createdAt: row.createdAt,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt,
+    error: row.error,
+  };
+}
+
+function safeParse(value, fallback) {
+  try { return JSON.parse(value); } catch { return fallback; }
+}
+
+TaskQueue.VALID_TYPES = VALID_TYPES;
+TaskQueue.VALID_STATUSES = VALID_STATUSES;
 
 module.exports = TaskQueue;

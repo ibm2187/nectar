@@ -3,9 +3,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
 const RiskAssessor = require('../../src/core/risk');
+const { createTestDb } = require('../../src/core/db');
 
 describe('RiskAssessor', () => {
-  let audit, releases, risk;
+  let audit, releases, risk, db;
   let mockGithub, mockJenkins;
 
   const config = {
@@ -26,10 +27,9 @@ describe('RiskAssessor', () => {
   };
 
   beforeEach(() => {
-    audit = new Audit();
-    releases = new ReleaseManager(audit);
-    releases.releases.clear();
-    audit.entries = [];
+    db = createTestDb();
+    audit = new Audit({ db });
+    releases = new ReleaseManager(audit, { db });
     mockGithub = {
       isConfigured: () => true,
       compareBranches: vi.fn(),

@@ -7,6 +7,7 @@ const ReleaseManager = require('../../src/core/release');
 const ApprovalEngine = require('../../src/core/approvals');
 const ThemeConfig = require('../../src/core/theme-config');
 const createRoutes = require('../../src/api/routes');
+const { createTestDb } = require('../../src/core/db');
 
 const CANNED = {
   customers: [
@@ -24,13 +25,10 @@ const CANNED = {
 };
 
 function createBaseServices() {
-  const audit = new Audit();
-  const releases = new ReleaseManager(audit);
-  releases.releases.clear();
-  audit.entries = [];
-  const themeConfig = new ThemeConfig();
-  themeConfig.themes = [];
-  themeConfig.unmappedLabel = 'Other';
+  const db = createTestDb();
+  const audit = new Audit({ db });
+  const releases = new ReleaseManager(audit, { db });
+  const themeConfig = new ThemeConfig({ db });
 
   return {
     releases,

@@ -1,13 +1,33 @@
-const fs = require('fs');
-const path = require('path');
+const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const log = require('./log');
+const { getDb } = require('./db');
 
-const STATE_FILE = path.join(__dirname, '..', '..', '.nectar-customers.json');
+// ── Column contracts ────────────────────────────────────────────────────────
+
+const CUSTOMER_COLUMNS = [
+  'id','name','domain','domainPrefix','integrations','hasFranchises','active',
+  'syncedFrom','lastSyncedAt','notes','createdAt','updatedAt',
+];
+
+const ENVIRONMENT_COLUMNS = [
+  'id','customerId','name','tier','franchise','currentVersion','currentBranch','reachable',
+  'lastChecked','lastError','health','features','integrations','upgrades',
+  'lastHealthCheckedAt','lastFeaturesCheckedAt','lastIntegrationsCheckedAt','lastUpgradesCheckedAt',
+  'disabled','notes','versionSetManually','versionSetBy','versionSetAt','createdAt','updatedAt',
+];
+
+const ENV_JSON_FIELDS = ['health','features','integrations','upgrades'];
+const ENV_BOOL_FIELDS = ['franchise','reachable','disabled','versionSetManually'];
+const CUST_BOOL_FIELDS = ['hasFranchises','active'];
 
 /**
  * CustomerStore — manages customers, environments, deployments, and mobile releases.
- * Persists to its own state file (.nectar-customers.json) separate from release state.
+ * Persists to the SQLite tables: customers, environments, deployments, mobile.
+ *
+ * Deployments are NOT mirrored in memory — they're queried on demand.
+ * This is the key win: we can have 100k+ deployment rows without loading
+ * them all at startup.
  *
  * Events:
  *   customer:updated       (customer)
@@ -17,13 +37,20 @@ const STATE_FILE = path.join(__dirname, '..', '..', '.nectar-customers.json');
  *   scan:completed         (results)
  */
 class CustomerStore extends EventEmitter {
-  constructor() {
+  /**
+   * @param {object} [opts]
+   * @param {import('better-sqlite3').Database} [opts.db]
+   */
+  constructor(opts = {}) {
     super();
-    this.customers = new Map();         // id → customer
-    this.environments = new Map();      // id → environment
-    this.deployments = [];               // chronological
-    this.mobile = new Map();             // id → mobile release record
-    this._saveTimer = null;
+    this.db = opts.db || getDb();
+    this.customers = new Map();    // id → customer
+    this.environments = new Map(); // id → environment
+    this.mobile = new Map();       // id → mobile release record
+    // Legacy: some callers (tests, older code) expect this to be an array.
+    // We expose it as a computed list, but also let tests reset it with [].
+    // Since deployments are queried on demand, this stays empty by default.
+    this.deployments = [];
     this._loadState();
   }
 
@@ -42,17 +69,15 @@ class CustomerStore extends EventEmitter {
   upsertCustomer(customer) {
     const existing = this.customers.get(customer.id);
     if (existing) {
-      // Preserve manual fields; update synced fields only
       const merged = {
         ...existing,
         ...customer,
-        // Never override manual overrides
         notes: existing.notes ?? customer.notes,
         updatedAt: new Date().toISOString(),
       };
       this.customers.set(customer.id, merged);
+      this._upsertCustomerRow(merged);
       this.emit('customer:updated', merged);
-      this._debounceSave();
       return merged;
     }
     const created = {
@@ -61,8 +86,8 @@ class CustomerStore extends EventEmitter {
       updatedAt: new Date().toISOString(),
     };
     this.customers.set(customer.id, created);
+    this._upsertCustomerRow(created);
     this.emit('customer:updated', created);
-    this._debounceSave();
     return created;
   }
 
@@ -97,8 +122,8 @@ class CustomerStore extends EventEmitter {
         updatedAt: new Date().toISOString(),
       };
       this.environments.set(env.id, merged);
+      this._upsertEnvRow(merged);
       this.emit('environment:updated', merged);
-      this._debounceSave();
       return merged;
     }
     const created = {
@@ -107,8 +132,8 @@ class CustomerStore extends EventEmitter {
       updatedAt: new Date().toISOString(),
     };
     this.environments.set(env.id, created);
+    this._upsertEnvRow(created);
     this.emit('environment:updated', created);
-    this._debounceSave();
     return created;
   }
 
@@ -142,9 +167,8 @@ class CustomerStore extends EventEmitter {
       env.versionSetBy = null;
       env.versionSetAt = null;
     }
-    // If poll failed and we have no manual value, clear currentVersion? No —
-    // leave the last-known value so the UI doesn't lose data on transient errors.
 
+    this._upsertEnvRow(env);
     this.emit('environment:updated', env);
 
     // If version changed, record a deployment
@@ -153,74 +177,59 @@ class CustomerStore extends EventEmitter {
       this.emit('environment:version', env, { old: oldVersion, new: version });
     }
 
-    this._debounceSave();
     return env;
   }
 
   /**
    * Update an environment's health check data (from poller).
-   * Stores the overall health status, individual service checks, summary
-   * counts, response time, and timestamp.
-   *
-   * @param {string} envId
-   * @param {object} healthData - { status, checks, summary, responseTimeMs, checkedAt }
    */
   updateHealth(envId, healthData) {
     const env = this.environments.get(envId);
     if (!env) return null;
     env.health = {
-      status: healthData.status,           // 'healthy' | 'degraded' | 'unhealthy' | 'unreachable'
-      checks: healthData.checks || {},     // { criticalFunctionality, externalServices, integrations }
-      summary: healthData.summary || {},   // { totalChecks, passed, failed, degraded, skipped }
+      status: healthData.status,
+      checks: healthData.checks || {},
+      summary: healthData.summary || {},
       responseTimeMs: healthData.responseTimeMs || null,
       checkedAt: healthData.checkedAt || new Date().toISOString(),
     };
     env.lastHealthCheckedAt = env.health.checkedAt;
     env.updatedAt = env.health.checkedAt;
+    this._upsertEnvRow(env);
     this.emit('environment:updated', env);
-    this._debounceSave();
     return env;
   }
 
-  /**
-   * Update an environment's feature flags data (from poller).
-   */
   updateFeatures(envId, features) {
     const env = this.environments.get(envId);
     if (!env) return null;
     env.features = features;
     env.lastFeaturesCheckedAt = new Date().toISOString();
     env.updatedAt = env.lastFeaturesCheckedAt;
+    this._upsertEnvRow(env);
     this.emit('environment:updated', env);
-    this._debounceSave();
     return env;
   }
 
-  /**
-   * Update an environment's integrations data (from poller).
-   */
   updateIntegrations(envId, integrations) {
     const env = this.environments.get(envId);
     if (!env) return null;
     env.integrations = integrations;
     env.lastIntegrationsCheckedAt = new Date().toISOString();
     env.updatedAt = env.lastIntegrationsCheckedAt;
+    this._upsertEnvRow(env);
     this.emit('environment:updated', env);
-    this._debounceSave();
     return env;
   }
 
-  /**
-   * Update an environment's upgrades data (from poller).
-   */
   updateUpgrades(envId, upgrades) {
     const env = this.environments.get(envId);
     if (!env) return null;
     env.upgrades = upgrades;
     env.lastUpgradesCheckedAt = new Date().toISOString();
     env.updatedAt = env.lastUpgradesCheckedAt;
+    this._upsertEnvRow(env);
     this.emit('environment:updated', env);
-    this._debounceSave();
     return env;
   }
 
@@ -240,14 +249,13 @@ class CustomerStore extends EventEmitter {
     env.versionSetAt = new Date().toISOString();
     env.updatedAt = env.versionSetAt;
 
+    this._upsertEnvRow(env);
     this.emit('environment:updated', env);
 
     if (version && version !== oldVersion) {
       this._recordDeployment(env, oldVersion, 'manual');
       this.emit('environment:version', env, { old: oldVersion, new: version });
     }
-
-    this._debounceSave();
     return env;
   }
 
@@ -275,13 +283,17 @@ class CustomerStore extends EventEmitter {
   // ── Deployments ─────────────────────────────────────
 
   _recordDeployment(env, previousVersion, source = 'api-poll') {
-    // Mark previous active deployment as ended
-    const active = this.deployments.find(d => d.environmentId === env.id && !d.endedAt);
     const now = new Date().toISOString();
-    if (active) active.endedAt = now;
+
+    // Mark previous active deployment as ended
+    this.db.prepare(
+      'UPDATE deployments SET endedAt = ? WHERE environmentId = ? AND endedAt IS NULL'
+    ).run(now, env.id);
 
     const deployment = {
-      id: `dep-${env.id}-${Date.now()}`,
+      // Include a random suffix so multiple deployments within the same
+      // millisecond (common in tests and bulk operations) don't collide.
+      id: `dep-${env.id}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
       environmentId: env.id,
       customerId: env.customerId,
       version: env.currentVersion,
@@ -291,7 +303,13 @@ class CustomerStore extends EventEmitter {
       endedAt: null,
       source,
     };
-    this.deployments.push(deployment);
+
+    this.db.prepare(`
+      INSERT INTO deployments (id, environmentId, customerId, version, branch, previousVersion,
+                               detectedAt, endedAt, source, datadogImpact)
+      VALUES (@id, @environmentId, @customerId, @version, @branch, @previousVersion,
+              @detectedAt, @endedAt, @source, NULL)
+    `).run(deployment);
 
     // Asynchronously capture Datadog deployment impact if configured.
     // Fire-and-forget: failures are logged but do not block deployment recording.
@@ -299,7 +317,7 @@ class CustomerStore extends EventEmitter {
       const envTag = `env:${env.customerId}`;
       this._datadogClient.getDeploymentImpact(envTag, now)
         .then(impact => {
-          deployment.datadogImpact = {
+          const impactRecord = {
             capturedAt: new Date().toISOString(),
             window: impact.window,
             errorRate: impact.errorRate,
@@ -307,29 +325,67 @@ class CustomerStore extends EventEmitter {
             throughput: impact.throughput,
             alertsTriggered: impact.alertsTriggered,
           };
-          this._debounceSave();
+          deployment.datadogImpact = impactRecord;
+          this.db.prepare('UPDATE deployments SET datadogImpact = ? WHERE id = ?')
+            .run(JSON.stringify(impactRecord), deployment.id);
         })
         .catch(err => {
           log.warn(`Datadog impact capture failed for ${deployment.id}: ${err.message}`);
         });
     }
 
-    // Cap deployment history to keep file size reasonable
-    if (this.deployments.length > 10000) {
-      this.deployments = this.deployments.slice(-5000);
-    }
-
     this.emit('deployment:recorded', deployment);
     return deployment;
   }
 
+  /**
+   * Query deployments from the DB. Unlike the old version this does NOT
+   * scan an in-memory array — the DB does the filtering, sorting, and
+   * (optional) paging.
+   *
+   * @param {object} filter
+   * @param {string} [filter.environmentId]
+   * @param {string} [filter.customerId]
+   * @param {string} [filter.version]
+   * @param {boolean} [filter.active]     — endedAt IS NULL
+   * @param {number}  [filter.limit]
+   * @param {number}  [filter.offset]
+   * @returns {Array<object>}
+   */
   listDeployments(filter = {}) {
-    let list = [...this.deployments];
-    if (filter.environmentId) list = list.filter(d => d.environmentId === filter.environmentId);
-    if (filter.customerId) list = list.filter(d => d.customerId === filter.customerId);
-    if (filter.version) list = list.filter(d => d.version === filter.version);
-    if (filter.active) list = list.filter(d => !d.endedAt);
-    return list.sort((a, b) => b.detectedAt.localeCompare(a.detectedAt));
+    const clauses = [];
+    const params = {};
+    if (filter.environmentId) { clauses.push('environmentId = @environmentId'); params.environmentId = filter.environmentId; }
+    if (filter.customerId)    { clauses.push('customerId = @customerId');       params.customerId = filter.customerId; }
+    if (filter.version)       { clauses.push('version = @version');             params.version = filter.version; }
+    if (filter.active)        { clauses.push('endedAt IS NULL'); }
+
+    let sql = 'SELECT * FROM deployments';
+    if (clauses.length) sql += ' WHERE ' + clauses.join(' AND ');
+    sql += ' ORDER BY detectedAt DESC';
+    if (filter.limit)  { sql += ' LIMIT @limit';  params.limit = filter.limit; }
+    if (filter.offset) { sql += ' OFFSET @offset'; params.offset = filter.offset; }
+
+    const rows = Object.keys(params).length
+      ? this.db.prepare(sql).all(params)
+      : this.db.prepare(sql).all();
+    return rows.map(deploymentFromRow);
+  }
+
+  /**
+   * Count deployments matching a filter. Handy for pagination.
+   */
+  countDeployments(filter = {}) {
+    const clauses = [];
+    const params = {};
+    if (filter.environmentId) { clauses.push('environmentId = @environmentId'); params.environmentId = filter.environmentId; }
+    if (filter.customerId)    { clauses.push('customerId = @customerId');       params.customerId = filter.customerId; }
+    if (filter.version)       { clauses.push('version = @version');             params.version = filter.version; }
+    if (filter.active)        { clauses.push('endedAt IS NULL'); }
+
+    let sql = 'SELECT COUNT(*) AS n FROM deployments';
+    if (clauses.length) sql += ' WHERE ' + clauses.join(' AND ');
+    return (Object.keys(params).length ? this.db.prepare(sql).get(params) : this.db.prepare(sql).get()).n;
   }
 
   // ── Mobile releases ─────────────────────────────────
@@ -339,12 +395,21 @@ class CustomerStore extends EventEmitter {
   }
 
   upsertMobile(record) {
-    this.mobile.set(record.id, {
+    const updated = {
       ...record,
       updatedAt: new Date().toISOString(),
+    };
+    this.mobile.set(record.id, updated);
+    this.db.prepare(`
+      INSERT INTO mobile (id, data, updatedAt)
+      VALUES (@id, @data, @updatedAt)
+      ON CONFLICT(id) DO UPDATE SET data = excluded.data, updatedAt = excluded.updatedAt
+    `).run({
+      id: updated.id,
+      data: JSON.stringify(updated),
+      updatedAt: updated.updatedAt,
     });
-    this._debounceSave();
-    return this.mobile.get(record.id);
+    return updated;
   }
 
   // ── Scan integration ────────────────────────────────
@@ -378,61 +443,241 @@ class CustomerStore extends EventEmitter {
 
   // ── Persistence ─────────────────────────────────────
 
+  /**
+   * Backwards-compat no-op — writes are synchronous with SQLite.
+   */
+  flush() { /* no-op */ }
+
+  // ── Internal ────────────────────────────────────────
+
+  _upsertCustomerRow(c) {
+    this.db.prepare(`
+      INSERT INTO customers (id, name, domain, domainPrefix, integrations, hasFranchises, active,
+                             syncedFrom, lastSyncedAt, notes, extra, createdAt, updatedAt)
+      VALUES (@id, @name, @domain, @domainPrefix, @integrations, @hasFranchises, @active,
+              @syncedFrom, @lastSyncedAt, @notes, @extra, @createdAt, @updatedAt)
+      ON CONFLICT(id) DO UPDATE SET
+        name          = excluded.name,
+        domain        = excluded.domain,
+        domainPrefix  = excluded.domainPrefix,
+        integrations  = excluded.integrations,
+        hasFranchises = excluded.hasFranchises,
+        active        = excluded.active,
+        syncedFrom    = excluded.syncedFrom,
+        lastSyncedAt  = excluded.lastSyncedAt,
+        notes         = excluded.notes,
+        extra         = excluded.extra,
+        updatedAt     = excluded.updatedAt
+    `).run(customerToRow(c));
+  }
+
+  _upsertEnvRow(e) {
+    this.db.prepare(`
+      INSERT INTO environments (
+        id, customerId, name, tier, franchise, currentVersion, currentBranch, reachable,
+        lastChecked, lastError, health, features, integrations, upgrades,
+        lastHealthCheckedAt, lastFeaturesCheckedAt, lastIntegrationsCheckedAt, lastUpgradesCheckedAt,
+        disabled, notes, versionSetManually, versionSetBy, versionSetAt,
+        extra, createdAt, updatedAt
+      ) VALUES (
+        @id, @customerId, @name, @tier, @franchise, @currentVersion, @currentBranch, @reachable,
+        @lastChecked, @lastError, @health, @features, @integrations, @upgrades,
+        @lastHealthCheckedAt, @lastFeaturesCheckedAt, @lastIntegrationsCheckedAt, @lastUpgradesCheckedAt,
+        @disabled, @notes, @versionSetManually, @versionSetBy, @versionSetAt,
+        @extra, @createdAt, @updatedAt
+      )
+      ON CONFLICT(id) DO UPDATE SET
+        customerId                = excluded.customerId,
+        name                      = excluded.name,
+        tier                      = excluded.tier,
+        franchise                 = excluded.franchise,
+        currentVersion            = excluded.currentVersion,
+        currentBranch             = excluded.currentBranch,
+        reachable                 = excluded.reachable,
+        lastChecked               = excluded.lastChecked,
+        lastError                 = excluded.lastError,
+        health                    = excluded.health,
+        features                  = excluded.features,
+        integrations              = excluded.integrations,
+        upgrades                  = excluded.upgrades,
+        lastHealthCheckedAt       = excluded.lastHealthCheckedAt,
+        lastFeaturesCheckedAt     = excluded.lastFeaturesCheckedAt,
+        lastIntegrationsCheckedAt = excluded.lastIntegrationsCheckedAt,
+        lastUpgradesCheckedAt     = excluded.lastUpgradesCheckedAt,
+        disabled                  = excluded.disabled,
+        notes                     = excluded.notes,
+        versionSetManually        = excluded.versionSetManually,
+        versionSetBy              = excluded.versionSetBy,
+        versionSetAt              = excluded.versionSetAt,
+        extra                     = excluded.extra,
+        updatedAt                 = excluded.updatedAt
+    `).run(envToRow(e));
+  }
+
   _loadState() {
     try {
-      const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-      if (Array.isArray(data.customers)) {
-        for (const c of data.customers) this.customers.set(c.id, c);
+      const customers = this.db.prepare('SELECT * FROM customers').all();
+      for (const row of customers) {
+        this.customers.set(row.id, customerFromRow(row));
       }
-      if (Array.isArray(data.environments)) {
-        for (const e of data.environments) this.environments.set(e.id, e);
-      }
-      if (Array.isArray(data.deployments)) {
-        this.deployments = data.deployments;
-      }
-      if (Array.isArray(data.mobile)) {
-        for (const m of data.mobile) this.mobile.set(m.id, m);
-      }
-      log.info(`Customer state loaded: ${this.customers.size} customers, ${this.environments.size} environments, ${this.deployments.length} deployments`);
-    } catch {
-      // No state yet — fine
-    }
-  }
 
-  _saveState() {
-    const data = {
-      customers: [...this.customers.values()],
-      environments: [...this.environments.values()],
-      deployments: this.deployments,
-      mobile: [...this.mobile.values()],
-      savedAt: new Date().toISOString(),
-    };
-    try {
-      const json = JSON.stringify(data, null, 2);
-      const tmpFile = STATE_FILE + '.tmp';
-      fs.writeFileSync(tmpFile, json);
-      fs.renameSync(tmpFile, STATE_FILE);
+      const envs = this.db.prepare('SELECT * FROM environments').all();
+      for (const row of envs) {
+        this.environments.set(row.id, envFromRow(row));
+      }
+
+      const mobiles = this.db.prepare('SELECT * FROM mobile').all();
+      for (const row of mobiles) {
+        try {
+          this.mobile.set(row.id, JSON.parse(row.data));
+        } catch { /* skip malformed */ }
+      }
+
+      const depCount = this.db.prepare('SELECT COUNT(*) AS n FROM deployments').get().n;
+      log.info(`Customer state loaded: ${this.customers.size} customers, ${this.environments.size} environments, ${depCount} deployments`);
     } catch (err) {
-      log.error('Failed to save customer state:', err.message);
-      try { fs.unlinkSync(STATE_FILE + '.tmp'); } catch { /* ok */ }
+      log.warn(`Failed to load customer state: ${err.message}`);
     }
   }
+}
 
-  _debounceSave() {
-    if (this._saveTimer) return;
-    this._saveTimer = setTimeout(() => {
-      this._saveTimer = null;
-      this._saveState();
-    }, 5000);
-  }
+// ── Row ↔ object mapping ────────────────────────────────────────────────────
 
-  flush() {
-    if (this._saveTimer) {
-      clearTimeout(this._saveTimer);
-      this._saveTimer = null;
-    }
-    this._saveState();
+function customerToRow(c) {
+  const extra = {};
+  for (const k of Object.keys(c)) {
+    if (!CUSTOMER_COLUMNS.includes(k)) extra[k] = c[k];
   }
+  return {
+    id: c.id,
+    name: c.name ?? null,
+    domain: c.domain ?? null,
+    domainPrefix: c.domainPrefix ?? null,
+    integrations: c.integrations == null ? null : JSON.stringify(c.integrations),
+    hasFranchises: boolOrNull(c.hasFranchises),
+    active: boolOrNull(c.active),
+    syncedFrom: c.syncedFrom ?? null,
+    lastSyncedAt: c.lastSyncedAt ?? null,
+    notes: c.notes ?? null,
+    extra: Object.keys(extra).length ? JSON.stringify(extra) : null,
+    createdAt: c.createdAt,
+    updatedAt: c.updatedAt,
+  };
+}
+
+function customerFromRow(row) {
+  const customer = {
+    id: row.id,
+    name: row.name,
+    domain: row.domain,
+    domainPrefix: row.domainPrefix,
+    integrations: row.integrations == null ? null : safeParse(row.integrations, null),
+    syncedFrom: row.syncedFrom,
+    lastSyncedAt: row.lastSyncedAt,
+    notes: row.notes,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+  for (const f of CUST_BOOL_FIELDS) customer[f] = row[f] == null ? null : !!row[f];
+  if (row.extra) {
+    try {
+      const extra = JSON.parse(row.extra);
+      if (extra && typeof extra === 'object') Object.assign(customer, extra);
+    } catch { /* ignore */ }
+  }
+  return customer;
+}
+
+function envToRow(e) {
+  const extra = {};
+  for (const k of Object.keys(e)) {
+    if (!ENVIRONMENT_COLUMNS.includes(k)) extra[k] = e[k];
+  }
+  const row = {
+    id: e.id,
+    customerId: e.customerId ?? null,
+    name: e.name ?? null,
+    tier: e.tier ?? null,
+    franchise: boolOrNull(e.franchise),
+    currentVersion: e.currentVersion ?? null,
+    currentBranch: e.currentBranch ?? null,
+    reachable: boolOrNull(e.reachable),
+    lastChecked: e.lastChecked ?? null,
+    lastError: e.lastError ?? null,
+    lastHealthCheckedAt: e.lastHealthCheckedAt ?? null,
+    lastFeaturesCheckedAt: e.lastFeaturesCheckedAt ?? null,
+    lastIntegrationsCheckedAt: e.lastIntegrationsCheckedAt ?? null,
+    lastUpgradesCheckedAt: e.lastUpgradesCheckedAt ?? null,
+    disabled: boolOrNull(e.disabled),
+    notes: e.notes ?? null,
+    versionSetManually: boolOrNull(e.versionSetManually),
+    versionSetBy: e.versionSetBy ?? null,
+    versionSetAt: e.versionSetAt ?? null,
+    extra: Object.keys(extra).length ? JSON.stringify(extra) : null,
+    createdAt: e.createdAt,
+    updatedAt: e.updatedAt,
+  };
+  for (const f of ENV_JSON_FIELDS) {
+    row[f] = e[f] == null ? null : JSON.stringify(e[f]);
+  }
+  return row;
+}
+
+function envFromRow(row) {
+  const env = {
+    id: row.id,
+    customerId: row.customerId,
+    name: row.name,
+    tier: row.tier,
+    currentVersion: row.currentVersion,
+    currentBranch: row.currentBranch,
+    lastChecked: row.lastChecked,
+    lastError: row.lastError,
+    lastHealthCheckedAt: row.lastHealthCheckedAt,
+    lastFeaturesCheckedAt: row.lastFeaturesCheckedAt,
+    lastIntegrationsCheckedAt: row.lastIntegrationsCheckedAt,
+    lastUpgradesCheckedAt: row.lastUpgradesCheckedAt,
+    notes: row.notes,
+    versionSetBy: row.versionSetBy,
+    versionSetAt: row.versionSetAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+  for (const f of ENV_BOOL_FIELDS) env[f] = row[f] == null ? null : !!row[f];
+  for (const f of ENV_JSON_FIELDS) {
+    env[f] = row[f] == null ? null : safeParse(row[f], null);
+  }
+  if (row.extra) {
+    try {
+      const extra = JSON.parse(row.extra);
+      if (extra && typeof extra === 'object') Object.assign(env, extra);
+    } catch { /* ignore */ }
+  }
+  return env;
+}
+
+function deploymentFromRow(row) {
+  return {
+    id: row.id,
+    environmentId: row.environmentId,
+    customerId: row.customerId,
+    version: row.version,
+    branch: row.branch,
+    previousVersion: row.previousVersion,
+    detectedAt: row.detectedAt,
+    endedAt: row.endedAt,
+    source: row.source,
+    datadogImpact: row.datadogImpact == null ? null : safeParse(row.datadogImpact, null),
+  };
+}
+
+function boolOrNull(v) {
+  if (v === null || v === undefined) return null;
+  return v ? 1 : 0;
+}
+
+function safeParse(value, fallback) {
+  try { return JSON.parse(value); } catch { return fallback; }
 }
 
 module.exports = CustomerStore;

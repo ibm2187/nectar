@@ -1,34 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import fs from 'fs';
-import path from 'path';
+import { describe, it, expect, beforeEach } from 'vitest';
 
 const ApiKeyManager = require('../../src/core/api-keys');
-
-const STATE_FILE = path.join(__dirname, '..', '..', '.nectar-api-keys.json');
+const { createTestDb } = require('../../src/core/db');
 
 describe('ApiKeyManager', () => {
   let mgr;
-  let originalState;
+  let db;
 
   beforeEach(() => {
-    // Preserve any existing state file
-    if (fs.existsSync(STATE_FILE)) {
-      originalState = fs.readFileSync(STATE_FILE, 'utf8');
-    }
-    // Start fresh
-    mgr = new ApiKeyManager();
-    mgr.keys.clear();
-  });
-
-  afterEach(() => {
-    // Restore original state file
-    if (originalState) {
-      fs.writeFileSync(STATE_FILE, originalState);
-    } else if (fs.existsSync(STATE_FILE)) {
-      fs.unlinkSync(STATE_FILE);
-    }
-    originalState = undefined;
-    vi.restoreAllMocks();
+    db = createTestDb();
+    mgr = new ApiKeyManager({ db });
   });
 
   describe('create', () => {
@@ -116,8 +97,13 @@ describe('ApiKeyManager', () => {
       expect(before).toBeNull();
 
       mgr.validate(rawKey);
+
+      // Check both in-memory mirror and the DB agree
       const after = mgr.keys.get(id).lastUsedAt;
       expect(after).toBeTruthy();
+
+      const fromDb = db.prepare('SELECT lastUsedAt FROM api_keys WHERE id = ?').get(id);
+      expect(fromDb.lastUsedAt).toBe(after);
     });
   });
 
@@ -141,9 +127,9 @@ describe('ApiKeyManager', () => {
     it('sorts newest first', () => {
       const older = mgr.create('older-key');
       const newer = mgr.create('newer-key');
-      // Ensure distinct timestamps for sorting
-      const newerEntry = mgr.keys.get(newer.id);
-      newerEntry.createdAt = new Date(Date.now() + 1000).toISOString();
+      // Force a newer timestamp on the second key in the DB
+      db.prepare('UPDATE api_keys SET createdAt = ? WHERE id = ?')
+        .run(new Date(Date.now() + 1000).toISOString(), newer.id);
 
       const list = mgr.list();
       expect(list[0].label).toBe('newer-key');
@@ -220,6 +206,18 @@ describe('ApiKeyManager', () => {
       mw(req, res, next);
 
       expect(called).toBe(true);
+    });
+  });
+
+  describe('persistence', () => {
+    // TESTING: A new manager loads keys previously created into the same DB
+    // EXPECTED: After reopening, keys are still validatable and listed
+    it('reloads keys across instances', () => {
+      const { rawKey } = mgr.create('persistent', 'nukul@test.com');
+
+      const mgr2 = new ApiKeyManager({ db });
+      expect(mgr2.list()).toHaveLength(1);
+      expect(mgr2.validate(rawKey).valid).toBe(true);
     });
   });
 });
