@@ -531,4 +531,219 @@ describe('PipelineSync', () => {
     const card = sync.buildProjects.find(b => b.version === '4.3.0');
     expect(card.latestStatus).toBe('IN_PROGRESS');
   });
+
+  // ── Tiered polling ───────────────────────────────────────
+
+  describe('_computeHotSet', () => {
+    function makeCard(overrides = {}) {
+      return {
+        projectName: 'ECR-Build_viv-master',
+        branch: 'master',
+        account: 'Viv',
+        latestStatus: 'SUCCEEDED',
+        latestStartTime: '2026-04-10T00:00:00Z',
+        builds: [],
+        newCommits: [],
+        jiraKeys: [],
+        ecrRepo: 'viv-master',
+        imageTag: 'master',
+        ...overrides,
+      };
+    }
+
+    it('includes pinned and recent builds in the hot set', async () => {
+      await sync.run();
+      expect(sync._hotEntries.length).toBeGreaterThan(0);
+      const hotNames = sync._hotEntries.map(e => e.projectName);
+      expect(hotNames).toContain('ECR-Build_viv-release-4_3_0');
+    });
+
+    it('includes IN_PROGRESS builds in the hot set', () => {
+      const inProgress = makeCard({
+        projectName: 'ECR-Build_viv-custom-hotfix',
+        latestStatus: 'IN_PROGRESS',
+        imageTag: 'hotfix',
+        ecrRepo: 'viv-custom',
+      });
+      const pinned = makeCard();
+
+      sync.buildProjects = [pinned, inProgress];
+      sync.deployTargets = {
+        master: [{ pipelineName: 'Deploy-Viv_Dev03', account: 'Viv' }],
+        hotfix: [{ pipelineName: 'Deploy-Viv_Dev04', account: 'Viv' }],
+      };
+      sync._cardsByProject.set(pinned.projectName, pinned);
+      sync._cardsByProject.set(inProgress.projectName, inProgress);
+
+      sync._computeHotSet();
+
+      const hotNames = sync._hotEntries.map(e => e.projectName);
+      expect(hotNames).toContain('ECR-Build_viv-custom-hotfix');
+    });
+
+    it('expands TAG_ALIASES into _hotTags', async () => {
+      await sync.run();
+      // master build should expand to both 'master' and 'latest'
+      const masterCard = sync.buildProjects.find(b => b.imageTag === 'master');
+      if (masterCard && sync._hotEntries.some(e => e.projectName === masterCard.projectName)) {
+        expect(sync._hotTags.has('master')).toBe(true);
+        expect(sync._hotTags.has('latest')).toBe(true);
+      }
+    });
+
+    it('populates roleArn for cross-account hot projects', () => {
+      const card = makeCard({
+        projectName: 'ECR-Build_viv-release-ck-4_3_0',
+        account: 'CK',
+        ecrRepo: 'viv-release-ck',
+        imageTag: '4.3.0',
+      });
+
+      sync.buildProjects = [card];
+      sync.deployTargets = { '4.3.0': [{ pipelineName: 'Deploy-CK_101', account: 'ck', ecrRepo: 'viv-release-ck' }] };
+      sync._cardsByProject.set(card.projectName, card);
+      sync._crossAccountProjects.set(card.projectName, { customer: 'CK', roleArn: 'arn:aws:iam::role/test' });
+
+      sync._computeHotSet();
+
+      const entry = sync._hotEntries.find(e => e.projectName === card.projectName);
+      expect(entry).toBeTruthy();
+      expect(entry.roleArn).toBe('arn:aws:iam::role/test');
+    });
+  });
+
+  describe('runHot', () => {
+    it('skips when hot set is empty', async () => {
+      sync._hotEntries = [];
+      const result = await sync.runHot();
+      expect(result).toBeNull();
+    });
+
+    it('only fetches hot projects, not all', async () => {
+      await sync.run();
+      aws.getBuildsForProject.mockClear();
+
+      await sync.runHot();
+
+      const hotNames = new Set(sync._hotEntries.map(e => e.projectName));
+      for (const call of aws.getBuildsForProject.mock.calls) {
+        expect(hotNames.has(call[0])).toBe(true);
+      }
+    });
+
+    it('emits sync:completed after hot sync', async () => {
+      await sync.run();
+      const handler = vi.fn();
+      sync.on('sync:completed', handler);
+
+      await sync.runHot();
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0].mode).toBe('hot');
+    });
+
+    it('is blocked by _running flag', async () => {
+      await sync.run();
+      sync._running = true;
+      const result = await sync.runHot();
+      expect(result).toBe(sync.lastResults);
+      sync._running = false;
+    });
+
+    it('merges hot results into full card list', async () => {
+      await sync.run();
+      const originalCount = sync.buildProjects.length;
+
+      await sync.runHot();
+
+      expect(sync.buildProjects.length).toBe(originalCount);
+    });
+  });
+
+  describe('promoteToHot', () => {
+    it('adds matching projects to hot set', async () => {
+      await sync.run();
+      const hotBefore = sync._hotEntries.length;
+
+      // Add a cold card that's not in the hot set
+      const coldCard = {
+        projectName: 'ECR-Build_viv-custom-cold',
+        imageTag: 'cold-tag',
+        account: 'Viv',
+      };
+      sync._cardsByProject.set(coldCard.projectName, coldCard);
+
+      sync.promoteToHot('cold-tag');
+
+      expect(sync._hotEntries.length).toBe(hotBefore + 1);
+      expect(sync._hotEntries.some(e => e.projectName === 'ECR-Build_viv-custom-cold')).toBe(true);
+      expect(sync._hotTags.has('cold-tag')).toBe(true);
+    });
+
+    it('deduplicates already-hot projects', async () => {
+      await sync.run();
+      const hotBefore = sync._hotEntries.length;
+      const existingTag = sync.buildProjects[0]?.imageTag;
+      if (existingTag) {
+        sync.promoteToHot(existingTag);
+        expect(sync._hotEntries.length).toBe(hotBefore);
+      }
+    });
+
+    it('uses immutable array replacement', async () => {
+      await sync.run();
+      const refBefore = sync._hotEntries;
+
+      const coldCard = { projectName: 'ECR-Build_cold', imageTag: 'x', account: 'Viv' };
+      sync._cardsByProject.set(coldCard.projectName, coldCard);
+      sync.promoteToHot('x');
+
+      expect(sync._hotEntries).not.toBe(refBefore);
+    });
+
+    it('resolves roleArn for cross-account projects', async () => {
+      await sync.run();
+
+      const coldCard = { projectName: 'ECR-Build_cross', imageTag: 'cross-tag', account: 'CK' };
+      sync._cardsByProject.set(coldCard.projectName, coldCard);
+      sync._crossAccountProjects.set(coldCard.projectName, { customer: 'CK', roleArn: 'arn:cross' });
+
+      sync.promoteToHot('cross-tag');
+
+      const entry = sync._hotEntries.find(e => e.projectName === 'ECR-Build_cross');
+      expect(entry.roleArn).toBe('arn:cross');
+    });
+
+    it('ignores null/undefined imageTag', async () => {
+      await sync.run();
+      const hotBefore = sync._hotEntries.length;
+      sync.promoteToHot(null);
+      sync.promoteToHot(undefined);
+      expect(sync._hotEntries.length).toBe(hotBefore);
+    });
+  });
+
+  describe('_fetchDeployStatesForTags', () => {
+    it('preserves cold tag states when filtering by hot tags', async () => {
+      await sync.run();
+
+      // Set a cold tag in deployTargets
+      sync.deployTargets['cold-tag'] = [{ pipelineName: 'Deploy-Cold', account: 'Viv' }];
+
+      const results = { builds: 0, deploys: 0, errors: 0 };
+      const hotTags = new Set(['4.3.0']);
+      const targets = await sync._fetchDeployStatesForTags(hotTags, results);
+
+      expect(targets['cold-tag']).toEqual([{ pipelineName: 'Deploy-Cold', account: 'Viv' }]);
+    });
+
+    it('fetches all tags when tagFilter is null', async () => {
+      const results = { builds: 0, deploys: 0, errors: 0 };
+      await sync._ensureDiscovery();
+      const targets = await sync._fetchAllDeployStates(results);
+
+      expect(results.deploys).toBeGreaterThan(0);
+      expect(targets['4.3.0']).toBeTruthy();
+    });
+  });
 });

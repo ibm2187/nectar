@@ -21,9 +21,9 @@ const TAG_ALIASES = { master: ['master', 'latest'] };
  * AWS Pipeline sync — polls CodeBuild + CodePipeline and builds a unified
  * view of all CI/CD activity for the Builds page.
  *
- * Data model stored on release manager as `_pipelineData`:
- *   builds: [{ projectName, branch, status, builds[], newCommits[], jiraKeys[] }]
- *   deployTargets: { imageTag → [{ pipelineName, customer, env, status, lastUpdated }] }
+ * Two-tier polling:
+ *   Hot (every ~60s):  pinned builds, recent builds, in-progress builds
+ *   Full (every ~60m): all projects + full deploy state refresh
  *
  * Events:
  *   sync:started
@@ -36,7 +36,6 @@ class PipelineSync extends EventEmitter {
     this.aws = aws;
     this.repoManager = repoManager;
     this.config = config;
-    this._timer = null;
     this._running = false;
     this.lastRun = null;
     this.lastResults = null;
@@ -44,9 +43,19 @@ class PipelineSync extends EventEmitter {
     // Cached data — exposed to API
     this.buildProjects = [];   // full list of build cards
     this.deployTargets = {};   // imageTag → deploy pipeline states
-    this._projectList = null;  // raw project names
+    this._projectList = null;  // raw project names (main account)
     this._deployMap = null;    // pipelineName → { ecrRepo, imageTag, customer, env }
     this.prSync = null;
+
+    // Tiered polling state
+    this._hotTimer = null;
+    this._fullTimer = null;
+    this._hotEntries = [];                   // [{ projectName, account, roleArn }]
+    this._hotTags = new Set();               // imageTag values for hot builds
+    this._cardsByProject = new Map();        // projectName → card
+    this._crossAccountProjects = new Map();  // projectName → { customer, roleArn }
+    this._deployPipelinesByRole = new Map(); // roleArn → [pipelineName] (cached during full sync)
+    this._deployConfigByRole = new Map();    // `${roleArn}:${pipelineName}` → { ecrImageTag, ecrRepo }
   }
 
   setPrSync(prSync) {
@@ -59,25 +68,32 @@ class PipelineSync extends EventEmitter {
       return;
     }
 
-    const interval = (this.config.polling && this.config.polling.pipelineSync) || 3 * 60 * 1000;
-    log.info(`Pipeline sync started (polling every ${interval / 60000}m)`);
+    const hotInterval = (this.config.polling && this.config.polling.pipelineSyncHot) || 60 * 1000;
+    const fullInterval = (this.config.polling && this.config.polling.pipelineSyncFull) || 60 * 60 * 1000;
 
+    log.info(`Pipeline sync started (hot: every ${hotInterval / 1000}s, full: every ${fullInterval / 60000}m)`);
+
+    // First full sync 15s after boot
     setTimeout(() => {
-      this.run().catch(err => log.error('Pipeline sync error:', err.message));
+      this.run().then(() => {
+        this._hotTimer = setInterval(() => {
+          this.runHot().catch(err => log.error('Pipeline hot-sync error:', err.message));
+        }, hotInterval);
+      }).catch(err => log.error('Pipeline sync error:', err.message));
     }, 15000);
 
-    this._timer = setInterval(() => {
-      this.run().catch(err => log.error('Pipeline sync error:', err.message));
-    }, interval);
+    // Recurring full sync
+    this._fullTimer = setInterval(() => {
+      this.run().catch(err => log.error('Pipeline full-sync error:', err.message));
+    }, fullInterval);
   }
 
   stop() {
-    if (this._timer) {
-      clearInterval(this._timer);
-      this._timer = null;
-    }
+    if (this._hotTimer) { clearInterval(this._hotTimer); this._hotTimer = null; }
+    if (this._fullTimer) { clearInterval(this._fullTimer); this._fullTimer = null; }
   }
 
+  // ── Full sync ──────────────────────────────────────────────
   async run() {
     if (this._running) {
       log.warn('Pipeline sync already running, skipping');
@@ -88,20 +104,28 @@ class PipelineSync extends EventEmitter {
     const startTime = Date.now();
     this.emit('sync:started');
 
-    const results = { builds: 0, deploys: 0, errors: 0 };
+    const results = { builds: 0, deploys: 0, errors: 0, mode: 'full' };
 
     try {
-      // Step 1: Discover projects and deploy mappings (cached after first run)
       await this._ensureDiscovery();
+
+      // Full sync rebuilds all caches from scratch
+      this._cardsByProject.clear();
+      this._deployPipelinesByRole.clear();
+      this._deployConfigByRole.clear();
 
       // Step 2: Fetch builds for main account projects
       const buildCards = [];
       for (const projectName of (this._projectList || [])) {
         try {
           const card = await this._fetchBuildCard(projectName);
-          if (card) { card.account = 'Viv'; buildCards.push(card); }
+          if (card) {
+            card.account = 'Viv';
+            buildCards.push(card);
+            this._cardsByProject.set(projectName, card);
+          }
           results.builds++;
-          await new Promise(r => setTimeout(r, 500)); // rate limit
+          await new Promise(r => setTimeout(r, 500));
         } catch (err) {
           log.warn(`Pipeline sync: build fetch failed for ${projectName}: ${err.message}`);
           results.errors++;
@@ -109,6 +133,7 @@ class PipelineSync extends EventEmitter {
       }
 
       // Step 2b: Fetch builds from cross-account roles
+      this._crossAccountProjects.clear();
       const crossAccounts = this.aws.getCrossAccountRoles();
       for (const { customer, roleArn } of crossAccounts) {
         try {
@@ -117,11 +142,16 @@ class PipelineSync extends EventEmitter {
           log.info(`Pipeline sync: ${customer} account has ${ecrProjects.length} build projects`);
 
           for (const projectName of ecrProjects) {
+            this._crossAccountProjects.set(projectName, { customer, roleArn });
             try {
               const card = await this._fetchBuildCardForRole(roleArn, projectName);
-              if (card) { card.account = customer; buildCards.push(card); }
+              if (card) {
+                card.account = customer;
+                buildCards.push(card);
+                this._cardsByProject.set(projectName, card);
+              }
               results.builds++;
-              await new Promise(r => setTimeout(r, 500)); // rate limit
+              await new Promise(r => setTimeout(r, 500));
             } catch (err) {
               log.warn(`Pipeline sync: build fetch failed for ${customer}/${projectName}: ${err.message}`);
               results.errors++;
@@ -133,101 +163,12 @@ class PipelineSync extends EventEmitter {
         }
       }
 
-      // Each CodeBuild project is its own card — no cross-account dedup.
-      const deduped = buildCards;
+      this._sortCards(buildCards);
+      this.buildProjects = buildCards;
+      this._writeBuildByJiraKey(buildCards);
 
-      // Sort: IN_PROGRESS first, then FAILED, then SUCCEEDED, then rest
-      const statusOrder = { IN_PROGRESS: 0, FAILED: 1, SUCCEEDED: 2, STOPPED: 3 };
-      deduped.sort((a, b) => {
-        const ao = statusOrder[a.latestStatus] ?? 4;
-        const bo = statusOrder[b.latestStatus] ?? 4;
-        if (ao !== bo) return ao - bo;
-        return (b.latestStartTime || '').localeCompare(a.latestStartTime || '');
-      });
-
-      this.buildProjects = deduped;
-
-      // Store buildByJiraKey on matching releases
-      try {
-        for (const card of deduped) {
-          if (!card.version || !card.buildByJiraKey) continue;
-          const release = this.releases.get?.(card.version, card.repo);
-          if (release) {
-            release.buildByJiraKey = card.buildByJiraKey;
-            release.buildSyncedAt = new Date().toISOString();
-          }
-        }
-        this.releases._debounceSave?.();
-      } catch (err) {
-        log.warn(`Pipeline sync: failed to write buildByJiraKey: ${err.message}`);
-      }
-
-      // Step 3: Fetch deploy pipeline states (main account)
-      const deployTargets = {};
-      for (const [name, info] of Object.entries(this._deployMap || {})) {
-        try {
-          const state = await this.aws.getPipelineState(name);
-          const deployStage = state.stages.find(s =>
-            s.stageName === 'Deploy' || s.stageName === 'deploy'
-          ) || state.stages[state.stages.length - 1];
-
-          const tag = info.imageTag || 'unknown';
-          if (!deployTargets[tag]) deployTargets[tag] = [];
-          deployTargets[tag].push({
-            pipelineName: name,
-            customer: info.customer,
-            env: info.env,
-            status: deployStage?.status || null,
-            lastUpdated: deployStage?.lastUpdated || null,
-            account: 'Viv',
-            ecrRepo: info.ecrRepo || null,
-          });
-          results.deploys++;
-          await new Promise(r => setTimeout(r, 100));
-        } catch (err) {
-          log.warn(`Pipeline sync: deploy state failed for ${name}: ${err.message}`);
-        }
-      }
-
-      // Step 3b: Fetch deploy pipelines from cross-accounts
-      const AwsClient = require('../integrations/aws');
-      for (const { customer, roleArn } of crossAccounts) {
-        try {
-          const pipelines = await this.aws.listPipelinesForRole(roleArn);
-          const deployPipelines = pipelines.filter(p => p.startsWith('Deploy-'));
-
-          for (const name of deployPipelines) {
-            try {
-              const config = await this.aws.getPipelineConfigForRole(roleArn, name);
-              const state = await this.aws.getPipelineStateForRole(roleArn, name);
-              const parsed = AwsClient.parsePipelineName(name);
-              const deployStage = state.stages.find(s =>
-                s.stageName === 'Deploy' || s.stageName === 'deploy'
-              ) || state.stages[state.stages.length - 1];
-
-              const tag = config.ecrImageTag || 'unknown';
-              if (!deployTargets[tag]) deployTargets[tag] = [];
-              deployTargets[tag].push({
-                pipelineName: name,
-                customer: parsed?.customer || customer,
-                env: parsed?.env || name,
-                status: deployStage?.status || null,
-                lastUpdated: deployStage?.lastUpdated || null,
-                account: customer,
-                ecrRepo: config.ecrRepo || null,
-              });
-              results.deploys++;
-              await new Promise(r => setTimeout(r, 100));
-            } catch (err) {
-              log.warn(`Pipeline sync: ${customer} deploy failed for ${name}: ${err.message}`);
-            }
-          }
-        } catch (err) {
-          log.warn(`Pipeline sync: ${customer} deploy list failed: ${err.message}`);
-        }
-      }
-
-      this.deployTargets = deployTargets;
+      // Step 3: Fetch deploy pipeline states (all)
+      this.deployTargets = await this._fetchAllDeployStates(results);
 
     } catch (err) {
       results.errors++;
@@ -240,8 +181,261 @@ class PipelineSync extends EventEmitter {
     this._running = false;
 
     log.info(`Pipeline sync complete: ${results.builds} builds, ${results.deploys} deploys in ${results.durationMs}ms`);
+    this._computeHotSet();
     this.emit('sync:completed', results);
     return results;
+  }
+
+  // ── Hot sync ───────────────────────────────────────────────
+  async runHot() {
+    if (this._running) return this.lastResults;
+    if (this._hotEntries.length === 0) return this.lastResults;
+
+    this._running = true;
+    const startTime = Date.now();
+
+    const results = { builds: 0, deploys: 0, errors: 0, mode: 'hot' };
+
+    try {
+      for (const { projectName, account, roleArn } of this._hotEntries) {
+        try {
+          const card = roleArn
+            ? await this._fetchBuildCardForRole(roleArn, projectName)
+            : await this._fetchBuildCard(projectName);
+          if (card) {
+            card.account = account;
+            this._cardsByProject.set(projectName, card);
+          }
+          results.builds++;
+          await new Promise(r => setTimeout(r, 200));
+        } catch (err) {
+          log.warn(`Pipeline hot-sync: failed for ${projectName}: ${err.message}`);
+          results.errors++;
+        }
+      }
+
+      // Rebuild full list from cache
+      const allCards = [...this._cardsByProject.values()];
+      this._sortCards(allCards);
+      this.buildProjects = allCards;
+      this._writeBuildByJiraKey(allCards);
+
+      // Refresh deploy states only for hot tags
+      this.deployTargets = await this._fetchDeployStatesForTags(this._hotTags, results);
+
+    } catch (err) {
+      results.errors++;
+      log.error('Pipeline hot-sync error:', err.message);
+    }
+
+    results.durationMs = Date.now() - startTime;
+    this.lastRun = new Date().toISOString();
+    this.lastResults = results;
+    this._running = false;
+
+    log.info(`Pipeline hot-sync: ${results.builds} builds, ${results.deploys} deploys in ${results.durationMs}ms`);
+    this._computeHotSet();
+    this.emit('sync:completed', results);
+    return results;
+  }
+
+  // ── Hot set computation ────────────────────────────────────
+
+  _computeHotSet() {
+    const customers = this._groupByCustomer(this.buildProjects);
+    const hotNames = new Set();
+
+    for (const c of customers) {
+      if (c.pinnedBuild) hotNames.add(c.pinnedBuild.projectName);
+      for (const b of c.recentBuilds) hotNames.add(b.projectName);
+    }
+
+    // Any IN_PROGRESS build is also hot
+    for (const card of this.buildProjects) {
+      if (card.latestStatus === 'IN_PROGRESS') hotNames.add(card.projectName);
+    }
+
+    // Build entries with account/roleArn info
+    const entries = [];
+    const tags = new Set();
+    for (const projectName of hotNames) {
+      const card = this._cardsByProject.get(projectName);
+      if (!card) continue;
+
+      const cross = this._crossAccountProjects.get(projectName);
+      entries.push({
+        projectName,
+        account: card.account || 'Viv',
+        roleArn: cross ? cross.roleArn : null,
+      });
+
+      // Collect tags for deploy state filtering
+      if (card.imageTag) {
+        tags.add(card.imageTag);
+        const aliases = TAG_ALIASES[card.imageTag];
+        if (aliases) aliases.forEach(a => tags.add(a));
+      }
+    }
+
+    this._hotEntries = entries;
+    this._hotTags = tags;
+    log.info(`Pipeline sync: ${entries.length} hot projects, ${tags.size} hot tags (of ${this.buildProjects.length} total)`);
+  }
+
+  /**
+   * Called by env-poll when a version change is detected.
+   * Promotes any project matching the imageTag into the hot set
+   * so the next hot cycle picks it up.
+   */
+  promoteToHot(imageTag) {
+    if (!imageTag) return;
+
+    const newEntries = [];
+    for (const [projectName, card] of this._cardsByProject) {
+      if (card.imageTag !== imageTag) continue;
+      if (this._hotEntries.some(e => e.projectName === projectName)) continue;
+
+      const cross = this._crossAccountProjects.get(projectName);
+      newEntries.push({
+        projectName,
+        account: card.account || 'Viv',
+        roleArn: cross ? cross.roleArn : null,
+      });
+    }
+
+    if (newEntries.length > 0) {
+      this._hotEntries = [...this._hotEntries, ...newEntries];
+      this._hotTags.add(imageTag);
+      log.info(`Pipeline sync: promoted ${newEntries.length} project(s) to hot for tag ${imageTag}`);
+    }
+  }
+
+  // ── Deploy state fetching ──────────────────────────────────
+
+  async _fetchAllDeployStates(results) {
+    return this._fetchDeployStatesForTags(null, results);
+  }
+
+  async _fetchDeployStatesForTags(tagFilter, results) {
+    const AwsClient = require('../integrations/aws');
+
+    // Start with existing deploy targets if this is a partial (hot) refresh,
+    // so cold tags' states aren't wiped out.
+    const deployTargets = tagFilter ? { ...this.deployTargets } : {};
+
+    // Clear entries for tags we're about to refresh
+    if (tagFilter) {
+      for (const tag of tagFilter) {
+        delete deployTargets[tag];
+      }
+    }
+
+    // Main account deploy states
+    for (const [name, info] of Object.entries(this._deployMap || {})) {
+      const tag = info.imageTag || 'unknown';
+      if (tagFilter && !tagFilter.has(tag)) continue;
+
+      try {
+        const state = await this.aws.getPipelineState(name);
+        const deployStage = state.stages.find(s =>
+          s.stageName === 'Deploy' || s.stageName === 'deploy'
+        ) || state.stages[state.stages.length - 1];
+
+        if (!deployTargets[tag]) deployTargets[tag] = [];
+        deployTargets[tag].push({
+          pipelineName: name,
+          customer: info.customer,
+          env: info.env,
+          status: deployStage?.status || null,
+          lastUpdated: deployStage?.lastUpdated || null,
+          account: 'Viv',
+          ecrRepo: info.ecrRepo || null,
+        });
+        results.deploys++;
+        await new Promise(r => setTimeout(r, 100));
+      } catch (err) {
+        log.warn(`Pipeline sync: deploy state failed for ${name}: ${err.message}`);
+      }
+    }
+
+    // Cross-account deploy states (pipeline list cached during full sync)
+    const crossAccounts = this.aws.getCrossAccountRoles();
+    for (const { customer, roleArn } of crossAccounts) {
+      try {
+        let deployPipelines = this._deployPipelinesByRole.get(roleArn);
+        if (!deployPipelines) {
+          const pipelines = await this.aws.listPipelinesForRole(roleArn);
+          deployPipelines = pipelines.filter(p => p.startsWith('Deploy-'));
+          this._deployPipelinesByRole.set(roleArn, deployPipelines);
+        }
+
+        for (const name of deployPipelines) {
+          try {
+            const cacheKey = `${roleArn}:${name}`;
+            let config = this._deployConfigByRole.get(cacheKey);
+            if (!config) {
+              config = await this.aws.getPipelineConfigForRole(roleArn, name);
+              this._deployConfigByRole.set(cacheKey, config);
+            }
+            const tag = config.ecrImageTag || 'unknown';
+            if (tagFilter && !tagFilter.has(tag)) continue;
+
+            const state = await this.aws.getPipelineStateForRole(roleArn, name);
+            const parsed = AwsClient.parsePipelineName(name);
+            const deployStage = state.stages.find(s =>
+              s.stageName === 'Deploy' || s.stageName === 'deploy'
+            ) || state.stages[state.stages.length - 1];
+
+            if (!deployTargets[tag]) deployTargets[tag] = [];
+            deployTargets[tag].push({
+              pipelineName: name,
+              customer: parsed?.customer || customer,
+              env: parsed?.env || name,
+              status: deployStage?.status || null,
+              lastUpdated: deployStage?.lastUpdated || null,
+              account: customer,
+              ecrRepo: config.ecrRepo || null,
+            });
+            results.deploys++;
+            await new Promise(r => setTimeout(r, 100));
+          } catch (err) {
+            log.warn(`Pipeline sync: ${customer} deploy failed for ${name}: ${err.message}`);
+          }
+        }
+      } catch (err) {
+        log.warn(`Pipeline sync: ${customer} deploy list failed: ${err.message}`);
+      }
+    }
+
+    return deployTargets;
+  }
+
+  // ── Shared helpers ─────────────────────────────────────────
+
+  _sortCards(cards) {
+    const statusOrder = { IN_PROGRESS: 0, FAILED: 1, SUCCEEDED: 2, STOPPED: 3 };
+    cards.sort((a, b) => {
+      const ao = statusOrder[a.latestStatus] ?? 4;
+      const bo = statusOrder[b.latestStatus] ?? 4;
+      if (ao !== bo) return ao - bo;
+      return (b.latestStartTime || '').localeCompare(a.latestStartTime || '');
+    });
+  }
+
+  _writeBuildByJiraKey(cards) {
+    try {
+      for (const card of cards) {
+        if (!card.version || !card.buildByJiraKey) continue;
+        const release = this.releases.get?.(card.version, card.repo);
+        if (release) {
+          release.buildByJiraKey = card.buildByJiraKey;
+          release.buildSyncedAt = new Date().toISOString();
+        }
+      }
+      this.releases._debounceSave?.();
+    } catch (err) {
+      log.warn(`Pipeline sync: failed to write buildByJiraKey: ${err.message}`);
+    }
   }
 
   /**
@@ -256,10 +450,8 @@ class PipelineSync extends EventEmitter {
 
     // CodeBuild projects
     const projects = await this.aws.listProjects();
-    // Filter to ECR-Build_ projects, skip ancient versions (3.x)
     this._projectList = projects.filter(p => {
       if (!p.startsWith('ECR-Build_')) return false;
-      // Skip very old releases (3.x.x) to reduce API calls
       if (p.match(/-3_\d/)) return false;
       return true;
     });
@@ -311,7 +503,6 @@ class PipelineSync extends EventEmitter {
       let buildCommits = [];
 
       if (b.resolvedSourceVersion && parsed.repo === 'webplatform') {
-        // Find the next older build with a different SHA as the base
         const olderBuild = builds.slice(i + 1).find(ob => ob.resolvedSourceVersion && ob.resolvedSourceVersion !== b.resolvedSourceVersion);
         const baseSha = olderBuild?.resolvedSourceVersion || null;
 
@@ -319,7 +510,6 @@ class PipelineSync extends EventEmitter {
           if (baseSha) {
             buildCommits = await this.repoManager.log('webplatform', `${baseSha}..${b.resolvedSourceVersion}`, { limit: 30 });
           } else if (i === builds.length - 1) {
-            // Oldest build in our window — show last few commits
             buildCommits = await this.repoManager.log('webplatform', b.resolvedSourceVersion, { limit: 10 });
           }
           buildJiraKeys = JiraClient.extractKeys(buildCommits.map(c => c.message).join(' '));
@@ -338,13 +528,10 @@ class PipelineSync extends EventEmitter {
       });
     }
 
-    // Latest build's commits/keys for the card display
     const newCommits = enrichedBuilds[0]?.commits || [];
     const jiraKeys = enrichedBuilds[0]?.jiraKeys || [];
 
-    // Build reverse index: JIRA key → build info (first successful build containing it)
     const buildByJiraKey = {};
-    // Walk from oldest to newest so the latest build wins
     for (let i = enrichedBuilds.length - 1; i >= 0; i--) {
       const b = enrichedBuilds[i];
       for (const key of b.jiraKeys) {
@@ -359,10 +546,7 @@ class PipelineSync extends EventEmitter {
 
     const imageTag = parsed.version || parsed.branch || parsed.custom || null;
 
-    // Prefer the real branch from CodeBuild over parsed.branch (parseProjectName
-    // only guesses from the project name). `sourceVersion` is the ref requested
-    // at build time — strip `refs/heads/` if present.
-    const rawSourceVersion = latest?.sourceVersion || previousSuccess?.sourceVersion || null;
+    const rawSourceVersion = latest?.sourceVersion || null;
     const realBranch = rawSourceVersion
       ? rawSourceVersion.replace(/^refs\/heads\//, '')
       : (parsed.branch || parsed.custom || projectName);
@@ -412,9 +596,6 @@ class PipelineSync extends EventEmitter {
       ? rawSourceVersion.replace(/^refs\/heads\//, '')
       : (parsed.branch || parsed.custom || projectName);
 
-    // Compute JIRA keys per build by diffing consecutive commit SHAs.
-    // Mirrors _fetchBuildCard. Cross-account builds often share the webplatform
-    // repo so the local git clone usually has the commits.
     const enrichedBuilds = [];
     for (let i = 0; i < builds.length; i++) {
       const b = builds[i];
@@ -451,7 +632,6 @@ class PipelineSync extends EventEmitter {
     const newCommits = enrichedBuilds[0]?.commits || [];
     const jiraKeys = enrichedBuilds[0]?.jiraKeys || [];
 
-    // Reverse index: JIRA key → build info (latest build containing it wins)
     const buildByJiraKey = {};
     for (let i = enrichedBuilds.length - 1; i >= 0; i--) {
       const b = enrichedBuilds[i];
@@ -549,9 +729,6 @@ class PipelineSync extends EventEmitter {
       if (!list) continue;
       for (const t of list) {
         if ((t.account || '').toLowerCase() !== customerKey) continue;
-        // If the build has a known ecrRepo, the pipeline must consume from
-        // the same repo. Different brands can share a tag (e.g. 4.2.0-cktribute
-        // appears in viv-release-tribute, viv-release-haven, viv-release-qualitycare).
         if (card.ecrRepo && t.ecrRepo && t.ecrRepo !== card.ecrRepo) continue;
         return true;
       }
@@ -603,6 +780,7 @@ class PipelineSync extends EventEmitter {
       configured: this.aws.isConfigured(),
       projectCount: this._projectList?.length || 0,
       deployCount: Object.keys(this._deployMap || {}).length,
+      hotProjectCount: this._hotEntries.length,
     };
   }
 }

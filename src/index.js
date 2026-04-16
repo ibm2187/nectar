@@ -293,10 +293,12 @@ const webServer = createWebServer(services, config);
 
   // Start environment version poller (hits /api/status/version on each env)
   envPoller.on('env:version-changed', ({ envName, customerId, newVersion, previousVersion }) => {
-    if (!notificationSettings.get('releaseStatus')) return;
     const customer = customerStore.getCustomer ? customerStore.getCustomer(customerId) : null;
     const customerName = customer?.name || customerId;
-    slack.notifyReleaseDeployment(newVersion, envName, customerName, previousVersion);
+    if (notificationSettings.get('releaseStatus')) {
+      slack.notifyReleaseDeployment(newVersion, envName, customerName, previousVersion);
+    }
+    pipelineSync.promoteToHot(newVersion);
   });
   envPoller.start();
 
@@ -310,6 +312,7 @@ function shutdown() {
   jiraSync.stop();
   discovery.stop();
   cherryPickWatcher.stop();
+  pipelineSync.stop();
   envPoller.stop();
   datadogPoller.stop();
   notificationEngine.stop();
