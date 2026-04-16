@@ -372,6 +372,74 @@ describe('UserStore', () => {
     });
   });
 
+  describe('notificationPrefs', () => {
+    it('new users get default notification prefs', () => {
+      const user = store.upsertOnLogin('new@test.com', 'New', null);
+      expect(user.notificationPrefs).toEqual({
+        dailyDigest: true,
+        buildFailures: true,
+      });
+    });
+
+    it('updateUser accepts notificationPrefs', () => {
+      store.upsertOnLogin('user@test.com', 'User', null);
+      const updated = store.updateUser('user@test.com', {
+        notificationPrefs: { dailyDigest: false },
+      });
+      expect(updated.notificationPrefs.dailyDigest).toBe(false);
+      expect(updated.notificationPrefs.buildFailures).toBe(true); // unchanged
+    });
+
+    it('ignores unknown notificationPrefs keys', () => {
+      store.upsertOnLogin('user@test.com', 'User', null);
+      const updated = store.updateUser('user@test.com', {
+        notificationPrefs: { bogusPref: true },
+      });
+      expect(updated.notificationPrefs.bogusPref).toBeUndefined();
+    });
+
+    it('ignores non-boolean notificationPrefs values', () => {
+      store.upsertOnLogin('user@test.com', 'User', null);
+      const updated = store.updateUser('user@test.com', {
+        notificationPrefs: { dailyDigest: 'yes' },
+      });
+      expect(updated.notificationPrefs.dailyDigest).toBe(true); // unchanged
+    });
+
+    it('backfills notificationPrefs on old user without it', () => {
+      // Simulate an existing user missing the field, then update
+      const legacyUser = {
+        email: 'legacy@test.com',
+        name: 'Legacy',
+        picture: null,
+        role: 'user',
+        permissions: { releases: true, roadmap: true, tickets: true, environments: true, health: true, features: true, integrations: true, issues: true, tasks: true },
+        lastLoginAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        // No notificationPrefs
+      };
+      store.users.set('legacy@test.com', legacyUser);
+
+      const updated = store.updateUser('legacy@test.com', {
+        notificationPrefs: { dailyDigest: false },
+      });
+
+      expect(updated.notificationPrefs).toBeDefined();
+      expect(updated.notificationPrefs.dailyDigest).toBe(false);
+      expect(updated.notificationPrefs.buildFailures).toBe(true); // backfilled default
+    });
+
+    it('role and notificationPrefs can be updated together', () => {
+      store.upsertOnLogin('user@test.com', 'User', null);
+      const updated = store.updateUser('user@test.com', {
+        role: 'admin',
+        notificationPrefs: { buildFailures: false },
+      });
+      expect(updated.role).toBe('admin');
+      expect(updated.notificationPrefs.buildFailures).toBe(false);
+    });
+  });
+
   describe('persistence', () => {
     it('save/load round-trip preserves users', () => {
       store.upsertOnLogin('alice@test.com', 'Alice', 'https://alice.pic');
@@ -418,6 +486,29 @@ describe('UserStore', () => {
       expect(user.permissions.roadmap).toBe(true);
       expect(user.permissions.tickets).toBe(true);
       expect(user.permissions.environments).toBe(true);
+    });
+
+    it('backfills notificationPrefs on loaded users that lack it', () => {
+      const data = {
+        users: [{
+          email: 'old@test.com',
+          name: 'Old User',
+          picture: null,
+          role: 'user',
+          permissions: { releases: true, roadmap: true, tickets: true, environments: true, health: true, features: true, integrations: true, issues: true, tasks: true },
+          lastLoginAt: '2026-01-01T00:00:00Z',
+          createdAt: '2026-01-01T00:00:00Z',
+          // no notificationPrefs field
+        }],
+      };
+      fs.writeFileSync(STATE_FILE, JSON.stringify(data));
+
+      const store2 = new UserStore();
+      const user = store2.getUser('old@test.com');
+
+      expect(user.notificationPrefs).toBeDefined();
+      expect(user.notificationPrefs.dailyDigest).toBe(true);
+      expect(user.notificationPrefs.buildFailures).toBe(true);
     });
 
     it('handles missing state file gracefully', () => {

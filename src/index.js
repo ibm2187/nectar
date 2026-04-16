@@ -145,12 +145,24 @@ const TaskQueue = require('./core/task-queue');
 const taskQueue = new TaskQueue();
 log.info(`Task queue initialized (${taskQueue.tasks.size} tasks loaded)`);
 
+const PeopleDirectory = require('./core/people-directory');
+const peopleDirectory = new PeopleDirectory(config);
+
+const NotificationSettings = require('./core/notification-settings');
+const notificationSettings = new NotificationSettings();
+
+const NotificationEngine = require('./core/notification-engine');
+const notificationEngine = new NotificationEngine({
+  slack, releases, releaseNotifier, peopleDirectory, userStore, notificationSettings, config,
+});
+
 // ── Wire Slack lifecycle notifications ──────────────────
 // Skip notifications for automated actions (discovery, jira-sync)
 const AUTOMATED_USERS = new Set(['discovery', 'jira-sync', 'cherry-pick-watcher', 'cherry-pick-sync', 'github-webhook', 'jira-webhook', 'risk-assessor']);
 
 releases.on('release:transition', (release, { from, to, user }) => {
   if (AUTOMATED_USERS.has(user)) return;
+  if (!notificationSettings.get('releases')) return;
   slack.notifyTransition(release, from, to);
   if (to === 'cutting') {
     slack.notifyReleaseCut(release);
@@ -158,6 +170,7 @@ releases.on('release:transition', (release, { from, to, user }) => {
 });
 
 releases.on('approval:added', (release, approval) => {
+  if (!notificationSettings.get('releases')) return;
   slack.notifyApprovalAdded(release, approval);
   if (approvals.isFullyApproved(release)) {
     slack.notifyAllApproved(release);
@@ -165,10 +178,12 @@ releases.on('approval:added', (release, approval) => {
 });
 
 releases.on('deployment:added', (release, deployment) => {
+  if (!notificationSettings.get('deploys')) return;
   slack.notifyDeployment(release, deployment);
 });
 
 releases.on('deployment:updated', (release, deployment) => {
+  if (!notificationSettings.get('deploys')) return;
   if (deployment.status === 'failed') {
     slack.notifyDeployFailed(release, deployment);
   } else {
@@ -192,6 +207,7 @@ const services = {
   prSync,
   aws, pipelineSync,
   releaseNotifier,
+  peopleDirectory, notificationSettings, notificationEngine,
 };
 const webServer = createWebServer(services, config);
 
@@ -206,6 +222,7 @@ const webServer = createWebServer(services, config);
 
   // Start JIRA sync (primary source of truth for releases)
   jiraSync.on('release:date-changed', (release, { oldDate, newDate }) => {
+    if (!notificationSettings.get('releaseStatus')) return;
     const SlackNotifier = require('./integrations/slack');
     const channel = SlackNotifier.releaseChannelName(release.version);
     const text = `📅 *Release ${release.version}* date changed: ~${oldDate}~ → *${newDate}*`;
@@ -225,6 +242,16 @@ const webServer = createWebServer(services, config);
 
   // Start release channel notifier (9 AM + 2 PM ET for due releases)
   releaseNotifier.start();
+
+  // Start notification engine (daily digest, build alerts, ticket changes)
+  peopleDirectory.load();
+  jiraSync.on('sync:version-tickets', (version, changes) => {
+    notificationEngine.bufferTicketChanges(version, changes);
+  });
+  pipelineSync.on('sync:completed', () => {
+    notificationEngine.checkBuildTransitions(pipelineSync.buildProjects);
+  });
+  notificationEngine.start();
 
   // Start pipeline sync (CodeBuild + CodePipeline status)
   pipelineSync.start();
@@ -249,7 +276,7 @@ const webServer = createWebServer(services, config);
 
   // Start environment version poller (hits /api/status/version on each env)
   envPoller.on('env:version-changed', ({ envName, customerId, newVersion, previousVersion }) => {
-    // Send deployment notification to the release-specific Slack channel
+    if (!notificationSettings.get('releaseStatus')) return;
     const customer = customerStore.getCustomer ? customerStore.getCustomer(customerId) : null;
     const customerName = customer?.name || customerId;
     slack.notifyReleaseDeployment(newVersion, envName, customerName, previousVersion);
@@ -268,6 +295,8 @@ function shutdown() {
   cherryPickWatcher.stop();
   envPoller.stop();
   datadogPoller.stop();
+  notificationEngine.stop();
+  notificationSettings.flush();
   slack.stop().catch(() => {});
   releases.flush();
   customerStore.flush();

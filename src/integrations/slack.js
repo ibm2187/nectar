@@ -84,7 +84,8 @@ class SlackNotifier {
   // ── Lifecycle notification templates ────────────────────
 
   notifyReleaseCut(release) {
-    const channel = this.config.slack.releases;
+    const channel = SlackNotifier.releaseChannelName(release.version);
+    if (this._badChannels) this._badChannels.delete(channel);
     const text = [
       `*Release ${release.version} has been cut*`,
       `Branch: \`${release.branch}\``,
@@ -95,7 +96,8 @@ class SlackNotifier {
   }
 
   notifyTransition(release, from, to) {
-    const channel = this.config.slack.releases;
+    const channel = SlackNotifier.releaseChannelName(release.version);
+    if (this._badChannels) this._badChannels.delete(channel);
     const emoji = {
       planning: ':clipboard:',
       cutting: ':scissors:',
@@ -109,42 +111,45 @@ class SlackNotifier {
   }
 
   notifyApprovalAdded(release, approval) {
-    const channel = this.config.slack.releases;
+    const channel = SlackNotifier.releaseChannelName(release.version);
+    if (this._badChannels) this._badChannels.delete(channel);
     const text = `*${release.version}*: ${approval.role} approval from ${approval.user}`;
     return this.postMessage(channel, text);
   }
 
   notifyAllApproved(release) {
-    const channels = [this.config.slack.releases, this.config.slack.deploys];
+    const channel = SlackNotifier.releaseChannelName(release.version);
+    if (this._badChannels) this._badChannels.delete(channel);
     const text = `*${release.version}* has all required approvals — ready for deployment`;
-    return Promise.all(channels.map(ch => this.postMessage(ch, text)));
+    return this.postMessage(channel, text);
   }
 
   notifyApprovalNeeded(release, missingRoles) {
-    const channel = this.config.slack.releases;
+    const channel = SlackNotifier.releaseChannelName(release.version);
+    if (this._badChannels) this._badChannels.delete(channel);
     const text = `*${release.version}* needs approval from: ${missingRoles.join(', ')}`;
     return this.postMessage(channel, text);
   }
 
   notifyDeployment(release, deployment) {
-    const channel = this.config.slack.deploys;
+    const channel = SlackNotifier.releaseChannelName(release.version);
+    if (this._badChannels) this._badChannels.delete(channel);
     const emoji = deployment.status === 'deployed' ? ':white_check_mark:' : ':warning:';
     const text = `${emoji} *${release.version}* → ${deployment.customer} (${deployment.env}): ${deployment.status}`;
     return this.postMessage(channel, text);
   }
 
   notifyDeployFailed(release, deployment) {
-    const channel = this.config.slack.deploys;
+    const channel = SlackNotifier.releaseChannelName(release.version);
+    if (this._badChannels) this._badChannels.delete(channel);
     const text = `:x: *${release.version}* deploy FAILED for ${deployment.customer} (${deployment.env})`;
     return this.postMessage(channel, text);
   }
 
   notifyCherryPickConflict(release, cherryPick, author) {
+    if (!author) return; // DM-only — no channel fallback
     const text = `:warning: Cherry-pick conflict on *${release.version}*\nPR #${cherryPick.pr} (${cherryPick.ticket || 'no ticket'})\nPlease resolve manually.`;
-    if (author) {
-      return this.dmUser(author, text);
-    }
-    return this.postMessage(this.config.slack.releases, text);
+    return this.dmUser(author, text);
   }
 
   notifyRiskAssessment(release) {

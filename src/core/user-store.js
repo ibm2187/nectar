@@ -4,6 +4,13 @@ const log = require('./log');
 
 const STATE_FILE = path.join(__dirname, '..', '..', '.nectar-users.json');
 
+const DEFAULT_NOTIFICATION_PREFS = {
+  dailyDigest: true,
+  buildFailures: true,
+};
+
+const ALL_NOTIFICATION_PREF_KEYS = Object.keys(DEFAULT_NOTIFICATION_PREFS);
+
 const DEFAULT_PERMISSIONS = {
   releases: true,
   roadmap: true,
@@ -61,6 +68,7 @@ class UserStore {
       picture: picture || null,
       role: 'user',
       permissions: { ...DEFAULT_PERMISSIONS },
+      notificationPrefs: { ...DEFAULT_NOTIFICATION_PREFS },
       lastLoginAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
     };
@@ -111,6 +119,15 @@ class UserStore {
       for (const pKey of ALL_PERMISSION_KEYS) {
         if (typeof updates.permissions[pKey] === 'boolean') {
           user.permissions[pKey] = updates.permissions[pKey];
+        }
+      }
+    }
+
+    if (updates.notificationPrefs && typeof updates.notificationPrefs === 'object') {
+      if (!user.notificationPrefs) user.notificationPrefs = { ...DEFAULT_NOTIFICATION_PREFS };
+      for (const nKey of ALL_NOTIFICATION_PREF_KEYS) {
+        if (typeof updates.notificationPrefs[nKey] === 'boolean') {
+          user.notificationPrefs[nKey] = updates.notificationPrefs[nKey];
         }
       }
     }
@@ -216,6 +233,13 @@ class UserStore {
             for (const pKey of ALL_PERMISSION_KEYS) {
               if (typeof user.permissions[pKey] !== 'boolean') {
                 user.permissions[pKey] = true;
+              }
+            }
+            // Backfill notification preferences
+            if (!user.notificationPrefs) user.notificationPrefs = { ...DEFAULT_NOTIFICATION_PREFS };
+            for (const nKey of ALL_NOTIFICATION_PREF_KEYS) {
+              if (typeof user.notificationPrefs[nKey] !== 'boolean') {
+                user.notificationPrefs[nKey] = DEFAULT_NOTIFICATION_PREFS[nKey];
               }
             }
             this.users.set(user.email.toLowerCase(), user);

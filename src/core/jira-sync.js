@@ -344,6 +344,11 @@ class JiraSync extends EventEmitter {
     const releaseKey = this.releases._key(release.repo, release.version);
     let updated = 0;
 
+    // Snapshot existing JIRA ticket keys BEFORE mutations (for change detection)
+    const preExistingKeys = new Set(
+      release.tickets.filter(t => t.source === 'jira').map(t => t.key)
+    );
+
     // Build normalized ticket data
     const syncedTickets = [];
     for (const issue of issues) {
@@ -375,6 +380,14 @@ class JiraSync extends EventEmitter {
     // Prune tickets that JIRA no longer returns for this version.
     // This catches fixVersion removals, ticket deletions, etc.
     const freshKeys = new Set(issues.map(i => i.key));
+
+    // Capture removed ticket info BEFORE pruning (for change notification)
+    const removedKeys = [...preExistingKeys].filter(k => !freshKeys.has(k));
+    const removedTicketInfo = removedKeys.map(k => {
+      const t = release.tickets.find(t => t.key === k);
+      return { key: k, summary: t ? t.summary : k };
+    });
+
     const before = release.tickets.length;
     release.tickets = release.tickets.filter(t => {
       if (t.source !== 'jira') return true;
@@ -384,6 +397,19 @@ class JiraSync extends EventEmitter {
     if (pruned > 0) {
       log.info(`JIRA sync: ${versionName} — pruned ${pruned} stale tickets`);
       this.releases._debounceSave();
+    }
+
+    // Emit ticket add/remove details for notification engine
+    const addedKeys = [...freshKeys].filter(k => !preExistingKeys.has(k));
+    if (addedKeys.length > 0 || removedTicketInfo.length > 0) {
+      this.emit('sync:version-tickets', release.version, {
+        repo: release.repo,
+        added: addedKeys.map(k => {
+          const td = syncedTickets.find(t => t.key === k);
+          return { key: k, summary: td ? td.summary : k };
+        }),
+        removed: removedTicketInfo,
+      });
     }
 
     // Also sync to repos that share this version number (e.g., bluesummit ← webplatform)

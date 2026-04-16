@@ -11,13 +11,14 @@ import { UpdatePage } from '../admin/UpdatePage'
 
 // ── Tab types ─────────────────────────────────────────
 
-type Tab = 'themes' | 'api-keys' | 'users' | 'connections' | 'backfills' | 'update'
+type Tab = 'themes' | 'api-keys' | 'users' | 'connections' | 'notifications' | 'backfills' | 'update'
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'themes', label: 'Themes' },
   { key: 'api-keys', label: 'API Keys' },
   { key: 'users', label: 'Users' },
   { key: 'connections', label: 'Connections' },
+  { key: 'notifications', label: 'Notifications' },
   { key: 'backfills', label: 'Backfills' },
   { key: 'update', label: 'Update' },
 ]
@@ -67,6 +68,7 @@ export function ConfigPage() {
       {activeTab === 'api-keys' && <ApiKeysSection />}
       {activeTab === 'users' && <UsersTab />}
       {activeTab === 'connections' && <IntegrationsConfigPage />}
+      {activeTab === 'notifications' && <NotificationsTab />}
       {activeTab === 'backfills' && <BackfillsTab />}
       {activeTab === 'update' && <UpdatePage />}
     </div>
@@ -492,10 +494,16 @@ interface UserRecord {
   picture: string | null
   role: 'admin' | 'user'
   permissions: Record<string, boolean>
+  notificationPrefs?: Record<string, boolean>
   isEnvAdmin: boolean
   lastLoginAt: string | null
   createdAt: string
 }
+
+const NOTIFICATION_PREF_KEYS = [
+  { key: 'dailyDigest', label: 'Daily Digest DM' },
+  { key: 'buildFailures', label: 'Build Failure DMs' },
+] as const
 
 function formatRelativeTime(dateStr: string | null): string {
   if (!dateStr) return 'Never'
@@ -522,6 +530,7 @@ function UsersTab() {
   const [editingEmail, setEditingEmail] = useState<string | null>(null)
   const [editRole, setEditRole] = useState<'admin' | 'user'>('user')
   const [editPermissions, setEditPermissions] = useState<Record<string, boolean>>({})
+  const [editNotifPrefs, setEditNotifPrefs] = useState<Record<string, boolean>>({})
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
 
@@ -544,6 +553,7 @@ function UsersTab() {
     setEditingEmail(user.email)
     setEditRole(user.role)
     setEditPermissions({ ...user.permissions })
+    setEditNotifPrefs({ ...(user.notificationPrefs || { dailyDigest: true, buildFailures: true }) })
     setSaveMsg(null)
   }
 
@@ -560,7 +570,7 @@ function UsersTab() {
     try {
       const updated = await apiFetch<UserRecord>(`/users/${encodeURIComponent(editingEmail)}`, {
         method: 'PATCH',
-        body: JSON.stringify({ role: editRole, permissions: editPermissions }),
+        body: JSON.stringify({ role: editRole, permissions: editPermissions, notificationPrefs: editNotifPrefs }),
       })
       setUsers(prev => prev.map(u => u.email === updated.email ? updated : u))
       setEditingEmail(null)
@@ -574,6 +584,10 @@ function UsersTab() {
 
   function togglePermission(key: string) {
     setEditPermissions(prev => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  function toggleNotifPref(key: string) {
+    setEditNotifPrefs(prev => ({ ...prev, [key]: !prev[key] }))
   }
 
   if (loading) {
@@ -616,12 +630,14 @@ function UsersTab() {
                     isEditing={editingEmail === user.email}
                     editRole={editRole}
                     editPermissions={editPermissions}
+                    editNotifPrefs={editNotifPrefs}
                     saving={saving}
                     onStartEdit={() => startEdit(user)}
                     onCancelEdit={cancelEdit}
                     onSave={saveUser}
                     onRoleChange={setEditRole}
                     onTogglePermission={togglePermission}
+                    onToggleNotifPref={toggleNotifPref}
                   />
                 ))}
                 {users.length === 0 && (
@@ -640,17 +656,19 @@ function UsersTab() {
   )
 }
 
-function UserRow({ user, isEditing, editRole, editPermissions, saving, onStartEdit, onCancelEdit, onSave, onRoleChange, onTogglePermission }: {
+function UserRow({ user, isEditing, editRole, editPermissions, editNotifPrefs, saving, onStartEdit, onCancelEdit, onSave, onRoleChange, onTogglePermission, onToggleNotifPref }: {
   user: UserRecord
   isEditing: boolean
   editRole: 'admin' | 'user'
   editPermissions: Record<string, boolean>
+  editNotifPrefs: Record<string, boolean>
   saving: boolean
   onStartEdit: () => void
   onCancelEdit: () => void
   onSave: () => void
   onRoleChange: (role: 'admin' | 'user') => void
   onTogglePermission: (key: string) => void
+  onToggleNotifPref: (key: string) => void
 }) {
   const isAdmin = user.role === 'admin'
   const permCount = countPermissions(user.permissions)
@@ -743,6 +761,24 @@ function UserRow({ user, isEditing, editRole, editPermissions, saving, onStartEd
                     </span>
                   </label>
                 ))}
+              </div>
+
+              {/* Notification preferences */}
+              <div>
+                <p className="text-xs text-muted-foreground mb-1.5">Slack Notifications</p>
+                <div className="grid grid-cols-4 gap-x-6 gap-y-2">
+                  {NOTIFICATION_PREF_KEYS.map(p => (
+                    <label key={p.key} className="flex items-center gap-2 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={editNotifPrefs[p.key] !== false}
+                        onChange={() => onToggleNotifPref(p.key)}
+                        className="rounded border-border"
+                      />
+                      <span className="text-xs group-hover:text-foreground">{p.label}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
 
               {/* Role + Save */}
@@ -945,6 +981,319 @@ interface BackfillResult {
   skipped: number
   errors: string[]
 }
+
+// ── Notifications Tab ─────────────────────────────────
+
+interface NotifSettings {
+  enabled: boolean
+  channels: Record<string, boolean>
+}
+
+interface PeopleEntry {
+  name: string
+  slackId: string
+  username: string
+}
+
+const CHANNEL_TOGGLES: { key: string; label: string; description: string }[] = [
+  { key: 'releases', label: 'Release Lifecycle', description: 'Cut, state transitions, and approvals — posted to the per-release channel (e.g. #releases-4-2-0)' },
+  { key: 'deploys', label: 'Deployments', description: 'Deployment success and failure alerts — posted to the per-release channel' },
+  { key: 'releaseStatus', label: 'Scheduled Status Updates', description: '9 AM and 2 PM status digests, date changes, and environment deployments — per-release channel' },
+  { key: 'buildFailures', label: 'Build Failure Alerts', description: 'DMs to dev and QA assignees when a build fails or recovers' },
+  { key: 'dailyDigest', label: 'Daily Digest', description: 'Morning DM to each person with their undone tickets across upcoming releases' },
+]
+
+function ToggleSwitch({ enabled, disabled, onToggle }: { enabled: boolean; disabled?: boolean; onToggle: () => void }) {
+  return (
+    <button
+      onClick={onToggle}
+      disabled={disabled}
+      className={cn(
+        'relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors cursor-pointer',
+        disabled && 'opacity-40 cursor-not-allowed',
+        enabled ? 'bg-green-500' : 'bg-zinc-600'
+      )}
+    >
+      <span className={cn(
+        'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform',
+        enabled ? 'translate-x-4' : 'translate-x-0'
+      )} />
+    </button>
+  )
+}
+
+function NotificationsTab() {
+  const [settings, setSettings] = useState<NotifSettings | null>(null)
+  const [directory, setDirectory] = useState<{ loaded: boolean; entries: PeopleEntry[]; unresolved: { name: string; queryCount: number }[] } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [testUser, setTestUser] = useState('')
+  const [testResult, setTestResult] = useState<string | null>(null)
+  const [testSending, setTestSending] = useState(false)
+  const [resolvingName, setResolvingName] = useState<string | null>(null)
+  const [resolveQuery, setResolveQuery] = useState('')
+  const [resolveResults, setResolveResults] = useState<{ id: string; name: string; username: string }[]>([])
+  const [resolveSearching, setResolveSearching] = useState(false)
+
+  async function load() {
+    setLoading(true)
+    try {
+      const [s, d] = await Promise.all([
+        apiFetch<NotifSettings>('/notifications/settings'),
+        apiFetch<{ loaded: boolean; entries: PeopleEntry[]; unresolved: { name: string; queryCount: number }[] }>('/people/directory'),
+      ])
+      setSettings(s)
+      setDirectory(d)
+    } catch { /* ignore */ }
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function updateSettings(patch: Partial<NotifSettings>) {
+    if (!settings) return
+    setSaving(true)
+    try {
+      const updated = await apiFetch<NotifSettings>('/notifications/settings', {
+        method: 'PUT',
+        body: JSON.stringify(patch),
+      })
+      setSettings(updated)
+    } catch { /* ignore */ }
+    setSaving(false)
+  }
+
+  async function reloadDirectory() {
+    try {
+      await apiFetch('/people/directory/reload', { method: 'POST' })
+      await load()
+    } catch { /* ignore */ }
+  }
+
+  async function testDigest() {
+    if (!testUser) return
+    setTestSending(true)
+    setTestResult(null)
+    try {
+      const res = await apiFetch<{ ok: boolean; message: string }>('/notifications/test-digest', {
+        method: 'POST',
+        body: JSON.stringify({ slackId: testUser }),
+      })
+      setTestResult(res.message)
+    } catch (err) {
+      setTestResult(err instanceof Error ? err.message : 'Failed')
+    }
+    setTestSending(false)
+    setTimeout(() => setTestResult(null), 5000)
+  }
+
+  async function searchSlack(query: string) {
+    if (!query.trim()) return
+    setResolveSearching(true)
+    try {
+      const res = await apiFetch<{ results: { id: string; name: string; username: string }[] }>('/people/directory/search-slack', {
+        method: 'POST',
+        body: JSON.stringify({ query }),
+      })
+      setResolveResults(res.results)
+    } catch { setResolveResults([]) }
+    setResolveSearching(false)
+  }
+
+  async function mapName(jiraName: string, slackId: string) {
+    try {
+      await apiFetch('/people/directory/resolve', {
+        method: 'POST',
+        body: JSON.stringify({ jiraName, slackId }),
+      })
+      setResolvingName(null)
+      setResolveQuery('')
+      setResolveResults([])
+      await load()
+    } catch { /* ignore */ }
+  }
+
+  if (loading || !settings) {
+    return <NectarLoader size="lg" message="Loading notification settings..." className="mt-32" />
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Master toggle */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-medium">All Slack Notifications</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Master toggle — when off, no Slack messages are sent (channels or DMs)
+              </p>
+            </div>
+            <ToggleSwitch
+              enabled={settings.enabled}
+              disabled={saving}
+              onToggle={() => updateSettings({ enabled: !settings.enabled })}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Channel toggles */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Notification Types</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="divide-y divide-border/30">
+            {CHANNEL_TOGGLES.map(({ key, label, description }) => (
+              <div key={key} className="flex items-center justify-between px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">{label}</p>
+                  <p className="text-xs text-muted-foreground">{description}</p>
+                </div>
+                <ToggleSwitch
+                  enabled={settings.channels[key] ?? true}
+                  disabled={saving || !settings.enabled}
+                  onToggle={() => updateSettings({ channels: { ...settings.channels, [key]: !settings.channels[key] } })}
+                />
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Test — send digest to a specific person */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Test Daily Digest</CardTitle>
+        </CardHeader>
+        <CardContent className="p-4 pt-0 space-y-2">
+          <p className="text-xs text-muted-foreground">Send a test digest DM to a specific person.</p>
+          <div className="flex items-center gap-2">
+            <select
+              value={testUser}
+              onChange={e => setTestUser(e.target.value)}
+              className="h-8 px-2 rounded border border-border bg-background text-xs flex-1 max-w-xs"
+            >
+              <option value="">Select a person...</option>
+              {directory?.entries.map(e => (
+                <option key={e.slackId} value={e.slackId}>{e.name} (@{e.username})</option>
+              ))}
+            </select>
+            <Button variant="outline" size="sm" onClick={testDigest} disabled={!testUser || testSending || !settings.enabled}>
+              {testSending ? 'Sending...' : 'Send Test'}
+            </Button>
+          </div>
+          {testResult && <p className="text-xs text-muted-foreground">{testResult}</p>}
+        </CardContent>
+      </Card>
+
+      {/* People directory */}
+      {directory && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">
+                People Directory ({directory.entries.length} loaded)
+              </CardTitle>
+              <Button variant="outline" size="sm" onClick={reloadDirectory}>Reload</Button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            {/* Unresolved names with resolve action */}
+            {directory.unresolved.length > 0 && (
+              <div className="px-4 pb-3 space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Unresolved JIRA names ({directory.unresolved.length}) — click to map to a Slack user:
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {directory.unresolved.map(u => (
+                    <button
+                      key={u.name}
+                      onClick={() => { setResolvingName(u.name); setResolveQuery(u.name); setResolveResults([]) }}
+                      className={cn(
+                        'inline-flex items-center px-2 py-0.5 rounded text-[10px] border cursor-pointer transition-colors',
+                        resolvingName === u.name
+                          ? 'bg-orange-500/20 text-orange-300 border-orange-500/50'
+                          : 'text-orange-400 border-orange-500/30 hover:bg-orange-500/10'
+                      )}
+                    >
+                      {u.name}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Resolve panel */}
+                {resolvingName && (
+                  <div className="rounded border border-border p-3 space-y-2 bg-accent/5">
+                    <p className="text-xs font-medium">Map "{resolvingName}" to a Slack user</p>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={resolveQuery}
+                        onChange={e => setResolveQuery(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && searchSlack(resolveQuery)}
+                        placeholder="Search Slack by name..."
+                        className="h-7 text-xs flex-1 max-w-xs"
+                      />
+                      <Button variant="outline" size="sm" onClick={() => searchSlack(resolveQuery)} disabled={resolveSearching}>
+                        {resolveSearching ? 'Searching...' : 'Search Slack'}
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => { setResolvingName(null); setResolveResults([]) }}>
+                        Cancel
+                      </Button>
+                    </div>
+                    {resolveResults.length > 0 && (
+                      <div className="space-y-1">
+                        {resolveResults.map(r => (
+                          <button
+                            key={r.id}
+                            onClick={() => mapName(resolvingName, r.id)}
+                            className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-accent/30 text-left transition-colors"
+                          >
+                            <span className="text-xs font-medium">{r.name}</span>
+                            <span className="text-[10px] text-muted-foreground">@{r.username}</span>
+                            <span className="text-[10px] text-muted-foreground font-mono ml-auto">{r.id}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {resolveResults.length === 0 && resolveSearching === false && resolveQuery && (
+                      <p className="text-xs text-muted-foreground">No results. Try a different search term.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Directory table */}
+            <div className="overflow-x-auto max-h-64 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-card">
+                  <tr className="border-b text-left">
+                    <th className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Name</th>
+                    <th className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Username</th>
+                    <th className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Slack ID</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {directory.entries.map(e => (
+                    <tr key={e.slackId} className="border-b border-border/20">
+                      <td className="px-4 py-1.5 text-xs">{e.name}</td>
+                      <td className="px-4 py-1.5 text-xs text-muted-foreground">{e.username}</td>
+                      <td className="px-4 py-1.5 text-xs text-muted-foreground font-mono">{e.slackId}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+// ── Backfills Tab ─────────────────────────────────────
 
 function BackfillsTab() {
   const [running, setRunning] = useState(false)

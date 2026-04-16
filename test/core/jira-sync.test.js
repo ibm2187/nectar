@@ -225,6 +225,124 @@ describe('JiraSync', () => {
     });
   });
 
+  describe('sync:version-tickets event', () => {
+    it('emits with added tickets when new tickets appear', async () => {
+      releases.create({ repo: 'webplatform', version: '4.2.3' });
+
+      mockJira.getIssuesForVersion.mockResolvedValue([
+        {
+          key: 'DEV-500', fields: {
+            summary: 'Brand new ticket', status: { name: 'Open' },
+            issuetype: { name: 'Bug' }, assignee: null, fixVersions: [{ name: '4.2.3' }], labels: [],
+          },
+        },
+      ]);
+
+      const events = [];
+      jiraSync.on('sync:version-tickets', (version, data) => events.push({ version, data }));
+
+      await jiraSync._syncVersionTickets('4.2.3');
+
+      expect(events).toHaveLength(1);
+      expect(events[0].version).toBe('4.2.3');
+      expect(events[0].data.added).toHaveLength(1);
+      expect(events[0].data.added[0].key).toBe('DEV-500');
+      expect(events[0].data.added[0].summary).toBe('Brand new ticket');
+      expect(events[0].data.removed).toHaveLength(0);
+    });
+
+    it('emits with removed tickets when tickets are pruned', async () => {
+      releases.create({ repo: 'webplatform', version: '4.2.3' });
+      releases.addTicket('webplatform:4.2.3', {
+        key: 'DEV-600', summary: 'Going away', source: 'jira', fixVersions: ['4.2.3'],
+      });
+
+      // JIRA no longer returns this ticket
+      mockJira.getIssuesForVersion.mockResolvedValue([]);
+
+      const events = [];
+      jiraSync.on('sync:version-tickets', (version, data) => events.push({ version, data }));
+
+      await jiraSync._syncVersionTickets('4.2.3');
+
+      expect(events).toHaveLength(1);
+      expect(events[0].data.added).toHaveLength(0);
+      expect(events[0].data.removed).toHaveLength(1);
+      expect(events[0].data.removed[0].key).toBe('DEV-600');
+      expect(events[0].data.removed[0].summary).toBe('Going away');
+    });
+
+    it('emits with both added and removed in same sync', async () => {
+      releases.create({ repo: 'webplatform', version: '4.2.3' });
+      releases.addTicket('webplatform:4.2.3', {
+        key: 'DEV-700', summary: 'Old', source: 'jira', fixVersions: ['4.2.3'],
+      });
+
+      // New ticket replaces old one
+      mockJira.getIssuesForVersion.mockResolvedValue([
+        {
+          key: 'DEV-800', fields: {
+            summary: 'New', status: { name: 'Open' },
+            issuetype: { name: 'Bug' }, assignee: null, fixVersions: [{ name: '4.2.3' }], labels: [],
+          },
+        },
+      ]);
+
+      const events = [];
+      jiraSync.on('sync:version-tickets', (version, data) => events.push({ version, data }));
+
+      await jiraSync._syncVersionTickets('4.2.3');
+
+      expect(events).toHaveLength(1);
+      expect(events[0].data.added.map(t => t.key)).toEqual(['DEV-800']);
+      expect(events[0].data.removed.map(t => t.key)).toEqual(['DEV-700']);
+    });
+
+    it('does not emit when nothing changed', async () => {
+      releases.create({ repo: 'webplatform', version: '4.2.3' });
+      releases.addTicket('webplatform:4.2.3', {
+        key: 'DEV-900', summary: 'Same', source: 'jira', fixVersions: ['4.2.3'],
+      });
+
+      // Same ticket still in JIRA — no add or remove
+      mockJira.getIssuesForVersion.mockResolvedValue([
+        {
+          key: 'DEV-900', fields: {
+            summary: 'Same', status: { name: 'In Progress' },
+            issuetype: { name: 'Bug' }, assignee: null, fixVersions: [{ name: '4.2.3' }], labels: [],
+          },
+        },
+      ]);
+
+      const events = [];
+      jiraSync.on('sync:version-tickets', (version, data) => events.push({ version, data }));
+
+      await jiraSync._syncVersionTickets('4.2.3');
+
+      expect(events).toHaveLength(0);
+    });
+
+    it('includes the repo in event data', async () => {
+      releases.create({ repo: 'webplatform', version: '4.2.3' });
+
+      mockJira.getIssuesForVersion.mockResolvedValue([
+        {
+          key: 'DEV-1000', fields: {
+            summary: 'X', status: { name: 'Open' },
+            issuetype: { name: 'Bug' }, assignee: null, fixVersions: [{ name: '4.2.3' }], labels: [],
+          },
+        },
+      ]);
+
+      const events = [];
+      jiraSync.on('sync:version-tickets', (version, data) => events.push({ version, data }));
+
+      await jiraSync._syncVersionTickets('4.2.3');
+
+      expect(events[0].data.repo).toBe('webplatform');
+    });
+  });
+
   describe('_transitionPath', () => {
     it('returns path from planning to done', () => {
       const path = jiraSync._transitionPath('planning', 'done');

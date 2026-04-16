@@ -905,6 +905,93 @@ module.exports = function createRoutes(services, config) {
     res.json(result);
   });
 
+  // ── People Directory (Slack ID resolution) ────────────
+
+  router.get('/people/directory', (req, res) => {
+    const { peopleDirectory } = services;
+    if (!peopleDirectory || !peopleDirectory.isLoaded()) {
+      return res.json({ loaded: false, entries: [], unresolved: [] });
+    }
+    res.json({
+      loaded: true,
+      entries: peopleDirectory.getAll(),
+      unresolved: peopleDirectory.getUnresolved(),
+    });
+  });
+
+  router.post('/people/directory/reload', requireAdmin, asyncHandler(async (req, res) => {
+    const { peopleDirectory } = services;
+    const count = peopleDirectory.reload();
+    res.json({ ok: true, loaded: count });
+  }));
+
+  // ── Notification Settings ─────────────────────────────
+
+  router.get('/notifications/settings', (req, res) => {
+    const { notificationSettings } = services;
+    res.json(notificationSettings.getAll());
+  });
+
+  router.put('/notifications/settings', requireAdmin, (req, res) => {
+    const { notificationSettings } = services;
+    notificationSettings.update(req.body);
+    res.json(notificationSettings.getAll());
+  });
+
+  router.put('/users/:email/notifications', (req, res) => {
+    const { userStore } = services;
+    const user = userStore.updateUser(req.params.email, { notificationPrefs: req.body });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({ notificationPrefs: user.notificationPrefs });
+  });
+
+  router.post('/notifications/test-digest', requireAdmin, asyncHandler(async (req, res) => {
+    const { notificationEngine } = services;
+    const { slackId } = req.body || {};
+    if (!slackId) return res.status(400).json({ error: 'slackId is required — select a person to send to' });
+    const result = await notificationEngine.sendDailyDigestToUser(slackId);
+    res.json(result);
+  }));
+
+  router.post('/notifications/test-ticket-changes', requireAdmin, asyncHandler(async (req, res) => {
+    const { notificationEngine } = services;
+    await notificationEngine.sendTicketChangeDigests();
+    res.json({ ok: true, message: 'Ticket change digest triggered' });
+  }));
+
+  // Resolve an unresolved JIRA name by manually mapping it to a Slack user
+  router.post('/people/directory/resolve', requireAdmin, asyncHandler(async (req, res) => {
+    const { peopleDirectory } = services;
+    const { jiraName, slackId } = req.body || {};
+    if (!jiraName || !slackId) return res.status(400).json({ error: 'jiraName and slackId are required' });
+    peopleDirectory.addOverride(jiraName, slackId);
+    res.json({ ok: true, jiraName, slackId });
+  }));
+
+  // Search Slack users by name (for resolving unmatched names)
+  router.post('/people/directory/search-slack', requireAdmin, asyncHandler(async (req, res) => {
+    const { slack } = services;
+    const { query } = req.body || {};
+    if (!query) return res.status(400).json({ error: 'query is required' });
+    if (!slack.isConfigured() || !slack.app) {
+      return res.status(503).json({ error: 'Slack not connected' });
+    }
+    try {
+      const result = await slack.app.client.users.list({ limit: 200 });
+      const members = (result.members || [])
+        .filter(m => !m.deleted && !m.is_bot && m.id !== 'USLACKBOT')
+        .filter(m => {
+          const name = (m.real_name || m.name || '').toLowerCase();
+          return name.includes(query.toLowerCase());
+        })
+        .slice(0, 10)
+        .map(m => ({ id: m.id, name: m.real_name || m.name, username: m.name }));
+      res.json({ results: members });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }));
+
   // ── PR Sync ───────────────────────────────────────────
 
   router.get('/pr/status', (req, res) => {
