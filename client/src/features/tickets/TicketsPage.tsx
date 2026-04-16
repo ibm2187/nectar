@@ -4,22 +4,11 @@ import { apiFetch, type ZohoRef } from '../../api/client'
 import { Card, CardContent } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
-import { JiraLink } from '../../components/JiraLink'
 import { NectarLoader } from '../../components/NectarLoader'
 import { cn, exportToCsv } from '../../lib/utils'
 import { SavedViews } from '../../components/SavedViews'
-
-// ── Types ──────────────────────────────────────────────
-
-type ReleaseSource = 'both' | 'target' | 'fixVersion'
-
-interface ReleaseMembership {
-  repo: string
-  version: string
-  inTarget: boolean
-  inFixVersion: boolean
-  source: ReleaseSource
-}
+import { TicketRow, type ReleaseMembership } from '../../components/TicketRow'
+import { SortableHeader, useSortableData, nextSortState, type SortState, type SortDir as SortableSortDir } from '../../components/SortableHeader'
 
 interface ReleaseColumn {
   repo: string
@@ -60,7 +49,6 @@ interface TicketsResponse {
 
 type GapFilter = 'any' | 'missing' | 'unplanned' | 'matched'
 type SortKey = 'key' | 'summary' | 'status' | 'assignee' | 'qaAssignee' | 'releases'
-type SortDir = 'asc' | 'desc'
 
 // ── Page ───────────────────────────────────────────────
 
@@ -71,8 +59,12 @@ export function TicketsPage() {
   const repoFilter = searchParams.get('repo') || ''
   const gapFilter = (searchParams.get('gap') as GapFilter) || 'any'
   const releaseFilter = searchParams.get('release') || '' // comma-separated
-  const sortKey = (searchParams.get('sort') as SortKey) || 'key'
-  const sortDir = (searchParams.get('dir') as SortDir) || 'desc'
+  const sortKeyRaw = searchParams.get('sort') as SortKey | null
+  const sortDirRaw = searchParams.get('dir') as SortableSortDir | null
+  const sortState: SortState<SortKey> = {
+    key: sortKeyRaw,
+    dir: sortDirRaw === 'asc' || sortDirRaw === 'desc' ? sortDirRaw : null,
+  }
 
   const [data, setData] = useState<TicketsResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -151,28 +143,23 @@ export function TicketsPage() {
       })
     }
 
-    rows = [...rows].sort((a, b) => {
-      let cmp = 0
-      switch (sortKey) {
-        case 'key':      cmp = a.key.localeCompare(b.key, undefined, { numeric: true }); break
-        case 'summary':  cmp = a.summary.localeCompare(b.summary); break
-        case 'status':   cmp = a.jiraStatus.localeCompare(b.jiraStatus); break
-        case 'assignee': cmp = (a.assignee || 'zzz').localeCompare(b.assignee || 'zzz'); break
-        case 'qaAssignee': cmp = (a.qaAssignee || 'zzz').localeCompare(b.qaAssignee || 'zzz'); break
-        case 'releases': cmp = a.releases.length - b.releases.length; break
-      }
-      return sortDir === 'asc' ? cmp : -cmp
-    })
-
     return rows
-  }, [data, repoFilter, selectedReleases, gapFilter, search, sortKey, sortDir])
+  }, [data, repoFilter, selectedReleases, gapFilter, search])
+
+  // Sort applied separately so we can reuse a shared hook
+  const sortAccessors = useMemo(() => ({
+    key:        (t: Ticket) => t.key,
+    summary:    (t: Ticket) => t.summary,
+    status:     (t: Ticket) => t.jiraStatus,
+    assignee:   (t: Ticket) => t.assignee,
+    qaAssignee: (t: Ticket) => t.qaAssignee,
+    releases:   (t: Ticket) => t.releases.length,
+  }), [])
+  const sorted = useSortableData<Ticket, SortKey>(filtered, sortState, sortAccessors)
 
   function setSort(key: SortKey) {
-    if (sortKey === key) {
-      updateParams({ sort: key, dir: sortDir === 'asc' ? 'desc' : 'asc' })
-    } else {
-      updateParams({ sort: key, dir: 'asc' })
-    }
+    const next = nextSortState(sortState, key)
+    updateParams({ sort: next.key, dir: next.dir })
   }
 
   // ── Render ────────────────────────────────────────────
@@ -277,7 +264,7 @@ export function TicketsPage() {
               exportToCsv(
                 'tickets.csv',
                 ['Key', 'Summary', 'Status', 'Type', 'Assignee', 'QA', 'Deployed', 'Releases'],
-                filtered.map(t => [
+                sorted.map(t => [
                   t.key,
                   t.summary,
                   t.jiraStatus,
@@ -325,17 +312,17 @@ export function TicketsPage() {
                 </colgroup>
                 <thead className="sticky top-0 bg-background z-10">
                   <tr className="border-b text-left">
-                    <SortHeader label="Key"       active={sortKey === 'key'}       dir={sortDir} onClick={() => setSort('key')} />
-                    <SortHeader label="Summary"   active={sortKey === 'summary'}   dir={sortDir} onClick={() => setSort('summary')} />
-                    <SortHeader label="Status"    active={sortKey === 'status'}    dir={sortDir} onClick={() => setSort('status')} />
-                    <SortHeader label="Assignee"  active={sortKey === 'assignee'}  dir={sortDir} onClick={() => setSort('assignee')} />
-                    <SortHeader label="QA"        active={sortKey === 'qaAssignee'} dir={sortDir} onClick={() => setSort('qaAssignee')} className="hidden md:table-cell" />
+                    <SortableHeader label="Key"       sortKey="key"        state={sortState} onSort={k => setSort(k as SortKey)} />
+                    <SortableHeader label="Summary"   sortKey="summary"    state={sortState} onSort={k => setSort(k as SortKey)} />
+                    <SortableHeader label="Status"    sortKey="status"     state={sortState} onSort={k => setSort(k as SortKey)} />
+                    <SortableHeader label="Assignee"  sortKey="assignee"   state={sortState} onSort={k => setSort(k as SortKey)} />
+                    <SortableHeader label="QA"        sortKey="qaAssignee" state={sortState} onSort={k => setSort(k as SortKey)} className="hidden md:table-cell" />
                     <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Deployed</th>
-                    <SortHeader label="Releases"  active={sortKey === 'releases'}  dir={sortDir} onClick={() => setSort('releases')} />
+                    <SortableHeader label="Releases"  sortKey="releases"  state={sortState} onSort={k => setSort(k as SortKey)} />
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(t => <TicketRow key={t.key} ticket={t} onReleaseClick={toggleRelease} />)}
+                  {sorted.map(t => <TicketRow key={t.key} ticket={t} onReleaseClick={toggleRelease} />)}
                 </tbody>
               </table>
             </div>
@@ -438,128 +425,4 @@ function ReleaseChips({ columns, selected, onToggle }: {
   )
 }
 
-function SortHeader({ label, active, dir, onClick, className }: {
-  label: string; active: boolean; dir: SortDir; onClick: () => void; className?: string
-}) {
-  return (
-    <th
-      onClick={onClick}
-      className={cn("px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer hover:text-foreground select-none", className)}
-    >
-      {label}
-      {active && <span className="ml-1">{dir === 'asc' ? '↑' : '↓'}</span>}
-    </th>
-  )
-}
 
-function TicketRow({ ticket: t, onReleaseClick }: {
-  ticket: Ticket
-  onReleaseClick: (version: string) => void
-}) {
-  return (
-    <tr className="border-b border-border/30 hover:bg-accent/30 transition-colors">
-      <td className="px-3 py-2 align-top">
-        <JiraLink jiraKey={t.key} />
-      </td>
-      <td className="px-3 py-2 align-top">
-        <div className="line-clamp-2" title={t.summary}>{t.summary}</div>
-        <div className="text-xs text-muted-foreground mt-0.5">{t.type || 'Task'}</div>
-      </td>
-      <td className="px-3 py-2 align-top">
-        <span className="text-xs">{t.jiraStatus}</span>
-      </td>
-      <td className="px-3 py-2 align-top">
-        <span className="text-xs">
-          {t.assignee || <span className="text-muted-foreground italic">—</span>}
-        </span>
-      </td>
-      <td className="px-3 py-2 align-top hidden md:table-cell">
-        <span className="text-xs text-muted-foreground">{t.qaAssignee || '—'}</span>
-      </td>
-      <td className="px-3 py-2 align-top hidden md:table-cell">
-        <TicketDeployedCell envs={t.deployedEnvironments} jiraStatus={t.jiraStatus} />
-      </td>
-      <td className="px-3 py-2 align-top">
-        <div className="flex flex-wrap gap-1">
-          {t.releases.map(r => (
-            <ReleaseBadge key={`${r.repo}:${r.version}`} release={r} onClick={() => onReleaseClick(r.version)} />
-          ))}
-        </div>
-      </td>
-    </tr>
-  )
-}
-
-function TicketDeployedCell({ envs, jiraStatus }: { envs: string[]; jiraStatus: string }) {
-  const needsTesting = ['ready for testing', 'testing in branch', 'in qa'].includes(jiraStatus.toLowerCase())
-
-  if (envs.length === 0) {
-    if (needsTesting) {
-      return (
-        <span
-          className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-500/15 text-red-400 border border-red-500/30"
-          title="Needs testing but not deployed anywhere"
-        >
-          Not deployed
-        </span>
-      )
-    }
-    return <span className="text-xs text-muted-foreground">—</span>
-  }
-
-  const hasProd = envs.some(e => /prod/i.test(e) && !/staging/i.test(e))
-  const hasStaging = envs.some(e => /staging|uat/i.test(e))
-  const hasQa = envs.some(e => /qa|dev|integration|sandbox/i.test(e))
-
-  const label = hasProd ? 'Prod' : hasStaging ? 'Staging' : hasQa ? 'QA' : 'Deployed'
-  const style = hasProd
-    ? 'bg-green-500/15 text-green-400 border-green-500/30'
-    : hasStaging
-    ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
-    : hasQa
-    ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
-    : 'bg-muted/30 text-muted-foreground border-muted'
-
-  return (
-    <span
-      className={cn("inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border", style)}
-      title={`${envs.length} env${envs.length !== 1 ? 's' : ''}: ${envs.join(', ')}`}
-    >
-      {label}
-    </span>
-  )
-}
-
-function ReleaseBadge({ release, onClick }: {
-  release: ReleaseMembership
-  onClick: () => void
-}) {
-  const styles: Record<ReleaseSource, string> = {
-    both:       'bg-green-500/15 text-green-400 border-green-500/40 hover:bg-green-500/25',
-    target:     'bg-yellow-500/10 text-yellow-400 border-yellow-500/40 border-dashed hover:bg-yellow-500/20',
-    fixVersion: 'bg-orange-500/15 text-orange-400 border-orange-500/40 hover:bg-orange-500/25',
-  }
-  const prefix: Record<ReleaseSource, string> = {
-    both: '',
-    target: '📋 ',
-    fixVersion: '⚡ ',
-  }
-  const titles: Record<ReleaseSource, string> = {
-    both: 'Planned AND on branch — delivered as planned',
-    target: 'In Target FixVersion only — planned but no cherry-pick yet',
-    fixVersion: 'In canonical fixVersions only — unplanned addition',
-  }
-  return (
-    <button
-      type="button"
-      onClick={(e) => { e.stopPropagation(); onClick() }}
-      className={cn(
-        "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono border transition-colors cursor-pointer",
-        styles[release.source]
-      )}
-      title={`${release.repo} · ${release.version} — ${titles[release.source]}`}
-    >
-      {prefix[release.source]}{release.version}
-    </button>
-  )
-}

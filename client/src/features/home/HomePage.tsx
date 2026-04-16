@@ -11,6 +11,8 @@ import { JiraLink } from '../../components/JiraLink'
 import { ZohoImpactBadge } from '../releases/CustomerImpact'
 import { PipelineBadge } from '../releases/PipelineView'
 import { PrDetailPanel, type PrInfo } from '../../components/PrDetailPanel'
+import { TicketRow, type TicketRowData } from '../../components/TicketRow'
+import { SortableHeader, useSortableData, useSortState } from '../../components/SortableHeader'
 
 // ── Types ────────────────────────────────────────────────
 
@@ -83,11 +85,12 @@ function relativeDate(dateStr: string): { label: string; color: string } {
 // ── Component ────────────────────────────────────────────
 
 export function HomePage() {
-  const { view, person, isFirstVisit, setView, setPerson, dismissFirstVisit } = useHomeStore()
+  const { view, person, groupBy, isFirstVisit, setView, setPerson, setGroupBy, dismissFirstVisit } = useHomeStore()
   const navigate = useNavigate()
 
   const [releases, setReleases] = useState<HomeRelease[]>([])
   const [people, setPeople] = useState<Person[]>([])
+  const [tickets, setTickets] = useState<TicketRowData[]>([])
   const [loading, setLoading] = useState(true)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [expandedTickets, setExpandedTickets] = useState<Set<string>>(new Set())
@@ -96,26 +99,39 @@ export function HomePage() {
   const [repoFilter, setRepoFilter] = useState('')
   const [ticketSearch, setTicketSearch] = useState('')
 
-  // Fetch home data
+  // Fetch home data — releases-grouped uses /releases/home, tickets-grouped uses /tickets/home
   useEffect(() => {
     setLoading(true)
     const params = new URLSearchParams()
     if (view) params.set('view', view)
     if (person) params.set('person', person)
 
-    Promise.all([
-      apiFetch<HomeRelease[]>(`/releases/home?${params}`),
-      apiFetch<Person[]>('/people'),
-    ])
-      .then(([rels, ppl]) => {
-        setReleases(rels)
-        setPeople(ppl)
-        setCollapsed(new Set()) // reset collapse state on data change
-        setExpandedTickets(new Set())
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [view, person])
+    if (groupBy === 'tickets') {
+      Promise.all([
+        apiFetch<{ tickets: TicketRowData[] }>(`/tickets/home?${params}`),
+        apiFetch<Person[]>('/people'),
+      ])
+        .then(([data, ppl]) => {
+          setTickets(data.tickets || [])
+          setPeople(ppl)
+        })
+        .catch(() => {})
+        .finally(() => setLoading(false))
+    } else {
+      Promise.all([
+        apiFetch<HomeRelease[]>(`/releases/home?${params}`),
+        apiFetch<Person[]>('/people'),
+      ])
+        .then(([rels, ppl]) => {
+          setReleases(rels)
+          setPeople(ppl)
+          setCollapsed(new Set()) // reset collapse state on data change
+          setExpandedTickets(new Set())
+        })
+        .catch(() => {})
+        .finally(() => setLoading(false))
+    }
+  }, [view, person, groupBy])
 
   const toggleCollapse = (id: string) => {
     setCollapsed(prev => {
@@ -138,28 +154,37 @@ export function HomePage() {
     })
   }
 
-  // Count tickets per status group
+  // Count tickets per status group — works for both releases and tickets mode
   const groupCounts = useMemo(() => {
     const counts: Record<string, number> = { all: 0, 'not-done': 0 }
     for (const g of STATUS_GROUPS) counts[g.key] = 0
     const doneStatuses = new Set(STATUS_GROUPS.find(g => g.key === 'done')?.statuses || [])
-    for (const r of releases) {
-      for (const t of (r.tickets || [])) {
-        counts.all++
-        const g = getStatusGroup(t.jiraStatus || '')
-        if (counts[g] !== undefined) counts[g]++
-        if (!doneStatuses.has(t.jiraStatus || '')) counts['not-done']++
-      }
+    const allTickets = groupBy === 'tickets'
+      ? tickets
+      : releases.flatMap(r => r.tickets || [])
+    for (const t of allTickets) {
+      counts.all++
+      const g = getStatusGroup(t.jiraStatus || '')
+      if (counts[g] !== undefined) counts[g]++
+      if (!doneStatuses.has(t.jiraStatus || '')) counts['not-done']++
     }
     return counts
-  }, [releases])
+  }, [releases, tickets, groupBy])
 
   // Available repos
   const repos = useMemo(() => {
     const set = new Set<string>()
-    for (const r of releases) if (r.repo) set.add(r.repo)
+    if (groupBy === 'tickets') {
+      for (const t of tickets) {
+        for (const r of (t.releases || [])) {
+          if (r.repo) set.add(r.repo)
+        }
+      }
+    } else {
+      for (const r of releases) if (r.repo) set.add(r.repo)
+    }
     return Array.from(set).sort()
-  }, [releases])
+  }, [releases, tickets, groupBy])
 
   // Apply filters
   const filteredReleases = useMemo(() => {
@@ -194,6 +219,35 @@ export function HomePage() {
     }).filter(Boolean) as HomeRelease[]
   }, [releases, statusGroup, repoFilter, ticketSearch])
 
+  // Apply same filters to tickets list (for Tickets group mode)
+  const filteredTickets = useMemo(() => {
+    const search = ticketSearch.toLowerCase().trim()
+    const groupDef = STATUS_GROUPS.find(g => g.key === statusGroup)
+    const groupStatuses = groupDef && groupDef.statuses.length > 0 ? new Set(groupDef.statuses) : null
+    const doneStatuses = statusGroup === 'not-done'
+      ? new Set(STATUS_GROUPS.find(g => g.key === 'done')?.statuses || [])
+      : null
+
+    return tickets.filter(t => {
+      // Repo filter — match if any of the ticket's releases is in that repo
+      if (repoFilter && !(t.releases || []).some(r => r.repo === repoFilter)) return false
+      // Status group filter
+      if (groupStatuses && !groupStatuses.has(t.jiraStatus || '')) return false
+      if (doneStatuses && doneStatuses.has(t.jiraStatus || '')) return false
+      // Search
+      if (search) {
+        const matches =
+          (t.key || '').toLowerCase().includes(search) ||
+          (t.summary || '').toLowerCase().includes(search) ||
+          (t.assignee || '').toLowerCase().includes(search) ||
+          (t.qaAssignee || '').toLowerCase().includes(search) ||
+          (t.jiraStatus || '').toLowerCase().includes(search)
+        if (!matches) return false
+      }
+      return true
+    })
+  }, [tickets, statusGroup, repoFilter, ticketSearch])
+
   // Split releases
   const { overdue, upcoming, unscheduled } = useMemo(() => {
     const overdue: HomeRelease[] = []
@@ -209,13 +263,17 @@ export function HomePage() {
 
   // Filter people for person selector
   const filteredPeople = useMemo(() => {
-    if (view === 'pm' || view === 'support' || view === 'cs') return []
+    if (view === 'support' || view === 'cs') return []
+    if (view === 'pm') {
+      // PM picker shows anyone who's a dev OR qa — searches both fields
+      return people.filter(p => p.roles.includes('dev') || p.roles.includes('qa'))
+    }
     const roleKey = view === 'dev' ? 'dev' : view === 'qa' ? 'qa' : null
     if (!roleKey) return people
     return people.filter(p => p.roles.includes(roleKey))
   }, [people, view])
 
-  const personEnabled = view === 'dev' || view === 'qa'
+  const personEnabled = view === 'dev' || view === 'qa' || view === 'pm'
 
   // ── First visit ────────────────────────────────────────
 
@@ -278,16 +336,43 @@ export function HomePage() {
           </select>
         )}
 
-        {filteredReleases.length > 1 && (
+        {groupBy === 'releases' && filteredReleases.length > 1 && (
           <div className="flex gap-1 ml-auto">
             <button onClick={expandAll} className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-accent/50">Expand all</button>
             <button onClick={collapseAll} className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-accent/50">Collapse all</button>
           </div>
         )}
+
+        {/* Group by toggle */}
+        <div className={cn(
+          'flex items-center gap-0.5 bg-muted rounded-lg p-0.5',
+          !(groupBy === 'releases' && filteredReleases.length > 1) && 'ml-auto'
+        )}>
+          <button
+            onClick={() => setGroupBy('releases')}
+            className={cn(
+              'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+              groupBy === 'releases' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+            )}
+            title="Group by release — see what tickets each release has"
+          >
+            Releases
+          </button>
+          <button
+            onClick={() => setGroupBy('tickets')}
+            className={cn(
+              'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+              groupBy === 'tickets' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+            )}
+            title="Group by ticket — see what releases each ticket goes to"
+          >
+            Tickets
+          </button>
+        </div>
       </div>
 
       {/* Status group pills + filters */}
-      {!loading && releases.length > 0 && (
+      {!loading && (releases.length > 0 || tickets.length > 0) && (
         <div className="space-y-2">
           <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5 flex-wrap">
             {STATUS_GROUPS.map(g => (
@@ -341,6 +426,16 @@ export function HomePage() {
 
       {loading ? (
         <div className="text-sm text-muted-foreground py-8 text-center">Loading...</div>
+      ) : groupBy === 'tickets' ? (
+        filteredTickets.length === 0 ? (
+          <div className="text-sm text-muted-foreground py-8 text-center italic">
+            {tickets.length === 0
+              ? `No tickets in scope${person ? ` for ${person}` : ''}`
+              : 'No tickets match the current filters'}
+          </div>
+        ) : (
+          <TicketsTable tickets={filteredTickets} />
+        )
       ) : filteredReleases.length === 0 ? (
         <div className="text-sm text-muted-foreground py-8 text-center italic">
           {releases.length === 0
@@ -475,6 +570,24 @@ function ReleasePanel({
   const releaseKey = r.repo ? `${r.repo}:${r.version}` : r.version
   const dateInfo = r.jiraReleaseDate ? relativeDate(r.jiraReleaseDate) : null
 
+  // Per-card sort state for the tickets table
+  type ReleaseTicketSortKey = 'key' | 'summary' | 'status' | 'cherryPick' | 'prs' | 'build' | 'dev' | 'qa'
+  const [ticketSort, onTicketSort] = useSortState<ReleaseTicketSortKey>(null)
+  const ticketAccessors = useMemo(() => ({
+    key:        (t: any) => t.key,
+    summary:    (t: any) => t.summary,
+    status:     (t: any) => t.jiraStatus,
+    cherryPick: (t: any) => (t.prs || []).filter((p: PrInfo) => {
+      const base = p.baseBranch || ''
+      return base.startsWith('releases/') || base.startsWith('VIV/') || base.startsWith('release/')
+    }).length,
+    prs:        (t: any) => (t.prs || []).length,
+    build:      (t: any) => t.build?.status || '',
+    dev:        (t: any) => t.assignee,
+    qa:         (t: any) => t.qaAssignee,
+  }), [])
+  const sortedTickets = useSortableData<any, ReleaseTicketSortKey>(r.tickets || [], ticketSort, ticketAccessors)
+
   return (
     <Card className="overflow-hidden">
       {/* Release header — always visible */}
@@ -545,22 +658,22 @@ function ReleasePanel({
             </colgroup>
             <thead>
               <tr className="border-b border-border/20 text-left">
-                <th className="pl-4 pr-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Key</th>
-                <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Summary</th>
-                <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">Status</th>
-                <th className="px-1 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Cherry-Pick PRs">Cherry Pick</th>
-                <th className="px-0.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center" title="Original PRs">PRs</th>
-                <th className="px-1 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-center">Build</th>
-                <th className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">Dev</th>
-                <th className="px-2 pr-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground text-right">QA</th>
+                <SortableHeader label="Key"        sortKey="key"        state={ticketSort} onSort={k => onTicketSort(k as ReleaseTicketSortKey)} className="pl-4 pr-2 py-1.5 text-[10px]" />
+                <SortableHeader label="Summary"    sortKey="summary"    state={ticketSort} onSort={k => onTicketSort(k as ReleaseTicketSortKey)} className="px-2 py-1.5 text-[10px]" />
+                <SortableHeader label="Status"     sortKey="status"     state={ticketSort} onSort={k => onTicketSort(k as ReleaseTicketSortKey)} align="right" className="px-2 py-1.5 text-[10px]" />
+                <SortableHeader label="Cherry Pick" sortKey="cherryPick" state={ticketSort} onSort={k => onTicketSort(k as ReleaseTicketSortKey)} align="center" className="px-1 py-1.5 text-[10px]" title="Cherry-Pick PRs" />
+                <SortableHeader label="PRs"        sortKey="prs"        state={ticketSort} onSort={k => onTicketSort(k as ReleaseTicketSortKey)} align="center" className="px-0.5 py-1.5 text-[10px]" title="Original PRs" />
+                <SortableHeader label="Build"      sortKey="build"      state={ticketSort} onSort={k => onTicketSort(k as ReleaseTicketSortKey)} align="center" className="px-1 py-1.5 text-[10px]" />
+                <SortableHeader label="Dev"        sortKey="dev"        state={ticketSort} onSort={k => onTicketSort(k as ReleaseTicketSortKey)} align="right" className="px-2 py-1.5 text-[10px]" />
+                <SortableHeader label="QA"         sortKey="qa"         state={ticketSort} onSort={k => onTicketSort(k as ReleaseTicketSortKey)} align="right" className="px-2 pr-4 py-1.5 text-[10px]" />
               </tr>
             </thead>
             <tbody>
               {(() => {
                 const limit = view === 'pm' ? 50 : 25
-                const hasMore = r.tickets.length > limit
-                const visibleTickets = (hasMore && !allTicketsExpanded) ? r.tickets.slice(0, limit) : r.tickets
-                const hiddenCount = r.tickets.length - limit
+                const hasMore = sortedTickets.length > limit
+                const visibleTickets = (hasMore && !allTicketsExpanded) ? sortedTickets.slice(0, limit) : sortedTickets
+                const hiddenCount = sortedTickets.length - limit
                 return (
                   <>
                     {visibleTickets.map((ticket: any) => {
@@ -788,5 +901,55 @@ function CustomerGroupedView({ releases }: { releases: HomeRelease[] }) {
         </Card>
       ))}
     </div>
+  )
+}
+
+// ── Tickets Table (group-by-tickets mode) ──────────────
+
+function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
+  type TicketSortKey = 'key' | 'summary' | 'status' | 'assignee' | 'qa' | 'deployed' | 'releases'
+  const [sortState, onSort] = useSortState<TicketSortKey>(null)
+  const accessors = useMemo(() => ({
+    key:       (t: TicketRowData) => t.key,
+    summary:   (t: TicketRowData) => t.summary,
+    status:    (t: TicketRowData) => t.jiraStatus,
+    assignee:  (t: TicketRowData) => t.assignee,
+    qa:        (t: TicketRowData) => t.qaAssignee,
+    deployed:  (t: TicketRowData) => (t.deployedEnvironments || []).length,
+    releases:  (t: TicketRowData) => (t.releases || []).length,
+  }), [])
+  const sorted = useSortableData<TicketRowData, TicketSortKey>(tickets, sortState, accessors)
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <colgroup>
+              <col className="w-28" />
+              <col />{/* summary */}
+              <col className="w-40" />
+              <col className="w-32" />
+              <col className="w-28" />
+              <col className="w-28" />
+              <col />{/* releases */}
+            </colgroup>
+            <thead className="sticky top-0 bg-background z-10">
+              <tr className="border-b text-left">
+                <SortableHeader label="Key"       sortKey="key"      state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                <SortableHeader label="Summary"   sortKey="summary"  state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                <SortableHeader label="Status"    sortKey="status"   state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                <SortableHeader label="Assignee"  sortKey="assignee" state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                <SortableHeader label="QA"        sortKey="qa"       state={sortState} onSort={k => onSort(k as TicketSortKey)} className="hidden md:table-cell" />
+                <SortableHeader label="Deployed"  sortKey="deployed" state={sortState} onSort={k => onSort(k as TicketSortKey)} className="hidden md:table-cell" />
+                <SortableHeader label="Releases"  sortKey="releases" state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map(t => <TicketRow key={t.key} ticket={t} />)}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
   )
 }

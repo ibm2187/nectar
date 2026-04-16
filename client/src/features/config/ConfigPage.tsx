@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '../../api/client'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
@@ -8,6 +8,7 @@ import { NectarLoader } from '../../components/NectarLoader'
 import { cn } from '../../lib/utils'
 import { IntegrationsConfigPage } from '../integrations-config/IntegrationsConfigPage'
 import { UpdatePage } from '../admin/UpdatePage'
+import { SortableHeader, useSortableData, useSortState } from '../../components/SortableHeader'
 
 // ── Tab types ─────────────────────────────────────────
 
@@ -534,6 +535,16 @@ function UsersTab() {
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
 
+  type UserSortKey = 'user' | 'role' | 'lastLogin' | 'permissions'
+  const [sortState, onSort] = useSortState<UserSortKey>('lastLogin', 'desc')
+  const accessors = useMemo(() => ({
+    user:        (u: UserRecord) => u.name || u.email,
+    role:        (u: UserRecord) => u.role,
+    lastLogin:   (u: UserRecord) => u.lastLoginAt,
+    permissions: (u: UserRecord) => u.role === 'admin' ? 99 : countPermissions(u.permissions),
+  }), [])
+  const sortedUsers = useSortableData<UserRecord, UserSortKey>(users, sortState, accessors)
+
   async function loadUsers() {
     setLoading(true)
     setError(null)
@@ -615,15 +626,15 @@ function UsersTab() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left">
-                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">User</th>
-                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-24">Role</th>
-                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-28">Last Login</th>
-                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-28">Permissions</th>
+                  <SortableHeader label="User"        sortKey="user"        state={sortState} onSort={k => onSort(k as UserSortKey)} />
+                  <SortableHeader label="Role"        sortKey="role"        state={sortState} onSort={k => onSort(k as UserSortKey)} className="w-24" />
+                  <SortableHeader label="Last Login"  sortKey="lastLogin"   state={sortState} onSort={k => onSort(k as UserSortKey)} className="w-28" />
+                  <SortableHeader label="Permissions" sortKey="permissions" state={sortState} onSort={k => onSort(k as UserSortKey)} className="w-28" />
                   <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-16"></th>
                 </tr>
               </thead>
               <tbody>
-                {users.map(user => (
+                {sortedUsers.map(user => (
                   <UserRow
                     key={user.email}
                     user={user}
@@ -828,6 +839,15 @@ function ApiKeysSection() {
   const [newRawKey, setNewRawKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  type ApiKeySortKey = 'label' | 'created' | 'lastUsed'
+  const [sortState, onSort] = useSortState<ApiKeySortKey>('created', 'desc')
+  const accessors = useMemo(() => ({
+    label:    (k: ApiKey) => k.label,
+    created:  (k: ApiKey) => k.createdAt,
+    lastUsed: (k: ApiKey) => k.lastUsedAt,
+  }), [])
+  const sortedKeys = useSortableData<ApiKey, ApiKeySortKey>(keys, sortState, accessors)
+
   async function loadKeys() {
     setLoading(true)
     try {
@@ -937,14 +957,14 @@ function ApiKeysSection() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-left">
-                <th className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Label</th>
-                <th className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Created</th>
-                <th className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Last Used</th>
+                <SortableHeader label="Label"     sortKey="label"    state={sortState} onSort={k => onSort(k as ApiKeySortKey)} className="px-2 py-1.5" />
+                <SortableHeader label="Created"   sortKey="created"  state={sortState} onSort={k => onSort(k as ApiKeySortKey)} className="px-2 py-1.5" />
+                <SortableHeader label="Last Used" sortKey="lastUsed" state={sortState} onSort={k => onSort(k as ApiKeySortKey)} className="px-2 py-1.5" />
                 <th className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-16"></th>
               </tr>
             </thead>
             <tbody>
-              {keys.map(key => (
+              {sortedKeys.map(key => (
                 <tr key={key.id} className="border-b border-border/30 hover:bg-accent/20">
                   <td className="px-2 py-1.5">
                     <span className="font-medium">{key.label}</span>
@@ -1034,6 +1054,15 @@ function NotificationsTab() {
   const [resolveQuery, setResolveQuery] = useState('')
   const [resolveResults, setResolveResults] = useState<{ id: string; name: string; username: string }[]>([])
   const [resolveSearching, setResolveSearching] = useState(false)
+
+  type DirSortKey = 'name' | 'username' | 'slackId'
+  const [dirSortState, onDirSort] = useSortState<DirSortKey>('name', 'asc')
+  const dirAccessors = useMemo(() => ({
+    name:     (e: PeopleEntry) => e.name,
+    username: (e: PeopleEntry) => e.username,
+    slackId:  (e: PeopleEntry) => e.slackId,
+  }), [])
+  const sortedDirEntries = useSortableData<PeopleEntry, DirSortKey>(directory?.entries || [], dirSortState, dirAccessors)
 
   async function load() {
     setLoading(true)
@@ -1270,13 +1299,13 @@ function NotificationsTab() {
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-card">
                   <tr className="border-b text-left">
-                    <th className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Name</th>
-                    <th className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Username</th>
-                    <th className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Slack ID</th>
+                    <SortableHeader label="Name"     sortKey="name"     state={dirSortState} onSort={k => onDirSort(k as DirSortKey)} className="px-4 py-1.5 text-[10px]" />
+                    <SortableHeader label="Username" sortKey="username" state={dirSortState} onSort={k => onDirSort(k as DirSortKey)} className="px-4 py-1.5 text-[10px]" />
+                    <SortableHeader label="Slack ID" sortKey="slackId"  state={dirSortState} onSort={k => onDirSort(k as DirSortKey)} className="px-4 py-1.5 text-[10px]" />
                   </tr>
                 </thead>
                 <tbody>
-                  {directory.entries.map(e => (
+                  {sortedDirEntries.map(e => (
                     <tr key={e.slackId} className="border-b border-border/20">
                       <td className="px-4 py-1.5 text-xs">{e.name}</td>
                       <td className="px-4 py-1.5 text-xs text-muted-foreground">{e.username}</td>

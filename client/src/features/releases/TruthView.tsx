@@ -5,6 +5,7 @@ import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { JiraLink } from '../../components/JiraLink'
+import { SortableHeader, useSortableData, useSortState, nextSortState, type SortState, type SortDir as SortableSortDir } from '../../components/SortableHeader'
 import { apiFetch } from '../../api/client'
 import type { ReleaseTruthReport, DeploymentImpactReport, VerifiedTicket, Health, HealthCategory, ZohoRef } from '../../api/client'
 import { cn, timeAgo, exportToCsv } from '../../lib/utils'
@@ -52,8 +53,7 @@ const PILL_FILTERS: { key: 'all' | HealthCategory; label: string; color: string 
   { key: 'attention',    label: 'Attention',   color: 'bg-red-500/15 text-red-400' },
 ]
 
-type SortKey = 'health' | 'key' | 'jiraStatus' | 'assignee' | 'qaAssignee'
-type SortDir = 'asc' | 'desc'
+type SortKey = 'health' | 'key' | 'title' | 'jiraStatus' | 'cherryPick' | 'prs' | 'build' | 'assignee' | 'qaAssignee' | 'branch' | 'deployed'
 
 type ViewMode = 'impact' | 'full'
 type FilterKey = 'all' | HealthCategory
@@ -70,8 +70,13 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
   const filter: FilterKey = (searchParams.get('filter') as FilterKey | null) || 'all'
   const jiraStatusGroup: StatusGroup = (searchParams.get('statusGroup') as StatusGroup | null) || 'all'
   const search = searchParams.get('q') || ''
-  const sortKey: SortKey = (searchParams.get('sort') as SortKey | null) || 'health'
-  const sortDir: SortDir = (searchParams.get('dir') as SortDir | null) || 'asc'
+  const sortKeyRaw = searchParams.get('sort') as SortKey | null
+  const sortDirRaw = searchParams.get('dir') as SortableSortDir | null
+  // Default sort is by health asc; null/null means user explicitly cleared
+  const hasSortInUrl = searchParams.has('sort')
+  const sortState: SortState<SortKey> = hasSortInUrl
+    ? { key: sortKeyRaw, dir: sortDirRaw === 'asc' || sortDirRaw === 'desc' ? sortDirRaw : null }
+    : { key: 'health', dir: 'asc' }
 
   // Helper — patches the URL, dropping keys that go back to defaults
   function updateParams(updates: Record<string, string | null>) {
@@ -93,11 +98,8 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
   const setFilter = (f: FilterKey) => updateParams({ filter: f === 'all' ? null : f })
   const setSearch = (q: string) => updateParams({ q: q || null })
   const setSort = (key: SortKey) => {
-    if (sortKey === key) {
-      updateParams({ sort: key, dir: sortDir === 'asc' ? 'desc' : 'asc' })
-    } else {
-      updateParams({ sort: key, dir: 'asc' })
-    }
+    const next = nextSortState(sortState, key)
+    updateParams({ sort: next.key, dir: next.dir })
   }
 
   // ── Derive display label for the compare target from store data ───
@@ -241,30 +243,36 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
       )
     }
 
-    rows = [...rows].sort((a, b) => {
-      let cmp = 0
-      switch (sortKey) {
-        case 'health':
-          cmp = HEALTH_INFO[a.health].priority - HEALTH_INFO[b.health].priority
-          break
-        case 'key':
-          cmp = a.key.localeCompare(b.key)
-          break
-        case 'jiraStatus':
-          cmp = a.jiraStatus.localeCompare(b.jiraStatus)
-          break
-        case 'assignee':
-          cmp = (a.assignee || 'zzz').localeCompare(b.assignee || 'zzz')
-          break
-        case 'qaAssignee':
-          cmp = (a.qaAssignee || 'zzz').localeCompare(b.qaAssignee || 'zzz')
-          break
-      }
-      return sortDir === 'asc' ? cmp : -cmp
-    })
-
     return rows
-  }, [activeTickets, filter, jiraStatusGroup, search, sortKey, sortDir])
+  }, [activeTickets, filter, jiraStatusGroup, search])
+
+  // Sort applied separately via shared hook
+  const sortAccessors = useMemo(() => ({
+    health:     (t: VerifiedTicket) => HEALTH_INFO[t.health].priority,
+    key:        (t: VerifiedTicket) => t.key,
+    title:      (t: VerifiedTicket) => t.summary || '',
+    jiraStatus: (t: VerifiedTicket) => t.jiraStatus,
+    cherryPick: (t: VerifiedTicket) => t.pr ? 1 : 0,
+    prs:        (t: VerifiedTicket) => (prsByJiraKey[t.key] || []).length,
+    build:      (t: VerifiedTicket) => buildByJiraKey[t.key]?.status || '',
+    assignee:   (t: VerifiedTicket) => t.assignee,
+    qaAssignee: (t: VerifiedTicket) => t.qaAssignee,
+    branch:     (t: VerifiedTicket) => t.onBranch ? 1 : 0,
+    deployed:   (t: VerifiedTicket) => (t.deployedEnvironments || []).length,
+  }), [prsByJiraKey, buildByJiraKey])
+  const sorted = useSortableData<VerifiedTicket, SortKey>(filtered, sortState, sortAccessors)
+
+  // ── Rogue commits table sort state (local, doesn't go in URL) ──
+  type RogueSortKey = 'key' | 'title' | 'jiraStatus' | 'assignee' | 'commit'
+  const [rogueSortState, onRogueSort] = useSortState<RogueSortKey>(null)
+  const rogueAccessors = useMemo(() => ({
+    key:        (r: typeof activeRogues[number]) => r.key,
+    title:      (r: typeof activeRogues[number]) => r.summary || r.commitMessage || '',
+    jiraStatus: (r: typeof activeRogues[number]) => r.jiraStatus,
+    assignee:   (r: typeof activeRogues[number]) => r.assignee,
+    commit:     (r: typeof activeRogues[number]) => r.commitSha,
+  }), [activeRogues])
+  const sortedRogues = useSortableData<typeof activeRogues[number], RogueSortKey>(activeRogues, rogueSortState, rogueAccessors)
 
   if (loading && !truth && !impact) {
     return (
@@ -464,7 +472,7 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
             Clear filters
           </Button>
         )}
-        {(cmpVersion || mode !== 'full' || sortKey !== 'health' || sortDir !== 'asc') && (
+        {(cmpVersion || mode !== 'full' || sortState.key !== 'health' || sortState.dir !== 'asc') && (
           <Button
             variant="ghost"
             size="sm"
@@ -483,7 +491,7 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
               exportToCsv(
                 `truth-${version}.csv`,
                 ['Key', 'Summary', 'JIRA Status', 'Assignee', 'QA', 'Health', 'Health Message', 'On Branch'],
-                filtered.map(t => [
+                sorted.map(t => [
                   t.key,
                   t.summary || '',
                   t.jiraStatus,
@@ -522,17 +530,17 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
               </colgroup>
               <thead className="sticky top-0 bg-background z-10">
                 <tr className="border-b text-left">
-                  <SortHeader label="Key"        active={sortKey === 'key'}        dir={sortDir} onClick={() => setSort('key')} />
-                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Title</th>
-                  <SortHeader label="JIRA Status" active={sortKey === 'jiraStatus'} dir={sortDir} onClick={() => setSort('jiraStatus')} />
-                  <th className="px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell whitespace-nowrap">Cherry Pick</th>
-                  <th className="px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">PRs</th>
-                  <th className="px-1 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">Build</th>
-                  <SortHeader label="Dev"         active={sortKey === 'assignee'}   dir={sortDir} onClick={() => setSort('assignee')} className="hidden md:table-cell" />
-                  <SortHeader label="QA"          active={sortKey === 'qaAssignee'} dir={sortDir} onClick={() => setSort('qaAssignee')} className="hidden md:table-cell" />
-                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center hidden md:table-cell">Branch</th>
-                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Deployed</th>
-                  <SortHeader label="Health"     active={sortKey === 'health'}     dir={sortDir} onClick={() => setSort('health')} />
+                  <SortableHeader label="Key"         sortKey="key"        state={sortState} onSort={k => setSort(k as SortKey)} />
+                  <SortableHeader label="Title"       sortKey="title"      state={sortState} onSort={k => setSort(k as SortKey)} />
+                  <SortableHeader label="JIRA Status" sortKey="jiraStatus" state={sortState} onSort={k => setSort(k as SortKey)} />
+                  <SortableHeader label="Cherry Pick" sortKey="cherryPick" state={sortState} onSort={k => setSort(k as SortKey)} align="center" className="hidden md:table-cell" />
+                  <SortableHeader label="PRs"         sortKey="prs"        state={sortState} onSort={k => setSort(k as SortKey)} align="center" className="hidden md:table-cell" />
+                  <SortableHeader label="Build"       sortKey="build"      state={sortState} onSort={k => setSort(k as SortKey)} align="center" className="hidden md:table-cell" />
+                  <SortableHeader label="Dev"         sortKey="assignee"   state={sortState} onSort={k => setSort(k as SortKey)} className="hidden md:table-cell" />
+                  <SortableHeader label="QA"          sortKey="qaAssignee" state={sortState} onSort={k => setSort(k as SortKey)} className="hidden md:table-cell" />
+                  <SortableHeader label="Branch"      sortKey="branch"     state={sortState} onSort={k => setSort(k as SortKey)} align="center" className="hidden md:table-cell" />
+                  <SortableHeader label="Deployed"    sortKey="deployed"   state={sortState} onSort={k => setSort(k as SortKey)} className="hidden md:table-cell" />
+                  <SortableHeader label="Health"      sortKey="health"     state={sortState} onSort={k => setSort(k as SortKey)} />
                 </tr>
               </thead>
               <tbody>
@@ -543,7 +551,7 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
                     </td>
                   </tr>
                 ) : (
-                  filtered.map(t => <TicketRow key={t.key} ticket={t} prs={prsByJiraKey[t.key] || []} build={buildByJiraKey[t.key] || null} version={version} onClickPr={(prs) => setPrPanel({ jiraKey: t.key, summary: t.summary, prs })} />)
+                  sorted.map(t => <TicketRow key={t.key} ticket={t} prs={prsByJiraKey[t.key] || []} build={buildByJiraKey[t.key] || null} version={version} onClickPr={(prs) => setPrPanel({ jiraKey: t.key, summary: t.summary, prs })} />)
                 )}
               </tbody>
             </table>
@@ -575,15 +583,15 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
                 </colgroup>
                 <thead>
                   <tr className="border-b text-left">
-                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Key</th>
-                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Title / Commit</th>
-                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">JIRA Status</th>
-                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Assignee</th>
-                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Commit</th>
+                    <SortableHeader label="Key"            sortKey="key"        state={rogueSortState} onSort={k => onRogueSort(k as RogueSortKey)} />
+                    <SortableHeader label="Title / Commit" sortKey="title"      state={rogueSortState} onSort={k => onRogueSort(k as RogueSortKey)} />
+                    <SortableHeader label="JIRA Status"    sortKey="jiraStatus" state={rogueSortState} onSort={k => onRogueSort(k as RogueSortKey)} />
+                    <SortableHeader label="Assignee"       sortKey="assignee"   state={rogueSortState} onSort={k => onRogueSort(k as RogueSortKey)} />
+                    <SortableHeader label="Commit"         sortKey="commit"     state={rogueSortState} onSort={k => onRogueSort(k as RogueSortKey)} />
                   </tr>
                 </thead>
                 <tbody>
-                  {activeRogues.map(r => (
+                  {sortedRogues.map(r => (
                     <tr key={r.key} className="border-b border-border/30 hover:bg-accent/30 transition-colors bg-purple-500/[0.02]">
                       <td className="px-3 py-2 align-top">
                         <JiraLink jiraKey={r.key} className="text-purple-400 hover:text-purple-300" />
@@ -660,22 +668,6 @@ export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {
         releaseVersion={version}
       />
     </div>
-  )
-}
-
-function SortHeader({
-  label, active, dir, onClick, className,
-}: {
-  label: string; active: boolean; dir: SortDir; onClick: () => void; className?: string
-}) {
-  return (
-    <th
-      onClick={onClick}
-      className={cn("px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer hover:text-foreground select-none", className)}
-    >
-      {label}
-      {active && <span className="ml-1">{dir === 'asc' ? '↑' : '↓'}</span>}
-    </th>
   )
 }
 
