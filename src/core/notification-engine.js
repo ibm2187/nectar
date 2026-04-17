@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const cron = require('node-cron');
 const log = require('./log');
 const SlackNotifier = require('../integrations/slack');
@@ -111,13 +113,40 @@ class NotificationEngine {
     this.availability = availability || null;
     this.config = config;
 
-    // Feature 2: build status cache (transient — no persistence needed)
+    // Feature 2: build status cache — persisted to survive restarts
     this._previousBuildStatus = new Map(); // projectName → latestStatus
+    this._buildStatusFile = path.join(__dirname, '..', '..', '.nectar-build-status-cache.json');
+    this._loadBuildStatusCache();
 
     // Feature 3: ticket change buffer (drained at each scheduled digest)
     this._ticketChanges = new Map(); // releaseVersion → { added: Map<key, {key,summary}>, removed: Map<key, {key,summary}>, since: ISO }
 
     this._cronTasks = [];
+  }
+
+  _loadBuildStatusCache() {
+    try {
+      if (fs.existsSync(this._buildStatusFile)) {
+        const data = JSON.parse(fs.readFileSync(this._buildStatusFile, 'utf8'));
+        if (data && typeof data === 'object') {
+          for (const [k, v] of Object.entries(data)) {
+            this._previousBuildStatus.set(k, v);
+          }
+          log.info(`Build status cache loaded: ${this._previousBuildStatus.size} projects`);
+        }
+      }
+    } catch (err) {
+      log.warn(`Build status cache load failed: ${err.message}`);
+    }
+  }
+
+  _saveBuildStatusCache() {
+    try {
+      const obj = Object.fromEntries(this._previousBuildStatus);
+      fs.writeFileSync(this._buildStatusFile, JSON.stringify(obj));
+    } catch (err) {
+      log.warn(`Build status cache save failed: ${err.message}`);
+    }
   }
 
   // ── Lifecycle ────────────────────────────────────────────
@@ -133,7 +162,7 @@ class NotificationEngine {
       return;
     }
 
-    // Daily DM digest: weekdays 9 AM ET, weekends 9 AM ET
+    // Daily DM digest: 9 AM ET every day
     const digestTask = cron.schedule('0 9 * * *', () => {
       if (!this.settings.get('dailyDigest')) return;
       this.sendDailyDigests().catch(err =>
@@ -141,6 +170,22 @@ class NotificationEngine {
       );
     }, { timezone: 'America/New_York' });
     this._cronTasks.push(digestTask);
+
+    // Missed-cron recovery: if the server just started and it's within
+    // the digest window (9:00–9:20 AM ET), fire it now. This handles the
+    // case where an auto-update restart at ~9:00 causes the cron to miss.
+    const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const etHour = etNow.getHours();
+    const etMinute = etNow.getMinutes();
+    if (etHour === 9 && etMinute <= 20) {
+      log.info('Daily digest: server started within digest window (9:00–9:20 AM ET) — firing now');
+      setTimeout(() => {
+        if (!this.settings.get('dailyDigest')) return;
+        this.sendDailyDigests().catch(err =>
+          log.error(`Daily digest (startup recovery) error: ${err.message}`)
+        );
+      }, 10_000); // 10s delay to let other services finish starting
+    }
 
     // Ticket changes: append to the existing 9 AM + 2 PM release digests
     // Run 30 seconds after release-notifier to post as a follow-up
@@ -492,8 +537,11 @@ class NotificationEngine {
       }
     }
 
+    // Persist cache to disk so it survives restarts
+    this._saveBuildStatusCache();
+
     if (isBaseline) {
-      log.info(`Build alerts: cold start baseline set for ${this._previousBuildStatus.size} projects (no alerts on first observation)`);
+      log.info(`Build alerts: baseline loaded from cache for ${this._previousBuildStatus.size} projects`);
     }
 
     if (alerts.length === 0) return;

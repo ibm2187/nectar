@@ -176,6 +176,7 @@ export function ReleasesPage() {
       else if (status === 'in-flight') inFlight.push(r)
       else if (status === 'shipped') shipped.push(r)
       else if (status === 'upcoming') upcoming.push(r)
+      else inFlight.push(r) // unknown status — put in in-flight so it's visible
     }
     overdue.sort((a, b) => (b.jiraReleaseDate || '').localeCompare(a.jiraReleaseDate || ''))
     shipped.sort((a, b) => (b.jiraReleaseDate || '').localeCompare(a.jiraReleaseDate || ''))

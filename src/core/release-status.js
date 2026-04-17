@@ -141,10 +141,16 @@ function computeReleaseStatus(release, prodEnvs = [], now = new Date()) {
     return { status: 'unknown', shippedSignals: [], matchingEnvs: [] };
   }
 
-  // Compare calendar days in local timezone
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const relDay = new Date(releaseDate.getUTCFullYear(), releaseDate.getUTCMonth(), releaseDate.getUTCDate());
-  const daysUntil = Math.round((relDay - today) / (1000 * 60 * 60 * 24));
+  // Compare calendar days using Eastern Time (business timezone).
+  // The server may run in UTC, but release dates are set in ET context.
+  // Using a consistent timezone prevents releases from jumping buckets
+  // at 8 PM EDT (midnight UTC).
+  const etFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const todayET = etFormatter.format(now);                    // "2026-04-16"
+  const relDayET = release.jiraReleaseDate.slice(0, 10);      // already "YYYY-MM-DD"
+  const todayMs = new Date(todayET + 'T00:00:00Z').getTime();
+  const relDayMs = new Date(relDayET + 'T00:00:00Z').getTime();
+  const daysUntil = Math.round((relDayMs - todayMs) / (1000 * 60 * 60 * 24));
 
   if (daysUntil < 0) {
     return { status: 'overdue', shippedSignals: [], matchingEnvs: [], daysOverdue: -daysUntil };
