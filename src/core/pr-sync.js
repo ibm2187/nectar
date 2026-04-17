@@ -88,6 +88,7 @@ class PrSync extends EventEmitter {
       jiraKeysFound: 0,
       matched: 0,
       releasesUpdated: 0,
+      cacheEvicted: 0,
       errors: 0,
     };
 
