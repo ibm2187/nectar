@@ -1474,21 +1474,19 @@ function LogsTab() {
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-muted-foreground">Time (UTC):</span>
         <Input
-          type="time"
-          step="1"
+          type="text"
           value={timeFrom}
           onChange={e => setTimeFrom(e.target.value)}
-          className="h-7 text-xs w-28"
-          placeholder="From"
+          className="h-7 text-xs w-24 font-mono"
+          placeholder="HH:MM:SS"
         />
         <span className="text-xs text-muted-foreground">to</span>
         <Input
-          type="time"
-          step="1"
+          type="text"
           value={timeTo}
           onChange={e => setTimeTo(e.target.value)}
-          className="h-7 text-xs w-28"
-          placeholder="To"
+          className="h-7 text-xs w-24 font-mono"
+          placeholder="HH:MM:SS"
         />
 
         {/* Quick presets */}
