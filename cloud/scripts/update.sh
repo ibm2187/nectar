@@ -54,8 +54,24 @@ if echo "${CHANGED}" | grep -q '^client/'; then
   sudo -u ubuntu bash -c "cd '${NECTAR_DIR}/client' && npm run build"
 fi
 
-log "Restarting nectar service..."
-sudo systemctl restart nectar
+# Stop old single-process service if still active
+if systemctl is-active --quiet nectar 2>/dev/null; then
+  log "Stopping old single-process service..."
+  sudo systemctl stop nectar
+  sudo systemctl disable nectar
+fi
+
+# Copy service files in case they changed
+sudo cp cloud/templates/nectar-web.service /etc/systemd/system/ 2>/dev/null || true
+sudo cp cloud/templates/nectar-sync.service /etc/systemd/system/ 2>/dev/null || true
+sudo systemctl daemon-reload
+
+# Enable and restart two-process services
+sudo systemctl enable nectar-web nectar-sync 2>/dev/null || true
+log "Restarting nectar services..."
+sudo systemctl restart nectar-sync
+sudo systemctl restart nectar-web
 
 log "Update complete."
-sudo systemctl status nectar --no-pager | head -10
+sudo systemctl status nectar-web --no-pager | head -5
+sudo systemctl status nectar-sync --no-pager | head -5

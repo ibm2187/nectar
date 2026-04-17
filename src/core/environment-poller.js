@@ -24,6 +24,8 @@ class EnvironmentPoller extends EventEmitter {
     this._timer = null;
     this._running = false;
     this.lastRun = null;
+    this._failures = new Map();  // envId → consecutive failure count
+    this._pollCount = 0;
   }
 
   start() {
@@ -59,17 +61,27 @@ class EnvironmentPoller extends EventEmitter {
     }
 
     this._running = true;
+    this._pollCount++;
     this.emit('poll:started');
     const startTime = Date.now();
 
-    const environments = this.customerStore.listEnvironments().filter(
+    const allEnvironments = this.customerStore.listEnvironments().filter(
       e => e.versionEndpoint && !e.disabled
     );
 
+    // Circuit breaker: skip envs with 3+ consecutive failures (retry every 5th cycle)
+    const environments = allEnvironments.filter(e => {
+      const failures = this._failures.get(e.id) || 0;
+      if (failures >= 3 && this._pollCount % 5 !== 0) return false;
+      return true;
+    });
+    const skipped = allEnvironments.length - environments.length;
+
     const results = {
-      total: environments.length,
+      total: allEnvironments.length,
       succeeded: 0,
       failed: 0,
+      skipped,
       versionChanges: 0,
       durationMs: 0,
     };
@@ -81,12 +93,16 @@ class EnvironmentPoller extends EventEmitter {
       const outcomes = await Promise.allSettled(
         batch.map(env => this._pollOne(env))
       );
-      for (const o of outcomes) {
+      for (let j = 0; j < outcomes.length; j++) {
+        const o = outcomes[j];
+        const env = batch[j];
         if (o.status === 'fulfilled') {
           results.succeeded++;
+          this._failures.delete(env.id);
           if (o.value && o.value.versionChanged) results.versionChanges++;
         } else {
           results.failed++;
+          this._failures.set(env.id, (this._failures.get(env.id) || 0) + 1);
         }
       }
     }
@@ -95,7 +111,7 @@ class EnvironmentPoller extends EventEmitter {
     this.lastRun = new Date().toISOString();
     this._running = false;
 
-    log.info(`Environment poll: ${results.succeeded}/${results.total} reachable, ${results.versionChanges} version changes in ${results.durationMs}ms`);
+    log.info(`Environment poll: ${results.succeeded}/${results.total} reachable, ${results.versionChanges} version changes${results.skipped ? `, ${results.skipped} circuit-broken` : ''} in ${results.durationMs}ms`);
     this.emit('poll:completed', results);
     return results;
   }
@@ -106,7 +122,7 @@ class EnvironmentPoller extends EventEmitter {
   async _fetchEndpoint(baseUrl, path) {
     const url = `${baseUrl.replace(/\/$/, '')}${path}`;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), 3000);
     try {
       const res = await fetch(url, {
         signal: controller.signal,
@@ -332,7 +348,7 @@ class EnvironmentPoller extends EventEmitter {
    */
   async _pollOneVersionOnly(env) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), 3000);
     try {
       const res = await fetch(env.versionEndpoint, {
         signal: controller.signal,

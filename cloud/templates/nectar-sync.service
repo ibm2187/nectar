@@ -1,0 +1,24 @@
+[Unit]
+Description=Nectar Sync Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/nectar
+ExecStartPre=/bin/bash /home/ubuntu/nectar/cloud/scripts/boot.sh
+ExecStart=/usr/bin/node /home/ubuntu/nectar/src/sync-worker.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/home/ubuntu/nectar-sync.log
+StandardError=append:/home/ubuntu/nectar-sync.log
+Environment=NODE_ENV=production
+# Sync process runs all sync engines — needs more heap than web
+Environment=NODE_OPTIONS=--max-old-space-size=4096
+
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

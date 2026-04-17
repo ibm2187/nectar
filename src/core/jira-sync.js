@@ -349,7 +349,7 @@ class JiraSync extends EventEmitter {
       release.tickets.filter(t => t.source === 'jira').map(t => t.key)
     );
 
-    // Build normalized ticket data
+    // Build normalized ticket data (in memory — no per-ticket DB writes)
     const syncedTickets = [];
     for (const issue of issues) {
       const normalized = JiraClient.normalizeIssue(issue);
@@ -375,31 +375,27 @@ class JiraSync extends EventEmitter {
         source: 'jira',
         jiraSyncedAt: new Date().toISOString(),
       };
-      this.releases.addTicket(releaseKey, ticketData, 'jira-sync');
       syncedTickets.push(ticketData);
       updated++;
     }
 
-    // Prune tickets that JIRA no longer returns for this version.
-    // This catches fixVersion removals, ticket deletions, etc.
+    // Detect removed tickets BEFORE replacing (for change notifications)
     const freshKeys = new Set(issues.map(i => i.key));
-
-    // Capture removed ticket info BEFORE pruning (for change notification)
     const removedKeys = [...preExistingKeys].filter(k => !freshKeys.has(k));
     const removedTicketInfo = removedKeys.map(k => {
       const t = release.tickets.find(t => t.key === k);
       return { key: k, summary: t ? t.summary : k };
     });
 
-    const before = release.tickets.length;
-    release.tickets = release.tickets.filter(t => {
-      if (t.source !== 'jira') return true;
-      return freshKeys.has(t.key);
-    });
-    const pruned = before - release.tickets.length;
+    // Replace all JIRA-sourced tickets in one shot + single DB write.
+    // Was N individual addTicket→UPSERT calls (774+ per cycle), now 1 persist.
+    const nonJiraTickets = release.tickets.filter(t => t.source !== 'jira');
+    release.tickets = [...nonJiraTickets, ...syncedTickets];
+    release.updatedAt = new Date().toISOString();
+    this.releases.persist(release);
+    const pruned = removedKeys.length;
     if (pruned > 0) {
       log.info(`JIRA sync: ${versionName} — pruned ${pruned} stale tickets`);
-      this.releases.persist(release);
     }
 
     // Emit ticket add/remove details for notification engine
@@ -419,19 +415,13 @@ class JiraSync extends EventEmitter {
     for (const sharingRepo of this._getVersionSharingRepos(repo)) {
       const sharingRelease = this.releases.get(cleanVersion, sharingRepo);
       if (sharingRelease) {
-        const sharingKey = this.releases._key(sharingRelease.repo, sharingRelease.version);
-        for (const td of syncedTickets) {
-          this.releases.addTicket(sharingKey, td, 'jira-sync');
-        }
-        // Prune sharing release too
-        const sBefore = sharingRelease.tickets.length;
-        sharingRelease.tickets = sharingRelease.tickets.filter(t => {
-          if (t.source !== 'jira') return true;
-          return freshKeys.has(t.key);
-        });
-        const sPruned = sBefore - sharingRelease.tickets.length;
-        if (issues.length > 0 || sPruned > 0) {
-          log.info(`JIRA sync: ${versionName} — synced ${syncedTickets.length} tickets to ${sharingRepo}:${cleanVersion}${sPruned > 0 ? `, pruned ${sPruned}` : ''}`);
+        // Replace all JIRA-sourced tickets in one shot + single DB write
+        const sNonJira = sharingRelease.tickets.filter(t => t.source !== 'jira');
+        sharingRelease.tickets = [...sNonJira, ...syncedTickets];
+        sharingRelease.updatedAt = new Date().toISOString();
+        this.releases.persist(sharingRelease);
+        if (issues.length > 0) {
+          log.info(`JIRA sync: ${versionName} — synced ${syncedTickets.length} tickets to ${sharingRepo}:${cleanVersion}`);
         }
       }
     }

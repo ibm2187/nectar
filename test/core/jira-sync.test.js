@@ -542,4 +542,102 @@ describe('JiraSync', () => {
       expect(status.configured).toBe(true);
     });
   });
+
+  describe('batch persistence (performance)', () => {
+    it('persists once per version, not per ticket', async () => {
+      releases.create({ repo: 'webplatform', version: '4.2.3' });
+
+      // Spy on persist to count calls
+      const persistSpy = vi.spyOn(releases, 'persist');
+
+      mockJira.getIssuesForVersion.mockResolvedValue([
+        {
+          key: 'DEV-1', fields: {
+            summary: 'A', status: { name: 'Open' },
+            issuetype: { name: 'Bug' }, assignee: null, fixVersions: [{ name: '4.2.3' }], labels: [],
+          },
+        },
+        {
+          key: 'DEV-2', fields: {
+            summary: 'B', status: { name: 'Open' },
+            issuetype: { name: 'Bug' }, assignee: null, fixVersions: [{ name: '4.2.3' }], labels: [],
+          },
+        },
+        {
+          key: 'DEV-3', fields: {
+            summary: 'C', status: { name: 'Done' },
+            issuetype: { name: 'Story' }, assignee: null, fixVersions: [{ name: '4.2.3' }], labels: [],
+          },
+        },
+      ]);
+
+      await jiraSync._syncVersionTickets('4.2.3');
+
+      // Should be exactly 1 persist call for the primary release (batch write),
+      // NOT 3 individual addTicket calls
+      expect(persistSpy).toHaveBeenCalledTimes(1);
+
+      // All tickets should still be present
+      const release = releases.get('4.2.3', 'webplatform');
+      expect(release.tickets).toHaveLength(3);
+      expect(release.tickets.map(t => t.key).sort()).toEqual(['DEV-1', 'DEV-2', 'DEV-3']);
+
+      persistSpy.mockRestore();
+    });
+
+    it('persists once for sharing repos too', async () => {
+      releases.create({ repo: 'webplatform', version: '4.2.3' });
+      releases.create({ repo: 'bluesummit', version: '4.2.3', branch: 'VIV/4.2.3' });
+
+      const persistSpy = vi.spyOn(releases, 'persist');
+
+      mockJira.getIssuesForVersion.mockResolvedValue([
+        {
+          key: 'DEV-10', fields: {
+            summary: 'X', status: { name: 'Open' },
+            issuetype: { name: 'Bug' }, assignee: null, fixVersions: [{ name: '4.2.3' }], labels: [],
+          },
+        },
+        {
+          key: 'DEV-11', fields: {
+            summary: 'Y', status: { name: 'Open' },
+            issuetype: { name: 'Bug' }, assignee: null, fixVersions: [{ name: '4.2.3' }], labels: [],
+          },
+        },
+      ]);
+
+      await jiraSync._syncVersionTickets('4.2.3');
+
+      // 1 persist for webplatform + 1 persist for bluesummit = 2 total
+      expect(persistSpy).toHaveBeenCalledTimes(2);
+
+      const bsRelease = releases.get('4.2.3', 'bluesummit');
+      expect(bsRelease.tickets).toHaveLength(2);
+
+      persistSpy.mockRestore();
+    });
+
+    it('preserves non-JIRA tickets during batch sync', async () => {
+      releases.create({ repo: 'webplatform', version: '4.2.3' });
+      // Add a non-JIRA ticket (e.g., from git discovery)
+      releases.addTicket('webplatform:4.2.3', { key: 'DEV-MANUAL', summary: 'Manual', source: 'git' });
+
+      mockJira.getIssuesForVersion.mockResolvedValue([
+        {
+          key: 'DEV-50', fields: {
+            summary: 'From JIRA', status: { name: 'Open' },
+            issuetype: { name: 'Bug' }, assignee: null, fixVersions: [{ name: '4.2.3' }], labels: [],
+          },
+        },
+      ]);
+
+      await jiraSync._syncVersionTickets('4.2.3');
+
+      const release = releases.get('4.2.3', 'webplatform');
+      // Should have both: the non-JIRA ticket + the JIRA ticket
+      expect(release.tickets).toHaveLength(2);
+      expect(release.tickets.find(t => t.key === 'DEV-MANUAL')).toBeDefined();
+      expect(release.tickets.find(t => t.key === 'DEV-50')).toBeDefined();
+    });
+  });
 });

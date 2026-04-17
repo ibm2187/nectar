@@ -1,0 +1,24 @@
+[Unit]
+Description=Nectar Web Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/nectar
+ExecStartPre=/bin/bash /home/ubuntu/nectar/cloud/scripts/boot.sh
+ExecStart=/usr/bin/node /home/ubuntu/nectar/src/web-server.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/ubuntu/nectar.log
+StandardError=append:/home/ubuntu/nectar.log
+Environment=NODE_ENV=production
+# Web process only reads from SQLite + serves HTTP — minimal heap needed
+Environment=NODE_OPTIONS=--max-old-space-size=512
+
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

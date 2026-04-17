@@ -231,6 +231,12 @@ const services = {
 };
 const webServer = createWebServer(services, config);
 
+// Memory monitoring — log RSS + heap every 60s for OOM observability
+setInterval(() => {
+  const mem = process.memoryUsage();
+  log.info(`Memory: RSS=${Math.round(mem.rss / 1024 / 1024)}MB heap=${Math.round(mem.heapUsed / 1024 / 1024)}/${Math.round(mem.heapTotal / 1024 / 1024)}MB external=${Math.round(mem.external / 1024 / 1024)}MB`);
+}, 60000);
+
 // Start async services
 (async () => {
   // Clone repos first (may take a while on first run)
