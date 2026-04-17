@@ -1338,11 +1338,14 @@ function LogsTab() {
   const [levelFilter, setLevelFilter] = useState<string>('')
   const [search, setSearch] = useState('')
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [timeFrom, setTimeFrom] = useState('')
+  const [timeTo, setTimeTo] = useState('')
+  const [copied, setCopied] = useState(false)
 
   const load = async () => {
     try {
       const params = new URLSearchParams()
-      params.set('limit', '500')
+      params.set('limit', '2000')
       if (levelFilter) params.set('level', levelFilter)
       if (search) params.set('q', search)
       const data = await apiFetch<{ entries: LogEntry[] }>(`/admin/logs?${params}`)
@@ -1353,28 +1356,75 @@ function LogsTab() {
 
   useEffect(() => { load() }, [levelFilter, search])
 
-  // Auto-refresh every 5 seconds
   useEffect(() => {
     if (!autoRefresh) return
     const timer = setInterval(load, 5000)
     return () => clearInterval(timer)
   }, [autoRefresh, levelFilter, search])
 
+  // Time-filtered view
+  const filtered = useMemo(() => {
+    if (!timeFrom && !timeTo) return entries
+    return entries.filter(e => {
+      const time = e.ts.slice(11, 19) // HH:MM:SS
+      if (timeFrom && time < timeFrom) return false
+      if (timeTo && time > timeTo) return false
+      return true
+    })
+  }, [entries, timeFrom, timeTo])
+
   const levelCounts = useMemo(() => {
     const c = { INFO: 0, WARN: 0, ERROR: 0 }
-    for (const e of entries) {
+    for (const e of filtered) {
       if (c[e.level] !== undefined) c[e.level]++
     }
     return c
-  }, [entries])
+  }, [filtered])
+
+  const copyToClipboard = () => {
+    const text = filtered.map(e =>
+      `${e.ts.slice(0, 19)}  ${e.level.padEnd(5)}  ${e.message}`
+    ).join('\n')
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }).catch(() => {})
+  }
+
+  // Time range quick selects
+  const setTimeRange = (label: string) => {
+    const now = new Date()
+    const fmt = (d: Date) => d.toTimeString().slice(0, 8)
+    switch (label) {
+      case 'last-15m': {
+        const from = new Date(now.getTime() - 15 * 60000)
+        setTimeFrom(fmt(from)); setTimeTo(fmt(now)); break
+      }
+      case 'last-1h': {
+        const from = new Date(now.getTime() - 60 * 60000)
+        setTimeFrom(fmt(from)); setTimeTo(fmt(now)); break
+      }
+      case 'last-3h': {
+        const from = new Date(now.getTime() - 180 * 60000)
+        setTimeFrom(fmt(from)); setTimeTo(fmt(now)); break
+      }
+      case '9am': {
+        setTimeFrom('13:00:00'); setTimeTo('13:20:00'); break // 9 AM ET = 13:00 UTC
+      }
+      case 'clear': {
+        setTimeFrom(''); setTimeTo(''); break
+      }
+    }
+  }
 
   return (
     <div className="space-y-3">
+      {/* Row 1: Level filter + search */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
           {(['', 'ERROR', 'WARN', 'ERROR,WARN', 'INFO'] as const).map(lvl => {
             const label = lvl === '' ? 'All' : lvl === 'ERROR,WARN' ? 'Errors + Warnings' : lvl
-            const count = lvl === '' ? entries.length
+            const count = lvl === '' ? filtered.length
               : lvl === 'ERROR,WARN' ? levelCounts.ERROR + levelCounts.WARN
               : levelCounts[lvl as keyof typeof levelCounts] || 0
             return (
@@ -1409,7 +1459,7 @@ function LogsTab() {
             onChange={e => setAutoRefresh(e.target.checked)}
             className="rounded border-border"
           />
-          Auto-refresh (5s)
+          Auto-refresh
         </label>
 
         <Button variant="outline" size="sm" onClick={load} className="text-xs h-7">
@@ -1417,17 +1467,73 @@ function LogsTab() {
         </Button>
       </div>
 
+      {/* Row 2: Time range filter + copy */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-muted-foreground">Time (UTC):</span>
+        <Input
+          type="time"
+          step="1"
+          value={timeFrom}
+          onChange={e => setTimeFrom(e.target.value)}
+          className="h-7 text-xs w-28"
+          placeholder="From"
+        />
+        <span className="text-xs text-muted-foreground">to</span>
+        <Input
+          type="time"
+          step="1"
+          value={timeTo}
+          onChange={e => setTimeTo(e.target.value)}
+          className="h-7 text-xs w-28"
+          placeholder="To"
+        />
+
+        {/* Quick presets */}
+        <div className="flex items-center gap-1">
+          {[
+            { key: 'last-15m', label: '15m' },
+            { key: 'last-1h', label: '1h' },
+            { key: 'last-3h', label: '3h' },
+            { key: '9am', label: '9 AM ET' },
+          ].map(p => (
+            <button
+              key={p.key}
+              onClick={() => setTimeRange(p.key)}
+              className="px-2 py-0.5 text-[10px] rounded border border-border/40 text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
+            >
+              {p.label}
+            </button>
+          ))}
+          {(timeFrom || timeTo) && (
+            <button
+              onClick={() => setTimeRange('clear')}
+              className="px-2 py-0.5 text-[10px] rounded text-muted-foreground hover:text-foreground"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">{filtered.length} entries</span>
+          <Button variant="outline" size="sm" onClick={copyToClipboard} className="text-xs h-7">
+            {copied ? 'Copied!' : 'Copy to Clipboard'}
+          </Button>
+        </div>
+      </div>
+
+      {/* Log table */}
       <Card>
         <CardContent className="p-0">
           <div className="max-h-[600px] overflow-y-auto font-mono text-[11px] leading-relaxed">
-            {loading && entries.length === 0 ? (
+            {loading && filtered.length === 0 ? (
               <div className="p-4 text-center text-muted-foreground text-xs">Loading logs...</div>
-            ) : entries.length === 0 ? (
+            ) : filtered.length === 0 ? (
               <div className="p-4 text-center text-muted-foreground text-xs italic">No log entries match the current filter.</div>
             ) : (
               <table className="w-full">
                 <tbody>
-                  {entries.map((e, i) => (
+                  {filtered.map((e, i) => (
                     <tr
                       key={`${e.ts}-${i}`}
                       className={cn(
