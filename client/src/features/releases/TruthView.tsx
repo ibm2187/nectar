@@ -749,7 +749,13 @@ function TicketRow({ ticket: t, prs, build, version, onClickPr }: { ticket: Veri
           prUrl: t.pr.prUrl, prCreatedAt: t.pr.prCreatedAt, status: 'open' as const,
           baseBranch: `releases/${version}`,
         }] : [])
-        const cps = allPrs.filter((p: any) => { const b = p.baseBranch || ''; return b.startsWith('releases/') || b.startsWith('VIV/') || b.startsWith('release/') })
+        const releaseBranch = `releases/${version}`
+        const cps = allPrs.filter((p: any) => {
+          const b = p.baseBranch || ''
+          if (!(b.startsWith('releases/') || b.startsWith('VIV/') || b.startsWith('release/'))) return false
+          // Only count CPs targeting THIS release's branch
+          return b === releaseBranch || b === `VIV/${version}`
+        })
         const originals = allPrs.filter((p: any) => { const b = p.baseBranch || ''; return b === 'master' || b === 'main' || b === 'develop' })
         const cpMerged = cps.some((p: any) => p.status === 'merged')
         const cpOpen = cps.some((p: any) => p.status === 'open')

@@ -741,6 +741,7 @@ function ReleasePanel({
                           </td>
                           <PrCountCells
                             prs={ticket.prs || []}
+                            releaseBranch={r.branch}
                             onClick={() => onClickPr(ticket.key, ticket.summary, ticket.prs || [], r.repo || 'webplatform', r.version)}
                           />
                           <BuildStatusCell build={ticket.build} />
@@ -815,10 +816,13 @@ function BuildStatusCell({ build }: { build: { buildNumber: number; status: stri
 
 // ── PR count cells (two columns: CPs and PRs) ───────────
 
-function PrCountCells({ prs, onClick }: { prs: PrInfo[]; onClick: () => void }) {
+function PrCountCells({ prs, onClick, releaseBranch }: { prs: PrInfo[]; onClick: () => void; releaseBranch?: string | null }) {
   const cherryPicks = prs.filter(p => {
     const b = p.baseBranch || ''
-    return b.startsWith('releases/') || b.startsWith('VIV/') || b.startsWith('release/')
+    if (!(b.startsWith('releases/') || b.startsWith('VIV/') || b.startsWith('release/'))) return false
+    // If we know the release branch, only count CPs targeting THIS branch
+    if (releaseBranch && b !== releaseBranch) return false
+    return true
   })
   const originals = prs.filter(p => {
     const b = p.baseBranch || ''
