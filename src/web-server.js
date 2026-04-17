@@ -95,6 +95,7 @@ const PipelineSync = require('./core/pipeline-sync');
 const AwsClient = require('./integrations/aws');
 const aws = new AwsClient();
 const pipelineSync = new PipelineSync(releases, aws, repoManager, config);
+pipelineSync.setCustomerStore(customerStore);
 
 // PrSync stub — not running, but routes check getStatus()
 const PrSync = require('./core/pr-sync');

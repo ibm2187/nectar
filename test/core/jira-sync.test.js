@@ -3,10 +3,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
 const JiraSync = require('../../src/core/jira-sync');
+const CustomerStore = require('../../src/core/customer-store');
 const { createTestDb } = require('../../src/core/db');
 
 describe('JiraSync', () => {
-  let audit, releases, jiraSync, db;
+  let audit, releases, jiraSync, db, customerStore;
   let mockJira;
 
   const config = {
@@ -23,6 +24,13 @@ describe('JiraSync', () => {
     db = createTestDb();
     audit = new Audit({ db });
     releases = new ReleaseManager(audit, { db });
+    customerStore = new CustomerStore({ db });
+
+    // Seed known customers
+    customerStore.upsertCustomer({ id: 'ck', name: 'Comfort Keepers', active: true });
+    customerStore.upsertCustomer({ id: 'bayada', name: 'Bayada', active: true });
+    customerStore.upsertCustomer({ id: 'tribute', name: 'Tribute', active: true });
+    customerStore.upsertCustomer({ id: 'lumen', name: 'Lumen', active: true });
 
     mockJira = {
       isConfigured: () => true,
@@ -31,6 +39,7 @@ describe('JiraSync', () => {
     };
 
     jiraSync = new JiraSync(releases, mockJira, config);
+    jiraSync.setCustomerStore(customerStore);
   });
 
   describe('_parseVersionName', () => {
@@ -106,6 +115,50 @@ describe('JiraSync', () => {
       const bsRelease = releases.get('4.2.3', 'bluesummit');
       expect(bsRelease.jiraVersionId).toBe('123');
       expect(bsRelease.jiraReleaseDate).toBe('2026-04-29');
+    });
+
+    it('sets targetCustomers to empty (all) for plain version', () => {
+      jiraSync._syncVersionMeta({
+        id: '200', name: '4.3.0', released: false, archived: false,
+        releaseDate: null, description: null,
+      });
+
+      const release = releases.get('4.3.0', 'webplatform');
+      expect(release.targetCustomers).toEqual([]);
+      expect(release.targetCustomerSource).toBe('default');
+    });
+
+    it('sets targetCustomers from version suffix', () => {
+      jiraSync._syncVersionMeta({
+        id: '201', name: '4.1.0.5-ck', released: false, archived: false,
+        releaseDate: null, description: null,
+      });
+
+      const release = releases.get('4.1.0.5-ck', 'webplatform');
+      expect(release.targetCustomers).toEqual(['ck']);
+      expect(release.targetCustomerSource).toBe('suffix');
+    });
+
+    it('sets targetCustomers from compound suffix', () => {
+      jiraSync._syncVersionMeta({
+        id: '202', name: '4.2.0-cktribute', released: false, archived: false,
+        releaseDate: null, description: null,
+      });
+
+      const release = releases.get('4.2.0-cktribute', 'webplatform');
+      expect(release.targetCustomers).toEqual(['ck', 'tribute']);
+      expect(release.targetCustomerSource).toBe('suffix');
+    });
+
+    it('description @customers overrides suffix', () => {
+      jiraSync._syncVersionMeta({
+        id: '203', name: '4.1.0-ck', released: false, archived: false,
+        releaseDate: null, description: 'Hotfix. @customers:bayada,tribute',
+      });
+
+      const release = releases.get('4.1.0-ck', 'webplatform');
+      expect(release.targetCustomers).toEqual(['bayada', 'tribute']);
+      expect(release.targetCustomerSource).toBe('description');
     });
 
     it('does not create sharing repo release if it does not exist', () => {

@@ -3,16 +3,8 @@ const log = require('./log');
 const JiraClient = require('../integrations/jira');
 const { getDb } = require('./db');
 
-const CUSTOMER_LABELS = {
-  viv: 'Viv',
-  ck: 'Comfort Keepers',
-  bayada: 'Bayada',
-  tribute: 'Tribute',
-  lumen: 'Lumen',
-  haven: 'Haven',
-  qualitycare: 'Quality Care',
-};
-const CUSTOMER_ORDER = ['viv', 'ck', 'bayada', 'tribute', 'lumen', 'haven', 'qualitycare'];
+// Customer labels and ordering are now read from the customer store at runtime.
+// See setCustomerStore() below.
 
 // Some build projects produce images tagged multiple ways (e.g. master → 'master' + 'latest').
 // Mirrors client/src/features/builds/shared.ts.
@@ -49,6 +41,8 @@ class PipelineSync extends EventEmitter {
     this._deployMap = null;    // pipelineName → { ecrRepo, imageTag, customer, env }
     this.prSync = null;
 
+    this._customerStore = null;
+
     // Tiered polling state
     this._inProgressTimer = null;
     this._recentTimer = null;
@@ -63,6 +57,22 @@ class PipelineSync extends EventEmitter {
 
   setPrSync(prSync) {
     this.prSync = prSync;
+  }
+
+  setCustomerStore(customerStore) {
+    this._customerStore = customerStore || null;
+  }
+
+  _getCustomerLabel(key) {
+    if (!this._customerStore) return key;
+    const c = this._customerStore.getCustomer(key);
+    return c ? (c.shortName || c.name || key) : key;
+  }
+
+  _getCustomerSortOrder(key) {
+    if (!this._customerStore) return 999;
+    const c = this._customerStore.getCustomer(key);
+    return c ? (c.sortOrder || 999) : 999;
   }
 
   start() {
@@ -960,7 +970,7 @@ class PipelineSync extends EventEmitter {
       if (!buckets.has(key)) {
         buckets.set(key, {
           key,
-          label: CUSTOMER_LABELS[key] || key,
+          label: this._getCustomerLabel(key),
           account: key,
           allBuilds: [],
           pinnedBuild: null,
@@ -977,11 +987,9 @@ class PipelineSync extends EventEmitter {
 
     const result = Array.from(buckets.values()).filter(b => b.allBuilds.length > 0);
     result.sort((a, b) => {
-      const ai = CUSTOMER_ORDER.indexOf(a.key);
-      const bi = CUSTOMER_ORDER.indexOf(b.key);
-      if (ai !== -1 && bi !== -1) return ai - bi;
-      if (ai !== -1) return -1;
-      if (bi !== -1) return 1;
+      const ao = this._getCustomerSortOrder(a.key);
+      const bo = this._getCustomerSortOrder(b.key);
+      if (ao !== bo) return ao - bo;
       return a.key.localeCompare(b.key);
     });
     return result;

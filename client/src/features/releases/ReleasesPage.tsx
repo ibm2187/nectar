@@ -9,6 +9,7 @@ import { NectarLoader } from '../../components/NectarLoader'
 import { cn } from '../../lib/utils'
 import { SavedViews } from '../../components/SavedViews'
 import { useAvailabilityStore } from '../../stores/availabilityStore'
+import { CustomerPills } from '../../components/CustomerPill'
 
 /**
  * Combined Releases page with two view modes:
@@ -697,8 +698,11 @@ function CalendarReleaseCard({ release, onClick }: { release: Release; onClick: 
           {riskGlyph && !riskBadge && <span className="text-[10px]">{riskGlyph}</span>}
         </div>
       </div>
-      <div className="flex items-center gap-1 mt-1">
+      <div className="flex items-center gap-1 mt-1 flex-wrap">
         <Badge variant="outline" className={cn("text-[9px] px-1 py-0", style.text)}>{style.label}</Badge>
+        {release.targetCustomers != null && (
+          <CustomerPills customerIds={release.targetCustomers} />
+        )}
       </div>
       {/* Progress bar + count */}
       {totalCount > 0 && (
@@ -976,10 +980,15 @@ function AgendaReleaseRow({ release, now, onClick }: {
               </span>
             )}
           </div>
-          <div className="text-xs text-muted-foreground mt-0.5">
-            {totalCount} tickets · {release.state}
-            {timingText && <span> · {timingText}</span>}
-            {proof && status === 'shipped' && <span> · ✓ {proof}</span>}
+          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+            <span className="text-xs text-muted-foreground">
+              {totalCount} tickets · {release.state}
+              {timingText && <span> · {timingText}</span>}
+              {proof && status === 'shipped' && <span> · ✓ {proof}</span>}
+            </span>
+            {release.targetCustomers != null && (
+              <CustomerPills customerIds={release.targetCustomers} />
+            )}
           </div>
         </div>
       </div>

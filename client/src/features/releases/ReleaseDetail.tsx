@@ -13,6 +13,7 @@ import { CustomerImpact } from './CustomerImpact'
 import { PipelineView } from './PipelineView'
 import { NectarLoader } from '../../components/NectarLoader'
 import { GenerateNotesDialog } from './GenerateNotesDialog'
+import { CustomerPills } from '../../components/CustomerPill'
 
 interface TaskArtifact {
   type: string
@@ -361,6 +362,13 @@ export function ReleaseDetail() {
           )}
         </div>
       </div>
+
+      {/* Target customers */}
+      {release.targetCustomers != null && (
+        <div className="flex items-center gap-1.5 mb-4 -mt-2">
+          <CustomerPills customerIds={release.targetCustomers} />
+        </div>
+      )}
 
       {/* Notes task error/status banner */}
       {notesTaskError && (

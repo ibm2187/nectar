@@ -116,6 +116,18 @@ describe('PipelineSync', () => {
     aws = makeMockAws();
     repoManager = makeMockRepoManager();
     sync = new PipelineSync(releases, aws, repoManager, {});
+    // Provide customer metadata for label/sort lookups
+    const mockCustomerStore = {
+      getCustomer: (id) => ({
+        viv:         { shortName: 'Viv',          sortOrder: 1 },
+        ck:          { shortName: 'CK',           sortOrder: 2 },
+        bayada:      { shortName: 'Bayada',       sortOrder: 3 },
+        tribute:     { shortName: 'Tribute',      sortOrder: 4 },
+        lumen:       { shortName: 'Lumen',        sortOrder: 5 },
+        qualitycare: { shortName: 'Quality Care', sortOrder: 6 },
+      }[id] || null),
+    };
+    sync.setCustomerStore(mockCustomerStore);
   });
 
   it('discovers CodeBuild projects', async () => {

@@ -61,6 +61,9 @@ export interface Release {
   jiraReleaseDate?: string | null
   jiraArchived?: boolean
   presentationUrl?: string | null
+  // Target customers resolved from version name suffix / JIRA description
+  targetCustomers?: string[]
+  targetCustomerSource?: 'description' | 'suffix' | 'default'
   // Set by backend when releases are returned via /api/releases or /api/releases/calendar
   effectiveStatus?: EffectiveStatus
 }
@@ -133,6 +136,10 @@ export interface CustomerVersion {
 export interface Customer {
   id: string
   name: string
+  shortName?: string | null
+  color?: string | null
+  hidden?: boolean
+  sortOrder?: number
   configName: string | null
   domain: string | null
   domainPrefix: string

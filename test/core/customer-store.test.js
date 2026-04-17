@@ -30,14 +30,16 @@ describe('CustomerStore', () => {
       expect(updated.notes).toBe('manual note'); // preserved
     });
 
-    it('lists customers sorted by id', () => {
-      store.upsertCustomer({ id: 'ck', name: 'CK', active: true });
-      store.upsertCustomer({ id: 'bayada', name: 'Bayada', active: true });
-      store.upsertCustomer({ id: 'tribute', name: 'Tribute', active: false });
+    it('lists customers sorted by sortOrder then id', () => {
+      store.upsertCustomer({ id: 'ck', name: 'CK', active: true, sortOrder: 2 });
+      store.upsertCustomer({ id: 'bayada', name: 'Bayada', active: true, sortOrder: 1 });
+      store.upsertCustomer({ id: 'tribute', name: 'Tribute', active: false, sortOrder: 3 });
 
       const list = store.listCustomers();
       expect(list).toHaveLength(3);
       expect(list[0].id).toBe('bayada');
+      expect(list[1].id).toBe('ck');
+      expect(list[2].id).toBe('tribute');
     });
 
     it('filters customers by active', () => {
@@ -58,6 +60,99 @@ describe('CustomerStore', () => {
       store.upsertCustomer({ id: 'ck', name: 'CK' });
       expect(emitted).not.toBeNull();
       expect(emitted.id).toBe('ck');
+    });
+  });
+
+  describe('upsertCustomer — USER_EDITABLE_FIELDS guard', () => {
+    it('preserves shortName when scanner re-upserts', () => {
+      store.upsertCustomer({ id: 'ck', name: 'CK', shortName: 'CK', color: '#0054A6' });
+      const updated = store.upsertCustomer({ id: 'ck', name: 'CK New', shortName: 'Overwrite' });
+      expect(updated.shortName).toBe('CK'); // preserved
+      expect(updated.name).toBe('CK New');  // non-editable, updated
+    });
+
+    it('preserves color when scanner re-upserts', () => {
+      store.upsertCustomer({ id: 'ck', name: 'CK', color: '#0054A6' });
+      const updated = store.upsertCustomer({ id: 'ck', name: 'CK', color: '#FFFFFF' });
+      expect(updated.color).toBe('#0054A6'); // preserved
+    });
+
+    it('preserves hidden and sortOrder when scanner re-upserts', () => {
+      store.upsertCustomer({ id: 'ck', name: 'CK', hidden: true, sortOrder: 5 });
+      const updated = store.upsertCustomer({ id: 'ck', name: 'CK', hidden: false, sortOrder: 1 });
+      expect(updated.hidden).toBe(true);  // preserved
+      expect(updated.sortOrder).toBe(5);  // preserved
+    });
+
+    it('allows initial seeding of null editable fields', () => {
+      store.upsertCustomer({ id: 'ck', name: 'CK' }); // no shortName/color set
+      const updated = store.upsertCustomer({ id: 'ck', name: 'CK', shortName: 'CK', color: '#0054A6' });
+      expect(updated.shortName).toBe('CK');       // set because was null
+      expect(updated.color).toBe('#0054A6');       // set because was null
+    });
+  });
+
+  describe('updateCustomer', () => {
+    it('merges partial changes without resetting others', () => {
+      store.upsertCustomer({ id: 'ck', name: 'CK', shortName: 'CK', color: '#0054A6', sortOrder: 2 });
+      const updated = store.updateCustomer('ck', { color: '#FF0000' });
+      expect(updated.color).toBe('#FF0000');
+      expect(updated.shortName).toBe('CK');    // untouched
+      expect(updated.sortOrder).toBe(2);        // untouched
+      expect(updated.name).toBe('CK');          // untouched
+    });
+
+    it('returns null for unknown customer', () => {
+      expect(store.updateCustomer('nonexistent', { color: '#000' })).toBeNull();
+    });
+
+    it('persists to DB and survives reload', () => {
+      store.upsertCustomer({ id: 'ck', name: 'CK', color: '#000000' });
+      store.updateCustomer('ck', { color: '#FF0000', shortName: 'Comfort' });
+      const fresh = new CustomerStore({ db });
+      const c = fresh.getCustomer('ck');
+      expect(c.color).toBe('#FF0000');
+      expect(c.shortName).toBe('Comfort');
+    });
+  });
+
+  describe('seedDisplayDefaults', () => {
+    it('seeds shortName/color/sortOrder for customers without shortName', () => {
+      store.upsertCustomer({ id: 'ck', name: 'CK' });
+      store.upsertCustomer({ id: 'bayada', name: 'Bayada' });
+      store.seedDisplayDefaults();
+      const ck = store.getCustomer('ck');
+      const bayada = store.getCustomer('bayada');
+      expect(ck.shortName).toBe('CK');
+      expect(ck.color).toBe('#0054A6');
+      expect(bayada.shortName).toBe('Bayada');
+      expect(bayada.color).toBe('#E31A38');
+    });
+
+    it('skips customers that already have shortName', () => {
+      store.upsertCustomer({ id: 'ck', name: 'CK', shortName: 'Custom Label', color: '#111111' });
+      store.seedDisplayDefaults();
+      const ck = store.getCustomer('ck');
+      expect(ck.shortName).toBe('Custom Label'); // not overwritten
+      expect(ck.color).toBe('#111111');            // not overwritten
+    });
+
+    it('assigns fallback color to unknown customers', () => {
+      store.upsertCustomer({ id: 'newcustomer', name: 'New Corp' });
+      store.seedDisplayDefaults();
+      const c = store.getCustomer('newcustomer');
+      expect(c.shortName).toBe('New Corp'); // falls back to name
+      expect(c.color).toBe('#64748b');       // fallback gray
+    });
+  });
+
+  describe('listVisibleCustomers', () => {
+    it('excludes hidden customers', () => {
+      store.upsertCustomer({ id: 'ck', name: 'CK', hidden: false });
+      store.upsertCustomer({ id: 'haven', name: 'Haven', hidden: true });
+      const visible = store.listVisibleCustomers();
+      expect(visible).toHaveLength(1);
+      expect(visible[0].id).toBe('ck');
     });
   });
 

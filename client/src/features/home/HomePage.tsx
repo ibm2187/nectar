@@ -13,6 +13,7 @@ import { PipelineBadge } from '../releases/PipelineView'
 import { PrDetailPanel, type PrInfo } from '../../components/PrDetailPanel'
 import { ReleaseBadge, TicketDeployedCell as SharedDeployedCell, type TicketRowData } from '../../components/TicketRow'
 import { SortableHeader, useSortableData, useSortState } from '../../components/SortableHeader'
+import { CustomerPills } from '../../components/CustomerPill'
 import { CurrentlyOutBanner } from '../../components/CurrentlyOutBanner'
 import { OutIcon } from '../../components/PersonBadge'
 import { useAvailabilityStore } from '../../stores/availabilityStore'
@@ -683,6 +684,13 @@ function ReleasePanel({
           )}
         </span>
       </div>
+
+      {/* Target customers — separate row below header */}
+      {r.targetCustomers != null && (
+        <div className="flex items-center gap-1.5 px-4 pb-2">
+          <CustomerPills customerIds={r.targetCustomers} />
+        </div>
+      )}
 
       {/* Tickets table — collapsible */}
       {!isCollapsed && r.tickets.length > 0 && (

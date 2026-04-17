@@ -27,18 +27,20 @@ class ThemeConfig {
     this.db = opts.db || getDb();
     this.themes = [];
     this.unmappedLabel = 'Other';
+    this.customerColors = {};
     this.updatedAt = null;
     this._load();
   }
 
   _load() {
     try {
-      const row = this.db.prepare('SELECT themes, unmappedLabel, updatedAt FROM theme_config WHERE id = 1').get();
+      const row = this.db.prepare('SELECT themes, unmappedLabel, customerColors, updatedAt FROM theme_config WHERE id = 1').get();
       if (row) {
         this.themes = JSON.parse(row.themes || '[]');
         this.unmappedLabel = row.unmappedLabel || 'Other';
+        this.customerColors = JSON.parse(row.customerColors || '{}');
         this.updatedAt = row.updatedAt || null;
-        log.info(`Theme config loaded: ${this.themes.length} themes`);
+        log.info(`Theme config loaded: ${this.themes.length} themes, ${Object.keys(this.customerColors).length} customer colors`);
       }
     } catch (err) {
       log.warn(`Failed to load theme config: ${err.message}`);
@@ -48,15 +50,17 @@ class ThemeConfig {
   _save() {
     this.updatedAt = new Date().toISOString();
     this.db.prepare(`
-      INSERT INTO theme_config (id, themes, unmappedLabel, updatedAt)
-      VALUES (1, @themes, @unmappedLabel, @updatedAt)
+      INSERT INTO theme_config (id, themes, unmappedLabel, customerColors, updatedAt)
+      VALUES (1, @themes, @unmappedLabel, @customerColors, @updatedAt)
       ON CONFLICT(id) DO UPDATE SET
         themes = excluded.themes,
         unmappedLabel = excluded.unmappedLabel,
+        customerColors = excluded.customerColors,
         updatedAt = excluded.updatedAt
     `).run({
       themes: JSON.stringify(this.themes),
       unmappedLabel: this.unmappedLabel,
+      customerColors: JSON.stringify(this.customerColors),
       updatedAt: this.updatedAt,
     });
   }

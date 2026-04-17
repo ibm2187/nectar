@@ -712,6 +712,28 @@ module.exports = function createRoutes(services, config) {
     res.json({ ...customer, environments });
   });
 
+  router.put('/customers/:id', requireAdmin, (req, res) => {
+    const customer = customerStore.getCustomer(req.params.id);
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+    const allowed = ['name', 'shortName', 'color', 'hidden', 'sortOrder', 'notes'];
+    const changes = {};
+    for (const key of allowed) {
+      if (key in req.body) changes[key] = req.body[key];
+    }
+    // Validate field types/formats
+    if (changes.color != null && changes.color !== '' && !/^#[0-9a-fA-F]{6}$/.test(changes.color)) {
+      return res.status(400).json({ error: 'color must be a 6-digit hex (e.g. #FF0000)' });
+    }
+    if (changes.sortOrder != null && (!Number.isInteger(changes.sortOrder) || changes.sortOrder < 0)) {
+      return res.status(400).json({ error: 'sortOrder must be a non-negative integer' });
+    }
+    if (changes.hidden != null && typeof changes.hidden !== 'boolean') {
+      return res.status(400).json({ error: 'hidden must be a boolean' });
+    }
+    const updated = customerStore.updateCustomer(req.params.id, changes);
+    res.json(updated);
+  });
+
   // ── Environments ──────────────────────────────────────
 
   router.get('/environments', (req, res) => {

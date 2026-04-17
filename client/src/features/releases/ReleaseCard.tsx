@@ -1,6 +1,7 @@
 import { Card, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
 import { ZohoImpactBadge } from './CustomerImpact'
+import { CustomerPills } from '../../components/CustomerPill'
 import { timeAgo, riskLabel, cn } from '../../lib/utils'
 import type { Release } from '../../api/client'
 
@@ -43,6 +44,9 @@ export function ReleaseCard({ release: r, onClick }: ReleaseCardProps) {
             <Badge variant={r.ci.status === 'passing' ? 'success' : 'warning'}>
               CI: {r.ci.status}
             </Badge>
+          )}
+          {r.targetCustomers != null && (
+            <CustomerPills customerIds={r.targetCustomers} />
           )}
           <ZohoImpactBadge count={(r as any).zohoTickets?.length || 0} />
         </div>

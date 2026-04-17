@@ -20,7 +20,7 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth, taskQueu
   server.tool(
     'get_customer',
     'Get customer metadata and environment summary',
-    { customerId: z.string().describe('Customer ID (e.g., "ck", "bayada", "tribute")') },
+    { customerId: z.string().describe('Customer ID — use search_environments or list customers to find valid IDs') },
     async ({ customerId }) => {
       const customers = customerStore.listCustomers();
       const customer = customers.find(c => c.id === customerId);
