@@ -9,12 +9,22 @@ import { DEPLOY_STATUS } from './shared'
 import type { DeployRow } from './shared'
 import type { BuildCard } from './types'
 
+export interface BuildAlertInfo {
+  type: 'failure' | 'recovery'
+  at: string
+  version: string | null
+  buildNumber: string | number
+  notifiedPeople: string[]
+  ticketKeys: string[]
+}
+
 interface DenseCardProps {
   build: BuildCard
   deployRows: DeployRow[]
   onNavigate?: (path: string) => void
   defaultExpanded?: boolean
   searchTerm?: string
+  alert?: BuildAlertInfo | null
 }
 
 const GROUP_ALL_GREEN = { color: 'text-green-400', dot: 'bg-green-500' }
@@ -55,6 +65,7 @@ export function DenseCard({
   onNavigate,
   defaultExpanded = true,
   searchTerm,
+  alert,
 }: DenseCardProps) {
   const [expanded, setExpanded] = useState(defaultExpanded)
   const routerNavigate = useNavigate()
@@ -107,6 +118,19 @@ export function DenseCard({
           className="w-full flex items-center gap-3 px-4 py-3 hover:bg-accent/20 transition-colors text-left cursor-pointer"
         >
           <BuildHeader build={build} className="flex-1" />
+          {alert && (
+            <span
+              className={cn(
+                'inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border shrink-0',
+                alert.type === 'failure'
+                  ? 'bg-red-500/10 text-red-400 border-red-500/30'
+                  : 'bg-green-500/10 text-green-400 border-green-500/30'
+              )}
+              title={`${alert.type === 'failure' ? 'Failure' : 'Recovery'} alert sent at ${new Date(alert.at).toLocaleTimeString()}\nNotified: ${alert.notifiedPeople.join(', ') || 'none'}\nTickets: ${alert.ticketKeys.slice(0, 5).join(', ')}${alert.ticketKeys.length > 5 ? ` +${alert.ticketKeys.length - 5}` : ''}`}
+            >
+              {alert.type === 'failure' ? '🔔' : '✓'} {alert.notifiedPeople.length} notified
+            </span>
+          )}
           {build.version && (
             <button
               type="button"

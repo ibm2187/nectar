@@ -114,7 +114,9 @@ class NotificationEngine {
     this.config = config;
 
     // Feature 2: build status cache — persisted to survive restarts
-    this._previousBuildStatus = new Map(); // projectName → latestStatus
+    // Map<projectName, { status, lastAlert? }>
+    this._previousBuildStatus = new Map(); // projectName → latestStatus (string — back compat)
+    this._buildAlertHistory = new Map();   // projectName → { type, at, notifiedPeople, ticketKeys, version, buildNumber }
     this._buildStatusFile = path.join(__dirname, '..', '..', '.nectar-build-status-cache.json');
     this._loadBuildStatusCache();
 
@@ -129,10 +131,16 @@ class NotificationEngine {
       if (fs.existsSync(this._buildStatusFile)) {
         const data = JSON.parse(fs.readFileSync(this._buildStatusFile, 'utf8'));
         if (data && typeof data === 'object') {
-          for (const [k, v] of Object.entries(data)) {
-            this._previousBuildStatus.set(k, v);
+          // Support old format (projectName → statusString) and new format
+          const statuses = data.statuses || data; // back-compat: old files are flat {name: status}
+          const alerts = data.alerts || {};
+          for (const [k, v] of Object.entries(statuses)) {
+            this._previousBuildStatus.set(k, typeof v === 'string' ? v : v);
           }
-          log.info(`Build status cache loaded: ${this._previousBuildStatus.size} projects`);
+          for (const [k, v] of Object.entries(alerts)) {
+            this._buildAlertHistory.set(k, v);
+          }
+          log.info(`Build status cache loaded: ${this._previousBuildStatus.size} projects, ${this._buildAlertHistory.size} alerts`);
         }
       }
     } catch (err) {
@@ -142,11 +150,22 @@ class NotificationEngine {
 
   _saveBuildStatusCache() {
     try {
-      const obj = Object.fromEntries(this._previousBuildStatus);
-      fs.writeFileSync(this._buildStatusFile, JSON.stringify(obj));
+      const data = {
+        statuses: Object.fromEntries(this._previousBuildStatus),
+        alerts: Object.fromEntries(this._buildAlertHistory),
+      };
+      fs.writeFileSync(this._buildStatusFile, JSON.stringify(data));
     } catch (err) {
       log.warn(`Build status cache save failed: ${err.message}`);
     }
+  }
+
+  /**
+   * Get build alert history — exposed via API for the Builds page.
+   * @returns {Map<projectName, alertInfo>}
+   */
+  getBuildAlertHistory() {
+    return Object.fromEntries(this._buildAlertHistory);
   }
 
   // ── Lifecycle ────────────────────────────────────────────
@@ -628,6 +647,7 @@ class NotificationEngine {
     const message = lines.join('\n');
 
     let dmsSent = 0;
+    const notifiedPeople = [];
     for (const person of people) {
       const resolved = this.people.resolveSlackId(person);
       if (!resolved) {
@@ -639,11 +659,23 @@ class NotificationEngine {
         continue;
       }
       await this.slack.dmUser(resolved.slackId, message);
+      notifiedPeople.push(person);
       dmsSent++;
       await new Promise(r => setTimeout(r, 500));
     }
 
-    log.info(`Build alert: ${type} for ${version} — ${people.size} affected, ${dmsSent} DMs sent`);
+    // Record in alert history for the Builds page
+    this._buildAlertHistory.set(project.projectName, {
+      type,
+      at: new Date().toISOString(),
+      version: version || null,
+      buildNumber: buildNum,
+      notifiedPeople,
+      ticketKeys: jiraKeys.slice(0, 50),
+    });
+    this._saveBuildStatusCache();
+
+    log.info(`Build alert: ${type} for ${version} — ${people.size} affected, ${dmsSent} DMs sent to: ${notifiedPeople.join(', ')}`);
   }
 
   // ════════════════════════════════════════════════════════

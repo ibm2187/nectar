@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { cn, timeAgo } from '../../lib/utils'
+import { apiFetch } from '../../api/client'
 import { useBuildsData } from './useBuildsData'
-import { DenseCard } from './DenseCard'
+import { DenseCard, type BuildAlertInfo } from './DenseCard'
 import { getDeployTargetsForBuild, groupDeployTargetsForBuild } from './shared'
 import type { DeployRow } from './shared'
 import type { BuildCard, DeployTarget } from './types'
@@ -38,9 +39,10 @@ interface BuildCardSlotProps {
   isPinned?: boolean
   onNavigate: (path: string) => void
   searchTerm: string
+  alert?: BuildAlertInfo | null
 }
 
-function BuildCardSlot({ build, deployRows, isPinned, onNavigate, searchTerm }: BuildCardSlotProps) {
+function BuildCardSlot({ build, deployRows, isPinned, onNavigate, searchTerm, alert }: BuildCardSlotProps) {
   return (
     <div
       data-testid="dense-card"
@@ -51,6 +53,7 @@ function BuildCardSlot({ build, deployRows, isPinned, onNavigate, searchTerm }: 
         deployRows={deployRows}
         onNavigate={onNavigate}
         searchTerm={searchTerm}
+        alert={alert}
       />
     </div>
   )
@@ -61,7 +64,14 @@ export function BuildsPage() {
   const [activeKey, setActiveKey] = useState<string>(ALL_KEY)
   const [search, setSearch] = useState('')
   const [expandedAllFor, setExpandedAllFor] = useState<Set<string>>(new Set())
+  const [buildAlerts, setBuildAlerts] = useState<Record<string, BuildAlertInfo>>({})
   const navigate = useNavigate()
+
+  useEffect(() => {
+    apiFetch<Record<string, BuildAlertInfo>>('/admin/build-alerts')
+      .then(setBuildAlerts)
+      .catch(() => {})
+  }, [data]) // refresh when builds data refreshes
 
   const toggleExpandAll = (customerKey: string) => {
     setExpandedAllFor(prev => {
@@ -182,6 +192,7 @@ export function BuildsPage() {
                     isPinned={pinned}
                     onNavigate={navigate}
                     searchTerm={search}
+                    alert={buildAlerts[build.projectName] || null}
                   />
                 ))}
 
@@ -204,6 +215,7 @@ export function BuildsPage() {
                       deployRows={groupDeployTargetsForBuild(b, data.deployTargets, b.customerKey)}
                       onNavigate={navigate}
                       searchTerm={search}
+                      alert={buildAlerts[b.projectName] || null}
                     />
                   ))}
               </div>

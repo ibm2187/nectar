@@ -2677,6 +2677,14 @@ module.exports = function createRoutes(services, config) {
     }
   }));
 
+  // ── Build alert history (for Builds page badges) ────────
+
+  router.get('/admin/build-alerts', (req, res) => {
+    const { notificationEngine } = services;
+    if (!notificationEngine) return res.json({});
+    res.json(notificationEngine.getBuildAlertHistory());
+  });
+
   // ── Admin — Logs ────────────────────────────────────────
 
   router.get('/admin/logs', requireAdmin, (req, res) => {

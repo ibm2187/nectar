@@ -413,7 +413,7 @@ describe('NotificationEngine', () => {
       const promise = engine.sendDailyDigests();
       await vi.runAllTimersAsync();
       await promise;
-      expect(engine.availability.nextBusinessDays).toHaveBeenCalledWith(2, expect.any(String));
+      expect(engine.availability.nextBusinessDays).toHaveBeenCalledWith(5, expect.any(String));
     });
   });
 
