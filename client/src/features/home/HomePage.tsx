@@ -154,6 +154,7 @@ export function HomePage() {
         .catch(() => {})
         .finally(() => setLoading(false))
     } else {
+      // Both 'releases' and 'people' use the same API — just grouped differently
       Promise.all([
         apiFetch<HomeRelease[]>(`/releases/home?${params}`),
         apiFetch<Person[]>('/people'),
@@ -161,7 +162,7 @@ export function HomePage() {
         .then(([rels, ppl]) => {
           setReleases(rels)
           setPeople(ppl)
-          setCollapsed(new Set()) // reset collapse state on data change
+          setCollapsed(new Set())
           setExpandedTickets(new Set())
         })
         .catch(() => {})
@@ -378,7 +379,7 @@ export function HomePage() {
           </select>
         )}
 
-        {groupBy === 'releases' && filteredReleases.length > 1 && (
+        {(groupBy === 'releases' || groupBy === 'people') && filteredReleases.length > 1 && (
           <div className="flex gap-1 ml-auto">
             <button onClick={expandAll} className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-accent/50">Expand all</button>
             <button onClick={collapseAll} className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-accent/50">Collapse all</button>
@@ -388,7 +389,7 @@ export function HomePage() {
         {/* Group by toggle */}
         <div className={cn(
           'flex items-center gap-0.5 bg-muted rounded-lg p-0.5',
-          !(groupBy === 'releases' && filteredReleases.length > 1) && 'ml-auto'
+          !((groupBy === 'releases' || groupBy === 'people') && filteredReleases.length > 1) && 'ml-auto'
         )}>
           <button
             onClick={() => setGroupBy('releases')}
@@ -409,6 +410,16 @@ export function HomePage() {
             title="Group by ticket — see what releases each ticket goes to"
           >
             Tickets
+          </button>
+          <button
+            onClick={() => setGroupBy('people')}
+            className={cn(
+              'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+              groupBy === 'people' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+            )}
+            title="Group by assignee — see what's on each person's plate"
+          >
+            People
           </button>
         </div>
       </div>
@@ -477,6 +488,21 @@ export function HomePage() {
           </div>
         ) : (
           <TicketsTable tickets={filteredTickets} />
+        )
+      ) : groupBy === 'people' ? (
+        filteredReleases.length === 0 ? (
+          <div className="text-sm text-muted-foreground py-8 text-center italic">
+            {releases.length === 0
+              ? `No tickets in scope${person ? ` for ${person}` : ''}`
+              : 'No tickets match the current filters'}
+          </div>
+        ) : (
+          <PeopleGroupView
+            releases={filteredReleases}
+            view={view}
+            navigate={navigate}
+            onClickPr={(jiraKey, summary, prs, repo, version) => setPrPanel({ jiraKey, summary, prs, repo, version })}
+          />
         )
       ) : filteredReleases.length === 0 ? (
         <div className="text-sm text-muted-foreground py-8 text-center italic">
@@ -549,6 +575,240 @@ export function HomePage() {
         releaseVersion={prPanel?.version || null}
       />
     </div>
+  )
+}
+
+// ── People group view ────────────────────────────────────
+
+interface PersonGroup {
+  name: string
+  tickets: Array<any & { _release: { repo: string; version: string; branch?: string | null } }>
+  statusCounts: Record<string, number>
+}
+
+function PeopleGroupView({
+  releases, view, navigate, onClickPr,
+}: {
+  releases: HomeRelease[]
+  view: HomeView
+  navigate: (path: string, opts?: any) => void
+  onClickPr: (jiraKey: string, summary: string, prs: PrInfo[], repo: string, version: string) => void
+}) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const toggle = (name: string) => setCollapsed(prev => {
+    const next = new Set(prev)
+    if (next.has(name)) next.delete(name); else next.add(name)
+    return next
+  })
+
+  // Determine which assignee field to group by based on role view
+  const assigneeField = view === 'qa' ? 'qaAssignee' : 'assignee'
+
+  // Build person groups from releases
+  const groups = useMemo(() => {
+    const map = new Map<string, PersonGroup>()
+    const doneStatuses = new Set(STATUS_GROUPS.find(g => g.key === 'done')?.statuses || [])
+
+    for (const r of releases) {
+      for (const t of (r.tickets || [])) {
+        const name = (t as any)[assigneeField] || 'Not Assigned'
+        if (!map.has(name)) map.set(name, { name, tickets: [], statusCounts: {} })
+        const group = map.get(name)!
+        group.tickets.push({ ...t, _release: { repo: r.repo || '', version: r.version, branch: r.branch } })
+        const status = t.jiraStatus || 'Unknown'
+        group.statusCounts[status] = (group.statusCounts[status] || 0) + 1
+      }
+    }
+
+    // Sort: people with most not-done tickets first, "Not Assigned" last
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.name === 'Not Assigned') return 1
+      if (b.name === 'Not Assigned') return -1
+      const aNotDone = a.tickets.filter(t => !doneStatuses.has(t.jiraStatus || '')).length
+      const bNotDone = b.tickets.filter(t => !doneStatuses.has(t.jiraStatus || '')).length
+      return bNotDone - aNotDone
+    })
+  }, [releases, assigneeField])
+
+  if (groups.length === 0) {
+    return <div className="text-sm text-muted-foreground py-8 text-center italic">No assignees found</div>
+  }
+
+  return (
+    <div className="space-y-2">
+      {groups.map(group => (
+        <PersonPanel
+          key={group.name}
+          group={group}
+          view={view}
+          navigate={navigate}
+          isCollapsed={collapsed.has(group.name)}
+          onToggle={() => toggle(group.name)}
+          onClickPr={onClickPr}
+        />
+      ))}
+    </div>
+  )
+}
+
+function PersonPanel({
+  group, view, navigate, isCollapsed, onToggle, onClickPr,
+}: {
+  group: PersonGroup
+  view: HomeView
+  navigate: (path: string, opts?: any) => void
+  isCollapsed: boolean
+  onToggle: () => void
+  onClickPr: (jiraKey: string, summary: string, prs: PrInfo[], repo: string, version: string) => void
+}) {
+  // Summarize status counts for the header
+  const statusSummary = useMemo(() => {
+    const buckets: Array<{ label: string; count: number; color: string }> = []
+    const grouped: Record<string, number> = {}
+    for (const t of group.tickets) {
+      const sg = getStatusGroup(t.jiraStatus || '')
+      grouped[sg] = (grouped[sg] || 0) + 1
+    }
+    for (const g of STATUS_GROUPS) {
+      if (g.key === 'all' || g.key === 'not-done') continue
+      if (grouped[g.key]) buckets.push({ label: g.label, count: grouped[g.key], color: g.pillActive })
+    }
+    return buckets
+  }, [group.tickets])
+
+  // Sort tickets: not-done first, then by release version
+  type PersonTicketSortKey = 'key' | 'summary' | 'status' | 'release' | 'cherryPick' | 'prs' | 'build'
+  const otherAssigneeField = view === 'qa' ? 'assignee' : 'qaAssignee'
+  const otherLabel = view === 'qa' ? 'Dev' : 'QA'
+  const [ticketSort, onTicketSort] = useSortState<PersonTicketSortKey>(null)
+  const ticketAccessors = useMemo(() => ({
+    key:        (t: any) => t.key,
+    summary:    (t: any) => t.summary,
+    status:     (t: any) => t.jiraStatus,
+    release:    (t: any) => t._release?.version || '',
+    cherryPick: (t: any) => (t.prs || []).filter((p: PrInfo) => {
+      const base = p.baseBranch || ''
+      return base.startsWith('releases/') || base.startsWith('VIV/') || base.startsWith('release/')
+    }).length,
+    prs:        (t: any) => (t.prs || []).length,
+    build:      (t: any) => t.build?.status || '',
+  }), [])
+  const sortedTickets = useSortableData(group.tickets, ticketSort, ticketAccessors)
+
+  return (
+    <Card className="overflow-hidden">
+      {/* Person header */}
+      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border/30">
+        <button onClick={onToggle} className="text-muted-foreground hover:text-foreground text-xs w-4 shrink-0">
+          {isCollapsed ? '▸' : '▾'}
+        </button>
+
+        <span className="font-semibold text-foreground">{group.name}</span>
+        {group.name !== 'Not Assigned' && <OutIcon name={group.name} className="shrink-0" />}
+
+        <span className="text-xs text-muted-foreground">
+          {group.tickets.length} ticket{group.tickets.length !== 1 ? 's' : ''}
+        </span>
+
+        <div className="flex items-center gap-2 ml-2">
+          {statusSummary.map(s => (
+            <span key={s.label} className="text-[10px] text-muted-foreground">
+              {s.count} {s.label.toLowerCase()}
+            </span>
+          ))}
+        </div>
+
+        <span className="ml-auto text-xs text-muted-foreground">
+          across {new Set(group.tickets.map(t => t._release.version)).size} release{new Set(group.tickets.map(t => t._release.version)).size !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {/* Tickets table */}
+      {!isCollapsed && group.tickets.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm table-fixed">
+            <colgroup>
+              <col style={{ width: '130px' }} />
+              <col style={{ width: '100px' }} />
+              <col />
+              <col style={{ width: '155px' }} />
+              <col style={{ width: '75px' }} />
+              <col style={{ width: '35px' }} />
+              <col style={{ width: '50px' }} />
+              <col style={{ width: '130px' }} />
+            </colgroup>
+            <thead>
+              <tr className="border-b border-border/20 text-left">
+                <SortableHeader label="Release"    sortKey="release"    state={ticketSort} onSort={k => onTicketSort(k as PersonTicketSortKey)} className="pl-4 pr-2 py-1.5 text-[10px]" />
+                <SortableHeader label="Key"        sortKey="key"        state={ticketSort} onSort={k => onTicketSort(k as PersonTicketSortKey)} className="px-2 py-1.5 text-[10px]" />
+                <SortableHeader label="Summary"    sortKey="summary"    state={ticketSort} onSort={k => onTicketSort(k as PersonTicketSortKey)} className="px-2 py-1.5 text-[10px]" />
+                <SortableHeader label="Status"     sortKey="status"     state={ticketSort} onSort={k => onTicketSort(k as PersonTicketSortKey)} align="right" className="px-2 py-1.5 text-[10px]" />
+                <SortableHeader label="Cherry Pick" sortKey="cherryPick" state={ticketSort} onSort={k => onTicketSort(k as PersonTicketSortKey)} align="center" className="px-1 py-1.5 text-[10px]" />
+                <SortableHeader label="PRs"        sortKey="prs"        state={ticketSort} onSort={k => onTicketSort(k as PersonTicketSortKey)} align="center" className="px-0.5 py-1.5 text-[10px]" />
+                <SortableHeader label="Build"      sortKey="build"      state={ticketSort} onSort={k => onTicketSort(k as PersonTicketSortKey)} align="center" className="px-1 py-1.5 text-[10px]" />
+                <th className="px-2 pr-4 py-1.5 text-[10px] font-medium text-muted-foreground text-right">{otherLabel}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedTickets.map((ticket: any) => {
+                const releaseKey = ticket._release.repo ? `${ticket._release.repo}:${ticket._release.version}` : ticket._release.version
+                const other = displayAssignee((ticket as any)[otherAssigneeField])
+                return (
+                  <tr key={`${ticket.key}-${ticket._release.version}`} className="border-b border-border/10 hover:bg-accent/20 transition-colors">
+                    <td className="pl-4 pr-2 py-1.5 align-middle whitespace-nowrap">
+                      <button
+                        onClick={() => navigate(`/releases/${releaseKey}`, { state: { from: 'home' } })}
+                        className="text-xs font-mono text-primary hover:underline"
+                        title={ticket._release.repo}
+                      >
+                        {ticket._release.repo && ticket._release.repo !== 'webplatform' && (
+                          <Badge variant="secondary" className="text-[9px] mr-1 px-1 py-0">{ticket._release.repo}</Badge>
+                        )}
+                        {ticket._release.version}
+                      </button>
+                    </td>
+                    <td className="px-2 py-1.5 align-middle whitespace-nowrap">
+                      <JiraLink jiraKey={ticket.key} className="text-xs" />
+                    </td>
+                    <td className="px-2 py-1.5 align-middle">
+                      <div className="text-foreground truncate" title={ticket.summary}>{ticket.summary}</div>
+                    </td>
+                    <td className="px-2 py-1.5 align-middle text-right whitespace-nowrap">
+                      {ticket.jiraStatus && (
+                        <span className={cn(
+                          'inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium border',
+                          getStatusBadgeColor(ticket.jiraStatus)
+                        )}>
+                          {ticket.jiraStatus}
+                        </span>
+                      )}
+                    </td>
+                    <PrCountCells
+                      prs={ticket.prs || []}
+                      releaseBranch={ticket._release.branch}
+                      onClick={() => onClickPr(ticket.key, ticket.summary, ticket.prs || [], ticket._release.repo || 'webplatform', ticket._release.version)}
+                    />
+                    <BuildStatusCell build={ticket.build} />
+                    <td className="px-2 pr-4 py-1.5 align-middle whitespace-nowrap">
+                      <div className="flex items-center justify-end gap-0.5">
+                        <span className={cn('text-xs truncate', other.className)} title={other.text}>{other.text}</span>
+                        <OutIcon name={(ticket as any)[otherAssigneeField]} className="ml-0 shrink-0" />
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {isCollapsed && group.tickets.length > 0 && (
+        <button onClick={onToggle} className="w-full px-4 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/20 text-left">
+          {group.tickets.length} ticket{group.tickets.length !== 1 ? 's' : ''} — click to expand
+        </button>
+      )}
+    </Card>
   )
 }
 

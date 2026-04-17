@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 export type HomeView = 'dev' | 'qa' | 'pm' | 'support' | 'cs'
-export type HomeGroupBy = 'releases' | 'tickets'
+export type HomeGroupBy = 'releases' | 'tickets' | 'people'
 
 interface HomeState {
   /** Active role view */
