@@ -178,6 +178,11 @@ setInterval(() => {
           discovery: () => discovery.run(),
           zoho: () => zohoSync.run(),
           envPoll: () => envPoller.run(),
+          webplatformScan: async () => {
+            const scanResults = await webplatformScanner.scan();
+            customerStore.applyScanResults(scanResults);
+            return scanResults;
+          },
         }[target];
         if (runFn) {
           runFn()

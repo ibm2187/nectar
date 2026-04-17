@@ -3,7 +3,7 @@ const { EventEmitter } = require('events');
 const log = require('./log');
 const { getDb } = require('./db');
 
-const VALID_TYPES = ['release-notes', 'release-presentation'];
+const VALID_TYPES = ['release-notes', 'release-presentation', 'trigger-sync', 'slack-notify'];
 // Exposed for anyone who wants to introspect available statuses.
 const VALID_STATUSES = ['pending', 'in-progress', 'completed', 'failed'];
 

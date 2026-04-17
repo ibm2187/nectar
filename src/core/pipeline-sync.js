@@ -214,7 +214,7 @@ class PipelineSync extends EventEmitter {
 
     log.info(`Pipeline sync complete: ${results.builds} builds, ${results.deploys} deploys in ${results.durationMs}ms`);
     this._computeHotSet();
-    this._persistToDb();
+    this._persistToDb({ fullSync: true });
     this.emit('sync:completed', results);
     return results;
   }
@@ -354,7 +354,7 @@ class PipelineSync extends EventEmitter {
 
   // ── SQLite persistence ────────────────────────────────────
 
-  _persistToDb() {
+  _persistToDb({ fullSync = false } = {}) {
     const now = new Date().toISOString();
     const upsertCard = this.db.prepare(`
       INSERT INTO build_cards (projectName, account, imageTag, latestStatus, latestStartTime, data, updatedAt)
@@ -372,6 +372,8 @@ class PipelineSync extends EventEmitter {
         account = excluded.account, status = excluded.status,
         data = excluded.data, updatedAt = excluded.updatedAt
     `);
+    const deleteStaleCards = this.db.prepare('DELETE FROM build_cards WHERE projectName NOT IN (SELECT value FROM json_each(?))');
+    const deleteStaleDeploys = this.db.prepare('DELETE FROM deploy_states WHERE pipelineName NOT IN (SELECT value FROM json_each(?))');
 
     const persistAll = this.db.transaction(() => {
       for (const card of this.buildProjects) {
@@ -398,6 +400,16 @@ class PipelineSync extends EventEmitter {
             updatedAt: now,
           });
         }
+      }
+
+      // On full sync, remove rows for projects/pipelines no longer in AWS
+      if (fullSync) {
+        const cardNames = JSON.stringify(this.buildProjects.map(c => c.projectName));
+        const pipelineNames = JSON.stringify(
+          Object.values(this.deployTargets).flat().map(t => t.pipelineName)
+        );
+        deleteStaleCards.run(cardNames);
+        deleteStaleDeploys.run(pipelineNames);
       }
     });
 

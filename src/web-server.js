@@ -226,11 +226,13 @@ setInterval(() => {
 // ── SQLite change detection → WebSocket broadcasts ─────────
 let lastReleasesAt = null;
 let lastEnvsAt = null;
+let lastBuildsAt = null;
 
 setInterval(() => {
   try {
     const relAt = db.prepare("SELECT MAX(updatedAt) as t FROM releases").get()?.t;
     const envAt = db.prepare("SELECT MAX(updatedAt) as t FROM environments").get()?.t;
+    const buildsAt = db.prepare("SELECT MAX(updatedAt) as t FROM build_cards").get()?.t;
 
     if (relAt && relAt !== lastReleasesAt) {
       lastReleasesAt = relAt;
@@ -249,6 +251,13 @@ setInterval(() => {
           customers: customerStore.listCustomers(),
           environments: customerStore.listEnvironments(),
         });
+      }
+    }
+
+    if (buildsAt && buildsAt !== lastBuildsAt) {
+      lastBuildsAt = buildsAt;
+      if (webServer.broadcast) {
+        webServer.broadcast({ type: 'pipeline:sync-completed', releases: releases.list() });
       }
     }
   } catch (err) {
