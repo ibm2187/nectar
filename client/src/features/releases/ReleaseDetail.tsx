@@ -12,14 +12,20 @@ import { TruthView } from './TruthView'
 import { CustomerImpact } from './CustomerImpact'
 import { PipelineView } from './PipelineView'
 import { NectarLoader } from '../../components/NectarLoader'
-import { CompareSelector } from './CompareSelector'
-import type { CompareTarget } from './CompareSelector'
+import { GenerateNotesDialog } from './GenerateNotesDialog'
+
+interface TaskArtifact {
+  type: string
+  filename: string
+  bytes: number
+}
 
 interface TaskInfo {
   id: string
   type: string
   status: 'pending' | 'in-progress' | 'completed' | 'failed'
-  output: { gammaUrl?: string; notes?: string } | null
+  output: { gammaUrl?: string; notes?: string; artifacts?: TaskArtifact[] } | null
+  input?: { prompt?: string } | null
   error: string | null
   createdAt: string
 }
@@ -75,10 +81,10 @@ export function ReleaseDetail() {
   const jiraProject = useWsStore(s => s.config.jiraProject || 'DEV')
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [validation, setValidation] = useState<ValidationReport | null>(null)
-  const [task, setTask] = useState<TaskInfo | null>(null)
-  const [taskLoading, setTaskLoading] = useState(false)
-  const [taskError, setTaskError] = useState<string | null>(null)
-  const [compareSelectorOpen, setCompareSelectorOpen] = useState(false)
+  const [notesDialogOpen, setNotesDialogOpen] = useState(false)
+  const [notesTask, setNotesTask] = useState<TaskInfo | null>(null)
+  const [notesTaskLoading, setNotesTaskLoading] = useState(false)
+  const [notesTaskError, setNotesTaskError] = useState<string | null>(null)
   const [impactData, setImpactData] = useState<DatadogImpactResponse | null>(null)
   const [comments, setComments] = useState<ReleaseComment[]>([])
   const [commentText, setCommentText] = useState('')
@@ -140,21 +146,20 @@ export function ReleaseDetail() {
       .catch(() => {})
   }, [version])
 
-  // Check for existing tasks for this release
+  // Check for existing release-notes task for this release
   useEffect(() => {
     if (!version) return
-    apiFetch<TaskInfo[]>(`/tasks?type=release-presentation&limit=1`)
+    apiFetch<TaskInfo[]>(`/tasks?type=release-notes&limit=1`)
       .then(tasks => {
-        // Find a task matching this release version
         const match = tasks.find((t: any) => t.input?.version === version)
-        if (match) setTask(match)
+        if (match) setNotesTask(match)
       })
       .catch(() => {})
   }, [version])
 
-  // Poll for task status when task is pending or in-progress
+  // Poll for notes task status when pending or in-progress
   useEffect(() => {
-    if (!task || (task.status !== 'pending' && task.status !== 'in-progress')) {
+    if (!notesTask || (notesTask.status !== 'pending' && notesTask.status !== 'in-progress')) {
       if (pollRef.current) {
         clearInterval(pollRef.current)
         pollRef.current = null
@@ -163,9 +168,9 @@ export function ReleaseDetail() {
     }
 
     pollRef.current = setInterval(() => {
-      apiFetch<TaskInfo>(`/tasks/${task.id}`)
+      apiFetch<TaskInfo>(`/tasks/${notesTask.id}`)
         .then(updated => {
-          setTask(updated)
+          setNotesTask(updated)
           if (updated.status === 'completed' || updated.status === 'failed') {
             if (pollRef.current) {
               clearInterval(pollRef.current)
@@ -182,36 +187,31 @@ export function ReleaseDetail() {
         pollRef.current = null
       }
     }
-  }, [task?.id, task?.status])
+  }, [notesTask?.id, notesTask?.status])
 
-  const generatePresentation = useCallback(async (compareVersion?: string) => {
+  const generateNotes = useCallback(async (compareVersion: string, prompt: string) => {
     if (!version) return
-    setTaskLoading(true)
-    setTaskError(null)
-    setTask(null) // Clear old task so UI resets
+    setNotesTaskLoading(true)
+    setNotesTaskError(null)
+    setNotesTask(null)
     try {
       const body: Record<string, unknown> = {
-        type: 'release-presentation',
+        type: 'release-notes',
         version,
-      }
-      if (compareVersion) {
-        body.compareVersion = compareVersion
+        compareVersion,
+        prompt: prompt || undefined,
       }
       const newTask = await apiFetch<TaskInfo>('/tasks', {
         method: 'POST',
         body: JSON.stringify(body),
       })
-      setTask(newTask)
+      setNotesTask(newTask)
+      setNotesDialogOpen(false)
     } catch (err) {
-      setTaskError(err instanceof Error ? err.message : 'Failed to create task')
+      setNotesTaskError(err instanceof Error ? err.message : 'Failed to create task')
     }
-    setTaskLoading(false)
+    setNotesTaskLoading(false)
   }, [version])
-
-  const handleCompareSelect = useCallback((target: CompareTarget) => {
-    setCompareSelectorOpen(false)
-    generatePresentation(target.version)
-  }, [generatePresentation])
 
   if (!release) {
     return <NectarLoader message="Loading release..." className="mt-32" />
@@ -318,60 +318,62 @@ export function ReleaseDetail() {
               alert(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
             }
           }}>Notify Channel</Button>
-          {/* Presentation button */}
-          {taskLoading || (task && (task.status === 'pending' || task.status === 'in-progress')) ? (
+          {/* Release Notes button */}
+          {notesTaskLoading || (notesTask && (notesTask.status === 'pending' || notesTask.status === 'in-progress')) ? (
             <Button variant="outline" size="sm" className="text-xs h-7" disabled>
               <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1.5" />
-              {taskLoading ? 'Creating...' : task?.status === 'pending' ? 'Queued...' : 'Generating...'}
+              {notesTaskLoading ? 'Creating...' : notesTask?.status === 'pending' ? 'Queued...' : 'Generating notes...'}
             </Button>
-          ) : release.presentationUrl || (task && task.status === 'completed' && task.output?.gammaUrl) ? (
+          ) : notesTask && notesTask.status === 'completed' && notesTask.output?.artifacts?.length ? (
             <>
-              <a href={release.presentationUrl || task?.output?.gammaUrl} target="_blank" rel="noopener noreferrer">
-                <Button variant="outline" size="sm" className="text-xs h-7">Presentation</Button>
-              </a>
+              {notesTask.output.artifacts.filter(a => a.type === 'pdf').map(a => (
+                <a key={a.filename} href={`/api/releases/${version}/artifacts/${a.filename}`} target="_blank" rel="noopener noreferrer">
+                  <Button variant="outline" size="sm" className="text-xs h-7">Release Notes</Button>
+                </a>
+              ))}
               <Button
                 variant="outline"
                 size="sm"
                 className="text-xs h-7 text-muted-foreground"
-                onClick={() => setCompareSelectorOpen(true)}
+                onClick={() => setNotesDialogOpen(true)}
               >
-                Regenerate
+                Regenerate Notes
               </Button>
             </>
-          ) : task && task.status === 'failed' ? (
+          ) : notesTask && notesTask.status === 'failed' ? (
             <Button
               variant="outline"
               size="sm"
               className="text-xs h-7"
-              onClick={() => setCompareSelectorOpen(true)}
+              onClick={() => setNotesDialogOpen(true)}
             >
-              Retry Presentation
+              Retry Notes
             </Button>
           ) : (
             <Button
               variant="outline"
               size="sm"
               className="text-xs h-7"
-              onClick={() => setCompareSelectorOpen(true)}
+              onClick={() => setNotesDialogOpen(true)}
             >
-              Generate Presentation
+              Release Notes
             </Button>
           )}
         </div>
       </div>
 
-      {/* Task error/status banner */}
-      {taskError && (
+      {/* Notes task error/status banner */}
+      {notesTaskError && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 mb-3 text-xs text-destructive">
-          {taskError}
+          {notesTaskError}
         </div>
       )}
-      {task && task.status === 'failed' && (
+      {notesTask && notesTask.status === 'failed' && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 mb-3 flex items-center justify-between">
           <span className="text-xs text-destructive">
-            Presentation generation failed: {task.error || 'Unknown error'}
+            Release notes generation failed: {notesTask.error || 'Unknown error'}
           </span>
-          <Button variant="outline" size="sm" className="text-xs h-6" onClick={() => setCompareSelectorOpen(true)}>
+          <Button variant="outline" size="sm" className="text-xs h-6" onClick={() => setNotesDialogOpen(true)}>
             Retry
           </Button>
         </div>
@@ -622,13 +624,16 @@ export function ReleaseDetail() {
         )}
       </CollapsibleSection>
 
-      {/* Compare selector for presentation generation */}
-      <CompareSelector
-        open={compareSelectorOpen}
-        onOpenChange={setCompareSelectorOpen}
-        onSelect={handleCompareSelect}
+      {/* Generate release notes dialog */}
+      <GenerateNotesDialog
+        open={notesDialogOpen}
+        onOpenChange={setNotesDialogOpen}
+        onGenerate={generateNotes}
         releaseVersion={release.version}
+        loading={notesTaskLoading}
+        initialPrompt={notesTask?.input?.prompt || ''}
       />
+
     </div>
   )
 }

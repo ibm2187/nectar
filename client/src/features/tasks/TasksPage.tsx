@@ -169,6 +169,18 @@ export function TasksPage() {
     return map
   }, [tasks])
 
+  const cancelTask = useCallback(async (taskId: string) => {
+    try {
+      await apiFetch(`/tasks/${taskId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'failed', error: 'Cancelled by user' }),
+      })
+      loadTasks(0, false)
+    } catch {
+      // silently fail — refresh will show current state
+    }
+  }, [loadTasks])
+
   const filters: { key: StatusFilter; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'active', label: 'Active' },
@@ -310,6 +322,18 @@ export function TasksPage() {
                           <span className="text-xs text-destructive truncate max-w-xs" title={task.error}>
                             {task.error}
                           </span>
+                        )}
+
+                        {/* Cancel button for active tasks */}
+                        {(task.status === 'pending' || task.status === 'in-progress') && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs h-6 text-destructive border-destructive/30 hover:bg-destructive/10"
+                            onClick={() => cancelTask(task.id)}
+                          >
+                            Cancel
+                          </Button>
                         )}
 
                         {/* Spacer */}

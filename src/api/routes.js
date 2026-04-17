@@ -2064,7 +2064,7 @@ module.exports = function createRoutes(services, config) {
 
   if (taskQueue) {
     router.post('/tasks', asyncHandler(async (req, res) => {
-      const { type, version, slackUserId, compareVersion } = req.body || {};
+      const { type, version, slackUserId, compareVersion, prompt } = req.body || {};
 
       if (!type) {
         return res.status(400).json({ error: 'type is required' });
@@ -2133,6 +2133,11 @@ module.exports = function createRoutes(services, config) {
           riskScore: release.risk ? release.risk.numericScore : null,
           riskFactors: release.risk ? release.risk.factors : [],
         };
+
+        // Include prompt from the generation dialog
+        if (prompt) {
+          input.prompt = prompt;
+        }
 
         // Include compareVersion and impact delta in the task input
         if (compareVersion) {
@@ -2239,6 +2244,52 @@ module.exports = function createRoutes(services, config) {
     });
   }
 
+  // ── Release Artifact Downloads ──────────────────────────
+  // Serves signed S3 download URLs for release notes PDFs and drafts.
+  // Bucket stays private — Nectar signs a short-lived URL on each request.
+
+  router.get('/releases/:version/artifacts/:filename', asyncHandler(async (req, res) => {
+    const { version, filename } = req.params;
+
+    // Only allow known filenames
+    const ALLOWED = ['release-notes.pdf', 'release-notes-draft.md'];
+    if (!ALLOWED.includes(filename)) {
+      return res.status(400).json({ error: `Unknown artifact: ${filename}` });
+    }
+
+    const bucket = process.env.RELEASE_ARTIFACTS_BUCKET;
+    const region = process.env.RELEASE_ARTIFACTS_REGION || 'us-east-1';
+    const accessKeyId = process.env.RELEASE_ARTIFACTS_AWS_ACCESS_KEY_ID;
+    const secretAccessKey = process.env.RELEASE_ARTIFACTS_AWS_SECRET_ACCESS_KEY;
+
+    if (!bucket || !accessKeyId || !secretAccessKey) {
+      return res.status(503).json({ error: 'S3 release artifacts not configured' });
+    }
+
+    const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+    const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+
+    const s3 = new S3Client({
+      region,
+      credentials: { accessKeyId, secretAccessKey },
+    });
+
+    const key = `releases/${version}/${filename}`;
+
+    try {
+      const url = await getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: key }), {
+        expiresIn: 900, // 15 minutes
+      });
+      res.redirect(302, url);
+    } catch (err) {
+      if (err.name === 'NoSuchKey' || err.Code === 'NoSuchKey') {
+        return res.status(404).json({ error: `Artifact not found: ${key}` });
+      }
+      log.error(`Failed to sign artifact URL: ${err.message}`);
+      res.status(500).json({ error: 'Failed to generate download URL' });
+    }
+  }));
+
   // ── Integrations Config ────────────────────────────────
   // Manage external service connections via .env file
 
@@ -2327,6 +2378,15 @@ module.exports = function createRoutes(services, config) {
       vars: [
         { key: 'BAMBOOHR_WHOSOUT_URL', label: 'Who\'s Out Feed URL', secret: true },
         { key: 'BAMBOOHR_HOLIDAYS_URL', label: 'Holidays Feed URL', secret: true },
+      ],
+    },
+    release_artifacts: {
+      label: 'S3 Release Artifacts',
+      vars: [
+        { key: 'RELEASE_ARTIFACTS_BUCKET', label: 'S3 Bucket', secret: false },
+        { key: 'RELEASE_ARTIFACTS_REGION', label: 'Region', secret: false },
+        { key: 'RELEASE_ARTIFACTS_AWS_ACCESS_KEY_ID', label: 'AWS Access Key ID', secret: false },
+        { key: 'RELEASE_ARTIFACTS_AWS_SECRET_ACCESS_KEY', label: 'AWS Secret Access Key', secret: true },
       ],
     },
   };
