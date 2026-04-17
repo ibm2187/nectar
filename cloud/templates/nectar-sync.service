@@ -15,8 +15,9 @@ RestartSec=10
 StandardOutput=append:/home/ubuntu/nectar-sync.log
 StandardError=append:/home/ubuntu/nectar-sync.log
 Environment=NODE_ENV=production
-# Sync process runs all sync engines — needs more heap than web
-Environment=NODE_OPTIONS=--max-old-space-size=4096
+# Sync runs all engines; observed RSS ~625M steady. 2048 is 3x headroom
+# and keeps web + sync caps within the 8GB host budget.
+Environment=NODE_OPTIONS=--max-old-space-size=2048
 
 TimeoutStartSec=120
 

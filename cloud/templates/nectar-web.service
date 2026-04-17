@@ -15,8 +15,10 @@ RestartSec=5
 StandardOutput=append:/home/ubuntu/nectar.log
 StandardError=append:/home/ubuntu/nectar.log
 Environment=NODE_ENV=production
-# Web process only reads from SQLite + serves HTTP — minimal heap needed
-Environment=NODE_OPTIONS=--max-old-space-size=512
+# Web hydrates full state (1000+ releases, 500k+ audit entries) and
+# JSON.stringify doubles the heap briefly — 512M OOM'd ~45s after boot.
+# 2048 is ~2x observed RSS and fits on an 8GB host beside the sync worker.
+Environment=NODE_OPTIONS=--max-old-space-size=2048
 
 TimeoutStartSec=120
 
