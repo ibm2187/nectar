@@ -34,26 +34,61 @@ Companion to [Hive](https://github.com/mavencare/hive) -- Hive is the brain (AI 
                        Dashboard
 ```
 
-**Backend**: Node.js + Express + WebSocket, JSON file persistence, plain JS (no build step)
+**Backend**: Node.js + Express + WebSocket, SQLite persistence (better-sqlite3), plain JS (no build step)
 **Frontend**: React 19 + TypeScript + Vite + Tailwind + Zustand
-**Integrations**: JIRA REST API (paginated, `/search/jql`), GitHub API, Slack, local bare git clones
+**Integrations**: JIRA REST API (paginated, `/search/jql`), GitHub API, AWS CodeBuild/CodePipeline, Slack, local bare git clones
 **MCP Server**: Streamable HTTP at `/mcp` with stdio bridge for Claude Code
+
+## Architecture: Two-Process Split
+
+Nectar runs as two processes sharing a single SQLite database:
+
+```
+┌──────────────────┐     ┌──────────────────┐
+│  nectar-web      │     │  nectar-sync     │
+│  :4000           │     │  (no port)       │
+│                  │     │                  │
+│  HTTP/WS/MCP     │     │  JIRA sync       │
+│  REST API        │     │  PR sync         │
+│  Auth            │     │  Pipeline sync   │
+│  Dashboard       │     │  Env poller      │
+│                  │     │  Slack           │
+│  Reads SQLite    │     │  Writes SQLite   │
+└────────┬─────────┘     └────────┬─────────┘
+         │                        │
+         └──────────┐  ┌──────────┘
+                    ▼  ▼
+               ┌──────────┐
+               │  SQLite   │
+               │ (WAL mode)│
+               └──────────┘
+```
+
+**Why two processes?**
+- **Memory isolation**: sync engines can't OOM the web server
+- **Independent restarts**: sync crash = zero user-facing downtime
+- **Independent memory limits**: web gets 512MB, sync gets 4GB
+- **SQLite is the only coordination point**: no IPC, no Redis, no message queue
+
+The web process polls SQLite every 5s for changes and broadcasts to WebSocket clients. User writes (transitions, approvals, comments) go directly to SQLite. Sync triggers and Slack notifications from user actions are delegated via the TaskQueue (also in SQLite).
+
+Single-process mode (`npm start`) is preserved for backward compatibility.
 
 ## Infrastructure requirements
 
 ### Compute
-- Single Node.js process (no clustering needed)
-- ~512MB RAM typical (bare git clones are on disk, not in memory)
+- Two Node.js processes (web + sync)
+- Web: ~100-200MB RAM (reads from SQLite, no caches)
+- Sync: ~1-2GB RAM (holds sync engine caches)
 - CPU spikes during truth computation (JIRA + git queries) -- 1-2 cores sufficient
 
 ### Storage
+- **SQLite database**: `.nectar.db` (~150-200MB) -- all persistent state
+  - WAL mode for concurrent read/write across processes
+  - `busy_timeout = 5000` for write contention
 - **Bare git clones**: `~/.nectar/repos/` -- ~2GB for webplatform, ~200MB each for android/iOS
   - First run: `git clone --bare --filter=blob:none` (partial clone, fast)
   - Subsequent: `git fetch` (incremental, seconds)
-- **State files**: `~/.nectar/` directory
-  - `.nectar-state.json` -- releases, tickets, audit trail (~5MB)
-  - `.nectar-customers.json` -- customers, environments, polled data (~10MB)
-- **No database required** -- all persistence is JSON files on disk
 
 ### Network access
 - **GitHub API** (`api.github.com`) -- for PR queries, branch listing
@@ -103,6 +138,14 @@ npm run build:client
 ### 4. Start
 
 ```bash
+# Two-process mode (recommended)
+npm run dev:split
+
+# Or run each in its own terminal
+npm run dev:web     # terminal 1 — HTTP on :4000
+npm run dev:sync    # terminal 2 — sync engines, no port
+
+# Single-process mode (legacy, still works)
 npm start
 ```
 
@@ -118,14 +161,31 @@ Dashboard available at `http://localhost:4000`.
 ### Development mode
 
 ```bash
-# Terminal 1: backend with auto-restart
-npm run dev
+# Two-process with auto-restart on file changes
+npm run dev:split
 
-# Terminal 2: Vite dev server with HMR
-npm run dev:client
+# Or separately:
+npm run dev:web      # backend web server with auto-restart
+npm run dev:sync     # sync worker with auto-restart
+npm run dev:client   # Vite dev server with HMR (port 5173)
 ```
 
 Frontend dev server runs on port 5173 and proxies `/api` + `/ws` to port 4000.
+
+### All npm scripts
+
+| Script | Description |
+|--------|-------------|
+| `npm start` | Single-process mode (legacy) |
+| `npm run start:web` | Web server only (production) |
+| `npm run start:sync` | Sync worker only (production) |
+| `npm run dev` | Single-process with `--watch` |
+| `npm run dev:web` | Web server with `--watch` |
+| `npm run dev:sync` | Sync worker with `--watch` |
+| `npm run dev:split` | Both processes with `--watch` |
+| `npm run dev:client` | Vite dev server (HMR) |
+| `npm test` | Run all tests |
+| `npm run test:watch` | Run tests in watch mode |
 
 ## Configuration
 
@@ -277,63 +337,98 @@ Each ticket gets a health verdict:
 
 ```
 nectar/
-+-- src/                          # Backend (plain JS, no build step)
-|   +-- index.js                  # Entry point, service wiring
++-- src/
+|   +-- index.js                  # Single-process entry (legacy, kept for rollback)
+|   +-- web-server.js             # Web process entry point (HTTP/WS/MCP)
+|   +-- sync-worker.js            # Sync process entry point (all sync engines)
+|   +-- bootstrap.js              # Shared .env/config/DB bootstrap
 |   +-- core/
+|   |   +-- db.js                 # SQLite schema + connection (better-sqlite3)
 |   |   +-- release.js            # Release state machine + persistence
 |   |   +-- release-truth.js      # Truth engine + impact computation
-|   |   +-- jira-sync.js          # JIRA version/ticket sync (paginated)
+|   |   +-- jira-sync.js          # JIRA version/ticket sync (batch persistence)
+|   |   +-- pipeline-sync.js      # AWS CodeBuild/CodePipeline (3-tier polling)
+|   |   +-- pr-sync.js            # GitHub PR sync + cache eviction
 |   |   +-- discovery.js          # Git branch discovery
 |   |   +-- customer-store.js     # Customer/environment state
-|   |   +-- webplatform-scanner.js# Tofu + config environment scanner
-|   |   +-- environment-poller.js # Polls /api/status/* on live envs
+|   |   +-- environment-poller.js # Polls /api/status/* (circuit breaker)
+|   |   +-- task-queue.js         # SQLite-backed task queue (IPC between processes)
 |   |   +-- repo-manager.js       # Bare git clone management
-|   |   +-- cherry-pick.js        # Cherry-pick PR watcher
-|   |   +-- risk.js               # Risk scoring
 |   +-- integrations/
-|   |   +-- jira.js               # JIRA REST client
-|   |   +-- github.js             # GitHub API client
-|   |   +-- slack.js              # Slack notifications
+|   |   +-- jira.js, github.js, slack.js, aws.js, zoho.js, datadog.js
 |   +-- api/
 |   |   +-- routes.js             # REST API routes
-|   |   +-- webhooks.js           # GitHub/JIRA webhooks
+|   |   +-- auth.js               # Google SSO + API keys + WEB_TOKEN
 |   +-- web/
 |   |   +-- server.js             # Express + WebSocket + MCP mount
 |   +-- mcp/
 |       +-- server.js             # MCP tool definitions
 |       +-- stdio-bridge.mjs      # Stdio-to-HTTP proxy for Claude Code
 +-- client/                       # Frontend (React + Vite + Tailwind)
-|   +-- src/
-|   |   +-- features/releases/    # Release list, detail, truth view, compare selector
-|   |   +-- features/customers/   # Customer matrix, environment detail (features/integrations/upgrades tabs)
-|   |   +-- components/           # UI primitives, NectarLoader, layout
-|   |   +-- stores/wsStore.ts     # Zustand + WebSocket
-|   +-- public/
-|       +-- favicon.svg           # Nectar icon (amber hex network)
-|       +-- nectar-icon.svg       # Full icon with text
-+-- nectar.config.js              # Repo configs, polling intervals
++-- cloud/
+|   +-- templates/
+|   |   +-- nectar-web.service    # systemd unit for web process
+|   |   +-- nectar-sync.service   # systemd unit for sync process
+|   |   +-- nectar.service        # legacy single-process unit
+|   +-- scripts/
+|       +-- boot.sh, init.sh, update.sh
++-- nectar.config.js
 +-- .env                          # Secrets (not committed)
-+-- .nectar-state.json            # Release state (not committed, auto-generated)
-+-- .nectar-customers.json        # Customer/env state (not committed, auto-generated)
++-- .nectar.db                    # SQLite database (not committed, auto-created)
 ```
 
 ## Persistence
 
-No database. Two JSON files on disk, auto-saved with 5s debounce:
+SQLite database (`.nectar.db`) with WAL mode. Tables:
 
-- **`.nectar-state.json`** -- releases, tickets, cherry-picks, audit trail, approvals
-- **`.nectar-customers.json`** -- customers, environments, polled feature/integration/upgrade data
+| Table | Contents |
+|-------|----------|
+| `releases` | Release state, tickets (JSON), cherry-picks, approvals, deployments |
+| `customers` | Customer metadata |
+| `environments` | Environment state, feature flags, integrations, upgrades |
+| `deployments` | Deployment history (version changes detected by poller) |
+| `build_cards` | AWS CodeBuild project cards (persisted by pipeline sync) |
+| `deploy_states` | AWS CodePipeline deploy states |
+| `tasks` | Task queue (sync triggers, Slack notifications between processes) |
+| `users` | User profiles (Google SSO) |
+| `api_keys` | API key hashes |
+| `audit` | Audit trail |
 
-Graceful shutdown (`SIGINT`/`SIGTERM`) flushes both files immediately.
+Graceful shutdown (`SIGINT`/`SIGTERM`) flushes pending state. SQLite WAL mode handles concurrent read/write from both processes.
 
-These files should be on persistent storage (not ephemeral container filesystem). In cloud deployment, mount a volume at `~/.nectar/` or wherever `dataDir` points.
+## Cloud deployment
 
-## Cloud deployment notes
+### Two-process deployment (systemd)
 
-1. **Git SSH access**: the server needs SSH key access to `github.com:mavencare/*` for bare clones
+```bash
+# Install/update service files
+sudo cp cloud/templates/nectar-web.service /etc/systemd/system/
+sudo cp cloud/templates/nectar-sync.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable nectar-web nectar-sync
+sudo systemctl start nectar-web nectar-sync
+```
+
+Memory limits are set in the service files:
+- `nectar-web`: `--max-old-space-size=512` (lightweight, reads from SQLite)
+- `nectar-sync`: `--max-old-space-size=4096` (runs sync engines)
+
+### Rollback to single-process
+
+```bash
+sudo systemctl stop nectar-web nectar-sync
+sudo systemctl disable nectar-web nectar-sync
+sudo systemctl enable nectar
+sudo systemctl start nectar
+```
+
+### Notes
+
+1. **Git SSH access**: the sync worker needs SSH key access to `github.com:mavencare/*` for bare clones
 2. **Bare clones**: stored in `dataDir/repos/` (~2.5GB total). Persist across restarts.
-3. **State files**: persist `.nectar-state.json` and `.nectar-customers.json` across restarts
-4. **Environment polling**: production envs are rate-limited (30 req/min). With 45 prod envs polled every 2 min, that's ~1.5 req/min per env -- well within limits. Each poll hits 4 endpoints per env.
-5. **JIRA sync**: runs every 10 min, syncs top 50 unreleased versions. ~30s per run.
-6. **MCP endpoint**: expose `/mcp` for Hive sessions. Update stdio bridge `--url` arg to point to cloud URL.
-7. **No auth on dashboard currently** -- add a reverse proxy with auth (or `WEB_TOKEN` for API-only access) before exposing publicly.
+3. **SQLite database**: `.nectar.db` (~150-200MB). Persist across restarts. Both processes share this file.
+4. **Swap**: recommended 4GB swap on the instance to cushion memory spikes
+5. **Environment polling**: production envs are rate-limited (30 req/min). Circuit breaker skips hosts with 3+ consecutive failures.
+6. **Pipeline sync**: 3-tier polling -- in-progress builds every 1min, recent every 5min, full every 10min
+7. **MCP endpoint**: expose `/mcp` for Hive sessions. Only runs in the web process.
+8. **Auto-update**: `cloud/scripts/update.sh` handles migration from single to two-process mode automatically.

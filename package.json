@@ -5,7 +5,12 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "start:web": "node src/web-server.js",
+    "start:sync": "node src/sync-worker.js",
     "dev": "node --watch src/index.js",
+    "dev:web": "node --watch src/web-server.js",
+    "dev:sync": "node --watch src/sync-worker.js",
+    "dev:split": "node --watch src/web-server.js & node --watch src/sync-worker.js & wait",
     "dev:client": "cd client && npx vite",
     "build:client": "cd client && npm run build",
     "test": "vitest run",

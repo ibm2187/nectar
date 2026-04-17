@@ -70,6 +70,7 @@ function openDb(dbPath) {
     db.pragma('synchronous = NORMAL');
   }
   db.pragma('foreign_keys = ON');
+  db.pragma('busy_timeout = 5000');
 
   applySchema(db);
   applyMigrations(db);
@@ -257,6 +258,32 @@ function applySchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_audit_version ON audit(version);
     CREATE INDEX IF NOT EXISTS idx_audit_at      ON audit(at DESC);
+
+    -- ── build_cards (pipeline sync) ────────────────────────────
+    CREATE TABLE IF NOT EXISTS build_cards (
+      projectName     TEXT PRIMARY KEY,
+      account         TEXT,
+      imageTag        TEXT,
+      latestStatus    TEXT,
+      latestStartTime TEXT,
+      data            TEXT NOT NULL,    -- full card JSON
+      updatedAt       TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_build_cards_status ON build_cards(latestStatus);
+    CREATE INDEX IF NOT EXISTS idx_build_cards_tag    ON build_cards(imageTag);
+
+    -- ── deploy_states (pipeline sync) ──────────────────────────
+    CREATE TABLE IF NOT EXISTS deploy_states (
+      pipelineName  TEXT PRIMARY KEY,
+      imageTag      TEXT,
+      customer      TEXT,
+      env           TEXT,
+      account       TEXT,
+      status        TEXT,
+      data          TEXT NOT NULL,    -- full state JSON
+      updatedAt     TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_deploy_states_tag ON deploy_states(imageTag);
   `);
 }
 

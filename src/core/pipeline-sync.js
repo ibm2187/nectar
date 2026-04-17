@@ -1,6 +1,7 @@
 const { EventEmitter } = require('events');
 const log = require('./log');
 const JiraClient = require('../integrations/jira');
+const { getDb } = require('./db');
 
 const CUSTOMER_LABELS = {
   viv: 'Viv',
@@ -30,17 +31,18 @@ const TAG_ALIASES = { master: ['master', 'latest'] };
  *   sync:completed ({ ... })
  */
 class PipelineSync extends EventEmitter {
-  constructor(releases, aws, repoManager, config) {
+  constructor(releases, aws, repoManager, config, opts = {}) {
     super();
     this.releases = releases;
     this.aws = aws;
     this.repoManager = repoManager;
     this.config = config;
+    this.db = opts.db || getDb();
     this._running = false;
     this.lastRun = null;
     this.lastResults = null;
 
-    // Cached data — exposed to API
+    // In-memory write caches — populated during sync, flushed to SQLite
     this.buildProjects = [];   // full list of build cards
     this.deployTargets = {};   // imageTag → deploy pipeline states
     this._projectList = null;  // raw project names (main account)
@@ -48,7 +50,8 @@ class PipelineSync extends EventEmitter {
     this.prSync = null;
 
     // Tiered polling state
-    this._hotTimer = null;
+    this._inProgressTimer = null;
+    this._recentTimer = null;
     this._fullTimer = null;
     this._hotEntries = [];                   // [{ projectName, account, roleArn }]
     this._hotTags = new Set();               // imageTag values for hot builds
@@ -68,28 +71,36 @@ class PipelineSync extends EventEmitter {
       return;
     }
 
-    const hotInterval = (this.config.polling && this.config.polling.pipelineSyncHot) || 60 * 1000;
-    const fullInterval = (this.config.polling && this.config.polling.pipelineSyncFull) || 60 * 60 * 1000;
+    const inProgressInterval = (this.config.polling && this.config.polling.pipelineSyncInProgress) || 60 * 1000;  // 1 min
+    const recentInterval = (this.config.polling && this.config.polling.pipelineSyncRecent) || 5 * 60 * 1000;      // 5 min
+    const fullInterval = (this.config.polling && this.config.polling.pipelineSyncFull) || 10 * 60 * 1000;          // 10 min
 
-    log.info(`Pipeline sync started (hot: every ${hotInterval / 1000}s, full: every ${fullInterval / 60000}m)`);
+    log.info(`Pipeline sync started (in-progress: ${inProgressInterval / 1000}s, recent: ${recentInterval / 60000}m, full: ${fullInterval / 60000}m)`);
 
     // First full sync 15s after boot
     setTimeout(() => {
       this.run().then(() => {
-        this._hotTimer = setInterval(() => {
-          this.runHot().catch(err => log.error('Pipeline hot-sync error:', err.message));
-        }, hotInterval);
+        // Tier 1: In-progress builds only (fast, frequent)
+        this._inProgressTimer = setInterval(() => {
+          this.runInProgress().catch(err => log.error('Pipeline in-progress sync error:', err.message));
+        }, inProgressInterval);
+
+        // Tier 2: Pinned + recent builds
+        this._recentTimer = setInterval(() => {
+          this.runHot().catch(err => log.error('Pipeline recent-sync error:', err.message));
+        }, recentInterval);
       }).catch(err => log.error('Pipeline sync error:', err.message));
     }, 15000);
 
-    // Recurring full sync
+    // Tier 3: Full reconciliation
     this._fullTimer = setInterval(() => {
       this.run().catch(err => log.error('Pipeline full-sync error:', err.message));
     }, fullInterval);
   }
 
   stop() {
-    if (this._hotTimer) { clearInterval(this._hotTimer); this._hotTimer = null; }
+    if (this._inProgressTimer) { clearInterval(this._inProgressTimer); this._inProgressTimer = null; }
+    if (this._recentTimer) { clearInterval(this._recentTimer); this._recentTimer = null; }
     if (this._fullTimer) { clearInterval(this._fullTimer); this._fullTimer = null; }
   }
 
@@ -114,26 +125,34 @@ class PipelineSync extends EventEmitter {
       this._deployPipelinesByRole.clear();
       this._deployConfigByRole.clear();
 
-      // Step 2: Fetch builds for main account projects
+      // Step 2: Fetch builds for main account projects (parallel, concurrency 5)
+      const FULL_CONCURRENCY = 5;
       const buildCards = [];
-      for (const projectName of (this._projectList || [])) {
-        try {
-          const card = await this._fetchBuildCard(projectName);
-          if (card) {
-            card.account = 'Viv';
-            buildCards.push(card);
-            this._cardsByProject.set(projectName, card);
+      const mainProjects = this._projectList || [];
+      for (let i = 0; i < mainProjects.length; i += FULL_CONCURRENCY) {
+        const batch = mainProjects.slice(i, i + FULL_CONCURRENCY);
+        const outcomes = await Promise.allSettled(
+          batch.map(async (projectName) => {
+            const card = await this._fetchBuildCard(projectName);
+            if (card) {
+              card.account = 'Viv';
+              buildCards.push(card);
+              this._cardsByProject.set(projectName, card);
+            }
+            results.builds++;
+          })
+        );
+        for (const o of outcomes) {
+          if (o.status === 'rejected') {
+            results.errors++;
+            log.warn(`Pipeline sync: build fetch failed: ${o.reason?.message || 'unknown'}`);
           }
-          results.builds++;
-          await new Promise(r => setTimeout(r, 500));
-        } catch (err) {
-          log.warn(`Pipeline sync: build fetch failed for ${projectName}: ${err.message}`);
-          results.errors++;
         }
       }
 
-      // Step 2b: Fetch builds from cross-account roles
+      // Step 2b: Fetch builds from cross-account roles (parallel, concurrency 3 + delay)
       this._crossAccountProjects.clear();
+      const CROSS_CONCURRENCY = 3; // lower than main account to avoid rate limits
       const crossAccounts = this.aws.getCrossAccountRoles();
       for (const { customer, roleArn } of crossAccounts) {
         try {
@@ -143,18 +162,31 @@ class PipelineSync extends EventEmitter {
 
           for (const projectName of ecrProjects) {
             this._crossAccountProjects.set(projectName, { customer, roleArn });
-            try {
-              const card = await this._fetchBuildCardForRole(roleArn, projectName);
-              if (card) {
-                card.account = customer;
-                buildCards.push(card);
-                this._cardsByProject.set(projectName, card);
+          }
+
+          for (let i = 0; i < ecrProjects.length; i += CROSS_CONCURRENCY) {
+            const batch = ecrProjects.slice(i, i + CROSS_CONCURRENCY);
+            const outcomes = await Promise.allSettled(
+              batch.map(async (projectName) => {
+                const card = await this._fetchBuildCardForRole(roleArn, projectName);
+                if (card) {
+                  card.account = customer;
+                  buildCards.push(card);
+                  this._cardsByProject.set(projectName, card);
+                }
+                results.builds++;
+              })
+            );
+            for (const o of outcomes) {
+              if (o.status === 'rejected') {
+                results.errors++;
+                log.warn(`Pipeline sync: build fetch failed for ${customer}: ${o.reason?.message || 'unknown'}`);
               }
-              results.builds++;
-              await new Promise(r => setTimeout(r, 500));
-            } catch (err) {
-              log.warn(`Pipeline sync: build fetch failed for ${customer}/${projectName}: ${err.message}`);
-              results.errors++;
+            }
+            // Pause between batches — longer for large accounts to avoid rate limits
+            if (i + CROSS_CONCURRENCY < ecrProjects.length) {
+              const delay = ecrProjects.length > 40 ? 1000 : 500;
+              await new Promise(r => setTimeout(r, delay));
             }
           }
         } catch (err) {
@@ -182,6 +214,7 @@ class PipelineSync extends EventEmitter {
 
     log.info(`Pipeline sync complete: ${results.builds} builds, ${results.deploys} deploys in ${results.durationMs}ms`);
     this._computeHotSet();
+    this._persistToDb();
     this.emit('sync:completed', results);
     return results;
   }
@@ -197,20 +230,27 @@ class PipelineSync extends EventEmitter {
     const results = { builds: 0, deploys: 0, errors: 0, mode: 'hot' };
 
     try {
-      for (const { projectName, account, roleArn } of this._hotEntries) {
-        try {
-          const card = roleArn
-            ? await this._fetchBuildCardForRole(roleArn, projectName)
-            : await this._fetchBuildCard(projectName);
-          if (card) {
-            card.account = account;
-            this._cardsByProject.set(projectName, card);
+      // Fetch builds in parallel (concurrency 5) — was sequential with 200ms delays
+      const HOT_CONCURRENCY = 5;
+      for (let i = 0; i < this._hotEntries.length; i += HOT_CONCURRENCY) {
+        const batch = this._hotEntries.slice(i, i + HOT_CONCURRENCY);
+        const outcomes = await Promise.allSettled(
+          batch.map(async ({ projectName, account, roleArn }) => {
+            const card = roleArn
+              ? await this._fetchBuildCardForRole(roleArn, projectName)
+              : await this._fetchBuildCard(projectName);
+            if (card) {
+              card.account = account;
+              this._cardsByProject.set(projectName, card);
+            }
+            results.builds++;
+          })
+        );
+        for (const o of outcomes) {
+          if (o.status === 'rejected') {
+            results.errors++;
+            log.warn(`Pipeline hot-sync: ${o.reason?.message || 'unknown error'}`);
           }
-          results.builds++;
-          await new Promise(r => setTimeout(r, 200));
-        } catch (err) {
-          log.warn(`Pipeline hot-sync: failed for ${projectName}: ${err.message}`);
-          results.errors++;
         }
       }
 
@@ -235,8 +275,163 @@ class PipelineSync extends EventEmitter {
 
     log.info(`Pipeline hot-sync: ${results.builds} builds, ${results.deploys} deploys in ${results.durationMs}ms`);
     this._computeHotSet();
+    this._persistToDb();
     this.emit('sync:completed', results);
     return results;
+  }
+
+  // ── In-progress sync (tier 1) ─────────────────────────────
+
+  /**
+   * Tier 1: Only re-fetch builds that are currently IN_PROGRESS.
+   * Typically 0-3 builds — sub-second when idle.
+   */
+  async runInProgress() {
+    if (this._running) return this.lastResults;
+
+    // Find in-progress builds from DB
+    const inProgress = this.db.prepare(
+      "SELECT projectName, account, data FROM build_cards WHERE latestStatus = 'IN_PROGRESS'"
+    ).all();
+
+    if (inProgress.length === 0) return this.lastResults;
+
+    this._running = true;
+    const startTime = Date.now();
+    const results = { builds: 0, deploys: 0, errors: 0, mode: 'in-progress' };
+
+    try {
+      for (const row of inProgress) {
+        try {
+          const card = JSON.parse(row.data);
+          const cross = this._crossAccountProjects.get(row.projectName);
+          const fetchFn = cross
+            ? () => this.aws.getBuildsForProjectInRole(cross.roleArn, row.projectName, 5)
+            : () => this.aws.getBuildsForProject(row.projectName, 5);
+
+          const fetched = await fetchFn();
+          if (fetched.length > 0) {
+            const latest = fetched[0];
+            card.latestStatus = latest.status;
+            card.latestStartTime = latest.startTime;
+            card.builds = fetched.slice(0, 5).map(b => ({
+              buildNumber: b.buildNumber,
+              status: b.status,
+              startTime: b.startTime,
+              endTime: b.endTime,
+              durationSec: b.durationSec,
+              commitSha: b.resolvedSourceVersion,
+              jiraKeys: card.builds?.find(ob => ob.buildNumber === b.buildNumber)?.jiraKeys || [],
+            }));
+            this._cardsByProject.set(row.projectName, card);
+          }
+          results.builds++;
+        } catch (err) {
+          results.errors++;
+          log.warn(`Pipeline in-progress sync: failed for ${row.projectName}: ${err.message}`);
+        }
+      }
+
+      // Rebuild and persist
+      const allCards = [...this._cardsByProject.values()];
+      this._sortCards(allCards);
+      this.buildProjects = allCards;
+      this._persistToDb();
+    } catch (err) {
+      results.errors++;
+      log.error('Pipeline in-progress sync error:', err.message);
+    }
+
+    results.durationMs = Date.now() - startTime;
+    this._running = false;
+
+    if (results.builds > 0) {
+      log.info(`Pipeline in-progress sync: ${results.builds} builds in ${results.durationMs}ms`);
+      this.emit('sync:completed', results);
+    }
+    return results;
+  }
+
+  // ── SQLite persistence ────────────────────────────────────
+
+  _persistToDb() {
+    const now = new Date().toISOString();
+    const upsertCard = this.db.prepare(`
+      INSERT INTO build_cards (projectName, account, imageTag, latestStatus, latestStartTime, data, updatedAt)
+      VALUES (@projectName, @account, @imageTag, @latestStatus, @latestStartTime, @data, @updatedAt)
+      ON CONFLICT(projectName) DO UPDATE SET
+        account = excluded.account, imageTag = excluded.imageTag,
+        latestStatus = excluded.latestStatus, latestStartTime = excluded.latestStartTime,
+        data = excluded.data, updatedAt = excluded.updatedAt
+    `);
+    const upsertDeploy = this.db.prepare(`
+      INSERT INTO deploy_states (pipelineName, imageTag, customer, env, account, status, data, updatedAt)
+      VALUES (@pipelineName, @imageTag, @customer, @env, @account, @status, @data, @updatedAt)
+      ON CONFLICT(pipelineName) DO UPDATE SET
+        imageTag = excluded.imageTag, customer = excluded.customer, env = excluded.env,
+        account = excluded.account, status = excluded.status,
+        data = excluded.data, updatedAt = excluded.updatedAt
+    `);
+
+    const persistAll = this.db.transaction(() => {
+      for (const card of this.buildProjects) {
+        upsertCard.run({
+          projectName: card.projectName,
+          account: card.account || null,
+          imageTag: card.imageTag || null,
+          latestStatus: card.latestStatus || null,
+          latestStartTime: card.latestStartTime || null,
+          data: JSON.stringify(card),
+          updatedAt: now,
+        });
+      }
+      for (const [tag, targets] of Object.entries(this.deployTargets)) {
+        for (const target of targets) {
+          upsertDeploy.run({
+            pipelineName: target.pipelineName,
+            imageTag: tag,
+            customer: target.customer || null,
+            env: target.env || null,
+            account: target.account || null,
+            status: target.status || null,
+            data: JSON.stringify(target),
+            updatedAt: now,
+          });
+        }
+      }
+    });
+
+    try {
+      persistAll();
+    } catch (err) {
+      log.warn(`Pipeline sync: failed to persist to DB: ${err.message}`);
+    }
+  }
+
+  /**
+   * Read builds page data from SQLite (for two-process mode where
+   * the web process reads from DB instead of in-memory arrays).
+   */
+  getBuildsPageDataFromDb() {
+    const cardRows = this.db.prepare('SELECT data FROM build_cards ORDER BY latestStartTime DESC').all();
+    const cards = cardRows.map(r => JSON.parse(r.data));
+
+    const deployRows = this.db.prepare('SELECT imageTag, data FROM deploy_states').all();
+    const deployTargets = {};
+    for (const row of deployRows) {
+      const tag = row.imageTag || 'unknown';
+      if (!deployTargets[tag]) deployTargets[tag] = [];
+      deployTargets[tag].push(JSON.parse(row.data));
+    }
+
+    // Temporarily set deployTargets so _groupByCustomer/_hasTargetsForCustomer
+    // can filter correctly (they read from this.deployTargets)
+    const prevTargets = this.deployTargets;
+    this.deployTargets = deployTargets;
+    const customers = this._groupByCustomer(cards);
+    this.deployTargets = prevTargets;
+
+    return { customers, deployTargets, lastRun: this.lastRun };
   }
 
   // ── Hot set computation ────────────────────────────────────
@@ -330,35 +525,40 @@ class PipelineSync extends EventEmitter {
       }
     }
 
-    // Main account deploy states
-    for (const [name, info] of Object.entries(this._deployMap || {})) {
-      const tag = info.imageTag || 'unknown';
-      if (tagFilter && !tagFilter.has(tag)) continue;
+    // Main account deploy states (parallel, concurrency 5)
+    const DEPLOY_CONCURRENCY = 5;
+    const mainDeployEntries = Object.entries(this._deployMap || {})
+      .filter(([, info]) => !tagFilter || tagFilter.has(info.imageTag || 'unknown'));
+    for (let i = 0; i < mainDeployEntries.length; i += DEPLOY_CONCURRENCY) {
+      const batch = mainDeployEntries.slice(i, i + DEPLOY_CONCURRENCY);
+      await Promise.allSettled(
+        batch.map(async ([name, info]) => {
+          try {
+            const tag = info.imageTag || 'unknown';
+            const state = await this.aws.getPipelineState(name);
+            const deployStage = state.stages.find(s =>
+              s.stageName === 'Deploy' || s.stageName === 'deploy'
+            ) || state.stages[state.stages.length - 1];
 
-      try {
-        const state = await this.aws.getPipelineState(name);
-        const deployStage = state.stages.find(s =>
-          s.stageName === 'Deploy' || s.stageName === 'deploy'
-        ) || state.stages[state.stages.length - 1];
-
-        if (!deployTargets[tag]) deployTargets[tag] = [];
-        deployTargets[tag].push({
-          pipelineName: name,
-          customer: info.customer,
-          env: info.env,
-          status: deployStage?.status || null,
-          lastUpdated: deployStage?.lastUpdated || null,
-          account: 'Viv',
-          ecrRepo: info.ecrRepo || null,
-        });
-        results.deploys++;
-        await new Promise(r => setTimeout(r, 100));
-      } catch (err) {
-        log.warn(`Pipeline sync: deploy state failed for ${name}: ${err.message}`);
-      }
+            if (!deployTargets[tag]) deployTargets[tag] = [];
+            deployTargets[tag].push({
+              pipelineName: name,
+              customer: info.customer,
+              env: info.env,
+              status: deployStage?.status || null,
+              lastUpdated: deployStage?.lastUpdated || null,
+              account: 'Viv',
+              ecrRepo: info.ecrRepo || null,
+            });
+            results.deploys++;
+          } catch (err) {
+            log.warn(`Pipeline sync: deploy state failed for ${name}: ${err.message}`);
+          }
+        })
+      );
     }
 
-    // Cross-account deploy states (pipeline list cached during full sync)
+    // Cross-account deploy states (parallel, concurrency 5)
     const crossAccounts = this.aws.getCrossAccountRoles();
     for (const { customer, roleArn } of crossAccounts) {
       try {
@@ -369,38 +569,42 @@ class PipelineSync extends EventEmitter {
           this._deployPipelinesByRole.set(roleArn, deployPipelines);
         }
 
-        for (const name of deployPipelines) {
-          try {
-            const cacheKey = `${roleArn}:${name}`;
-            let config = this._deployConfigByRole.get(cacheKey);
-            if (!config) {
-              config = await this.aws.getPipelineConfigForRole(roleArn, name);
-              this._deployConfigByRole.set(cacheKey, config);
-            }
-            const tag = config.ecrImageTag || 'unknown';
-            if (tagFilter && !tagFilter.has(tag)) continue;
+        for (let i = 0; i < deployPipelines.length; i += DEPLOY_CONCURRENCY) {
+          const batch = deployPipelines.slice(i, i + DEPLOY_CONCURRENCY);
+          await Promise.allSettled(
+            batch.map(async (name) => {
+              try {
+                const cacheKey = `${roleArn}:${name}`;
+                let config = this._deployConfigByRole.get(cacheKey);
+                if (!config) {
+                  config = await this.aws.getPipelineConfigForRole(roleArn, name);
+                  this._deployConfigByRole.set(cacheKey, config);
+                }
+                const tag = config.ecrImageTag || 'unknown';
+                if (tagFilter && !tagFilter.has(tag)) return;
 
-            const state = await this.aws.getPipelineStateForRole(roleArn, name);
-            const parsed = AwsClient.parsePipelineName(name);
-            const deployStage = state.stages.find(s =>
-              s.stageName === 'Deploy' || s.stageName === 'deploy'
-            ) || state.stages[state.stages.length - 1];
+                const state = await this.aws.getPipelineStateForRole(roleArn, name);
+                const parsed = AwsClient.parsePipelineName(name);
+                const deployStage = state.stages.find(s =>
+                  s.stageName === 'Deploy' || s.stageName === 'deploy'
+                ) || state.stages[state.stages.length - 1];
 
-            if (!deployTargets[tag]) deployTargets[tag] = [];
-            deployTargets[tag].push({
-              pipelineName: name,
-              customer: parsed?.customer || customer,
-              env: parsed?.env || name,
-              status: deployStage?.status || null,
-              lastUpdated: deployStage?.lastUpdated || null,
-              account: customer,
-              ecrRepo: config.ecrRepo || null,
-            });
-            results.deploys++;
-            await new Promise(r => setTimeout(r, 100));
-          } catch (err) {
-            log.warn(`Pipeline sync: ${customer} deploy failed for ${name}: ${err.message}`);
-          }
+                if (!deployTargets[tag]) deployTargets[tag] = [];
+                deployTargets[tag].push({
+                  pipelineName: name,
+                  customer: parsed?.customer || customer,
+                  env: parsed?.env || name,
+                  status: deployStage?.status || null,
+                  lastUpdated: deployStage?.lastUpdated || null,
+                  account: customer,
+                  ecrRepo: config.ecrRepo || null,
+                });
+                results.deploys++;
+              } catch (err) {
+                log.warn(`Pipeline sync: ${customer} deploy failed for ${name}: ${err.message}`);
+              }
+            })
+          );
         }
       } catch (err) {
         log.warn(`Pipeline sync: ${customer} deploy list failed: ${err.message}`);
@@ -473,7 +677,6 @@ class PipelineSync extends EventEmitter {
             imageTag: config.ecrImageTag,
           };
         }
-        await new Promise(r => setTimeout(r, 100));
       } catch (err) {
         log.warn(`Pipeline sync: failed to read config for ${name}: ${err.message}`);
       }
