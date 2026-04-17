@@ -75,17 +75,18 @@ module.exports = function createRoutes(services, config) {
   // optionally filtered by person and role view.
   router.get('/releases/home', (req, res) => {
     const { view, person } = req.query;
+    const days = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 90);
     const today = new Date().toISOString().slice(0, 10);
-    const twoWeeksOut = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const horizon = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
     let list = releases.list();
     // Exclude done/archived
     list = list.filter(r => r.state !== 'done' && !r.jiraArchived);
-    // Include: overdue (past release date) OR upcoming (within 2 weeks) OR no date (unscheduled active)
+    // Include: overdue (past release date) OR upcoming (within horizon) OR no date (unscheduled active)
     list = list.filter(r => {
       if (!r.jiraReleaseDate) return true; // unscheduled active
       if (r.jiraReleaseDate < today) return true; // overdue
-      if (r.jiraReleaseDate <= twoWeeksOut) return true; // upcoming
+      if (r.jiraReleaseDate <= horizon) return true; // upcoming
       return false;
     });
 
@@ -228,8 +229,9 @@ module.exports = function createRoutes(services, config) {
    */
   router.get('/tickets/home', (req, res) => {
     const { view, person } = req.query;
+    const days = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 90);
     const today = new Date().toISOString().slice(0, 10);
-    const twoWeeksOut = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const horizon = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
     const allReleases = releases.list();
 
@@ -238,7 +240,7 @@ module.exports = function createRoutes(services, config) {
       if (r.state === 'done' || r.jiraArchived) return false;
       if (!r.jiraReleaseDate) return true;        // unscheduled active
       if (r.jiraReleaseDate < today) return true;  // overdue
-      if (r.jiraReleaseDate <= twoWeeksOut) return true; // upcoming
+      if (r.jiraReleaseDate <= horizon) return true; // upcoming
       return false;
     });
 

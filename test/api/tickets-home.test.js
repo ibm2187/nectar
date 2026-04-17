@@ -323,7 +323,7 @@ describe('GET /api/tickets/home', () => {
       key: 'DEV-MIDDLE', fixVersions: ['4.3.0'],
     }));
 
-    const res = await request(app, 'GET', '/api/tickets/home');
+    const res = await request(app, 'GET', '/api/tickets/home?days=14');
     const keys = res.body.tickets.map(t => t.key);
     expect(keys).toEqual(['DEV-OVERDUE', 'DEV-MIDDLE', 'DEV-LATER']);
   });

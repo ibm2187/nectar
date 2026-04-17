@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useHomeStore, type HomeView } from '../../stores/homeStore'
+import { useHomeStore, type HomeView, type HomeDays } from '../../stores/homeStore'
 import { apiFetch } from '../../api/client'
 import type { Release } from '../../api/client'
 import { Card, CardContent } from '../../components/ui/card'
@@ -94,7 +94,7 @@ function relativeDate(dateStr: string): { label: string; color: string } {
 // ── Component ────────────────────────────────────────────
 
 export function HomePage() {
-  const { view, person, groupBy, isFirstVisit, setView, setPerson, setGroupBy, dismissFirstVisit } = useHomeStore()
+  const { view, person, groupBy, days, isFirstVisit, setView, setPerson, setGroupBy, setDays, dismissFirstVisit } = useHomeStore()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -141,6 +141,7 @@ export function HomePage() {
     const params = new URLSearchParams()
     if (view) params.set('view', view)
     if (person) params.set('person', person)
+    params.set('days', String(days))
 
     if (groupBy === 'tickets') {
       Promise.all([
@@ -168,7 +169,7 @@ export function HomePage() {
         .catch(() => {})
         .finally(() => setLoading(false))
     }
-  }, [view, person, groupBy])
+  }, [view, person, groupBy, days])
 
   const toggleCollapse = (id: string) => {
     setCollapsed(prev => {
@@ -422,6 +423,22 @@ export function HomePage() {
             People
           </button>
         </div>
+
+        {/* Date range toggle */}
+        <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
+          {([7, 14, 30] as HomeDays[]).map(d => (
+            <button
+              key={d}
+              onClick={() => setDays(d)}
+              className={cn(
+                'px-2 py-1.5 text-sm font-medium rounded-md transition-colors',
+                days === d ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {d}d
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Status group pills + filters */}
@@ -533,7 +550,7 @@ export function HomePage() {
               )}
               {upcoming.length > 0 && (
                 <ReleaseGroup
-                  title={`Upcoming (next 2 weeks)`}
+                  title={`Upcoming (next ${days} days)`}
                   releases={upcoming}
                   view={view}
                   person={person}
