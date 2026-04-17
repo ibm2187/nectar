@@ -27,6 +27,7 @@ function makeMockReleases(releaseList) {
     releases: map,
     _key: (repo, version) => `${repo}:${version}`,
     _debounceSave: vi.fn(),
+    persist: vi.fn(),
   };
 }
 
@@ -144,7 +145,9 @@ describe('PrSync', () => {
     sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
     const results = await sync.run();
 
-    expect(results.jiraKeysFound).toBe(1);
+    // DEV-999 is not in any active release, so it gets evicted from cache
+    expect(results.jiraKeysFound).toBe(0);
+    expect(results.cacheEvicted).toBe(1);
     expect(results.matched).toBe(0);
   });
 
@@ -279,6 +282,24 @@ describe('PrSync', () => {
     expect(found).not.toBeNull();
     expect(found.prNumber).toBe(60);
     expect(found.status).toBe('open');
+  });
+
+  it('prunes cache entries not in any active release', async () => {
+    // First run: fetch PRs for DEV-100 (in release) and DEV-999 (not in any release)
+    github = makeMockGithub([
+      makeGitHubPr(25500, { title: 'Fix DEV-100' }),
+      makeGitHubPr(25501, { title: 'Fix DEV-999' }),
+      makeGitHubPr(25502, { title: 'Fix DEV-888' }),
+    ]);
+    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    const results = await sync.run();
+
+    // Only DEV-100 should remain (it's in the release), DEV-999 and DEV-888 evicted
+    expect(results.cacheEvicted).toBe(2);
+    expect(results.jiraKeysFound).toBe(1);
+    expect(sync._prCache.has('DEV-100')).toBe(true);
+    expect(sync._prCache.has('DEV-999')).toBe(false);
+    expect(sync._prCache.has('DEV-888')).toBe(false);
   });
 
   it('getStatus reports cache size', async () => {

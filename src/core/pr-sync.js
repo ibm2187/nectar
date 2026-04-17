@@ -21,6 +21,12 @@ const JIRA_KEY_REGEX = /\b(DEV|MAV)-\d+\b/g;
  *   sync:started
  *   sync:completed ({ prsFetched, matched, releasesUpdated, durationMs, incremental })
  */
+// Maximum number of closed PR pages to backfill on first run.
+// Each page = 100 PRs. 5 pages = 500 PRs per repo — enough to cover
+// active releases without blowing up memory (~6,846 PRs at 20 pages
+// was the primary cause of OOM on the t3.medium production instance).
+const BACKFILL_PAGES = 5;
+
 class PrSync extends EventEmitter {
   constructor(releases, github, config) {
     super();
@@ -32,7 +38,8 @@ class PrSync extends EventEmitter {
     this.lastRun = null;
     this.lastResults = null;
     this._lastSyncTime = null;
-    // Cache: JIRA key → [normalized PR]
+    // Cache: JIRA key → Map<prNumber, normalized PR>
+    // Pruned after every sync to only retain keys present in active releases.
     this._prCache = new Map();
     // Index: head branch → normalized PR (for builds page lookup)
     this._prByBranch = new Map();
@@ -139,12 +146,19 @@ class PrSync extends EventEmitter {
       // Swap in the freshly-built branch index atomically
       this._prByBranch = nextByBranch;
 
-      // Step 2: Count unique JIRA keys
-      results.jiraKeysFound = this._prCache.size;
-
-      // Step 3: Match to active releases
+      // Step 2: Match to active releases
       const jiraKeyIndex = this._buildJiraKeyIndex();
       this._matchAndStore(jiraKeyIndex, results);
+
+      // Step 3: Prune cache — evict JIRA keys not in any active release.
+      // Without this, the cache grows unboundedly as PRs accumulate across
+      // syncs, eventually consuming gigabytes of heap.
+      const cacheSizeBefore = this._prCache.size;
+      for (const key of this._prCache.keys()) {
+        if (!jiraKeyIndex.has(key)) this._prCache.delete(key);
+      }
+      results.jiraKeysFound = this._prCache.size;
+      results.cacheEvicted = cacheSizeBefore - this._prCache.size;
 
     } catch (err) {
       results.errors++;
@@ -158,7 +172,7 @@ class PrSync extends EventEmitter {
     this._running = false;
 
     const mode = isIncremental ? 'incremental' : 'full';
-    log.info(`PR sync complete (${mode}): ${results.prsFetched} PRs fetched, ${results.jiraKeysFound} JIRA keys, ${results.matched} matched, ${results.releasesUpdated} releases updated in ${results.durationMs}ms`);
+    log.info(`PR sync complete (${mode}): ${results.prsFetched} PRs fetched, ${results.jiraKeysFound} JIRA keys cached (${results.cacheEvicted || 0} evicted), ${results.matched} matched, ${results.releasesUpdated} releases updated in ${results.durationMs}ms`);
     this.emit('sync:completed', results);
 
     return results;
@@ -200,10 +214,13 @@ class PrSync extends EventEmitter {
         if (new Date(pr.updated_at).getTime() >= sinceTime) addPr(pr);
       }
     } else {
-      // First run: backfill last 2000 closed PRs (20 pages × 100)
-      log.info(`PR sync: backfilling closed PRs for ${repoPath} (up to 2000)`);
+      // First run: backfill recent closed PRs to seed associations.
+      // Capped at BACKFILL_PAGES to avoid loading thousands of PRs into
+      // memory — the old 20-page (2000 PR) backfill was the primary cause
+      // of OOM on the production instance.
+      log.info(`PR sync: backfilling closed PRs for ${repoPath} (up to ${BACKFILL_PAGES * 100})`);
       const closedPrs = await this.github._paginate(
-        `/repos/${repoPath}/pulls?state=closed&per_page=100&sort=updated&direction=desc`, 20
+        `/repos/${repoPath}/pulls?state=closed&per_page=100&sort=updated&direction=desc`, BACKFILL_PAGES
       );
       for (const pr of closedPrs) addPr(pr);
       log.info(`PR sync: backfilled ${closedPrs.length} closed PRs from ${repoPath}`);
