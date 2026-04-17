@@ -164,7 +164,11 @@ class NotificationEngine {
 
     // Daily DM digest: 9 AM ET every day
     const digestTask = cron.schedule('0 9 * * *', () => {
-      if (!this.settings.get('dailyDigest')) return;
+      log.info('Daily digest: cron fired (9 AM ET)');
+      if (!this.settings.get('dailyDigest')) {
+        log.info('Daily digest: skipped — dailyDigest toggle is OFF');
+        return;
+      }
       this.sendDailyDigests().catch(err =>
         log.error(`Daily digest error: ${err.message}`)
       );
@@ -191,7 +195,11 @@ class NotificationEngine {
     // Run 30 seconds after release-notifier to post as a follow-up
     for (const schedule of ['0 9 * * 1-5', '0 14 * * 1-5']) {
       const task = cron.schedule(schedule, () => {
-        if (!this.settings.get('releaseStatus')) return;
+        log.info(`Ticket change digest: cron fired (${schedule})`);
+        if (!this.settings.get('releaseStatus')) {
+          log.info('Ticket change digest: skipped — releaseStatus toggle is OFF');
+          return;
+        }
         setTimeout(() => {
           this.sendTicketChangeDigests().catch(err =>
             log.error(`Ticket change digest error: ${err.message}`)

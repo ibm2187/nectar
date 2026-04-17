@@ -5,7 +5,7 @@ const PREFIX = '[nectar]';
 const LOG_DIR = path.join(__dirname, '..', '..', 'logs');
 const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10 MB
 const MAX_LOG_FILES = 5;
-const RING_BUFFER_SIZE = 500; // last N log entries kept in memory for the UI
+const RING_BUFFER_SIZE = 2000; // last N log entries kept in memory for the UI
 
 // Ring buffer for in-memory log access (Config > Logs tab)
 const _ringBuffer = [];
