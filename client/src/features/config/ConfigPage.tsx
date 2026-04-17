@@ -1365,10 +1365,13 @@ function LogsTab() {
   // Time-filtered view
   const filtered = useMemo(() => {
     if (!timeFrom && !timeTo) return entries
+    // Pad to HH:MM:SS — browser may return HH:MM without seconds
+    const from = timeFrom ? (timeFrom.length === 5 ? timeFrom + ':00' : timeFrom) : ''
+    const to = timeTo ? (timeTo.length === 5 ? timeTo + ':59' : timeTo) : ''
     return entries.filter(e => {
       const time = e.ts.slice(11, 19) // HH:MM:SS
-      if (timeFrom && time < timeFrom) return false
-      if (timeTo && time > timeTo) return false
+      if (from && time < from) return false
+      if (to && time > to) return false
       return true
     })
   }, [entries, timeFrom, timeTo])
