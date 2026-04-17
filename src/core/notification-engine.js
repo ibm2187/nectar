@@ -232,12 +232,12 @@ class NotificationEngine {
    */
   _digestCutoff(todayIso) {
     if (this.availability) {
-      const biz = this.availability.nextBusinessDays(2, todayIso);
+      const biz = this.availability.nextBusinessDays(5, todayIso);
       if (biz.length) return biz[biz.length - 1];
     }
-    // Fallback: next 2 days (weekdays approximation)
+    // Fallback: 7 calendar days (when availability isn't loaded)
     const d = new Date(todayIso + 'T00:00:00Z');
-    d.setUTCDate(d.getUTCDate() + 2);
+    d.setUTCDate(d.getUTCDate() + 7);
     return d.toISOString().slice(0, 10);
   }
 
@@ -264,10 +264,14 @@ class NotificationEngine {
       r.jiraReleaseDate && r.jiraReleaseDate <= cutoff
     );
 
+    log.info(`Daily digest: window today=${todayIso} cutoff=${cutoff}`);
+
     if (relevant.length === 0) {
       log.info('Daily digest: no releases in window, skipping');
       return;
     }
+
+    log.info(`Daily digest: ${relevant.length} releases in window: ${relevant.map(r => r.version).join(', ')}`);
 
     // Group undone tickets by person (assignee + qaAssignee)
     const byPerson = new Map(); // name → [{ release, ticket }]
@@ -293,48 +297,56 @@ class NotificationEngine {
       return;
     }
 
-    log.info(`Daily digest: sending to ${byPerson.size} people across ${relevant.length} releases`);
+    log.info(`Daily digest: ${byPerson.size} people with undone tickets: ${Array.from(byPerson.keys()).join(', ')}`);
 
     let sent = 0;
     let skipped = 0;
     let filteredOut = 0;
+    const sentTo = [];
+    const skippedReasons = [];
 
     for (const [person, items] of byPerson) {
       // Resolve Slack ID
       const resolved = this.people.resolveSlackId(person);
       if (!resolved) {
+        skippedReasons.push(`${person}: no Slack ID`);
         skipped++;
         continue;
       }
 
       // Skip if the person is out of office today
       if (this.availability && this.availability.isPersonOut(person)) {
-        log.info(`Daily digest: skipping ${person} — out of office`);
+        skippedReasons.push(`${person}: OOO`);
         skipped++;
         continue;
       }
 
       // Check per-user preference (opt-out model — send by default)
       if (!this._isUserEnabled(resolved.slackId, 'dailyDigest')) {
+        skippedReasons.push(`${person}: pref disabled`);
         skipped++;
         continue;
       }
 
       const message = this._buildPersonDigest(person, items);
       if (!message) {
-        // All their tickets were in non-actionable statuses for their role(s)
+        skippedReasons.push(`${person}: no actionable tickets for role`);
         filteredOut++;
         continue;
       }
 
       await this.slack.dmUser(resolved.slackId, message);
+      sentTo.push(person);
       sent++;
 
       // Rate limit: 1 DM per second
       await new Promise(r => setTimeout(r, 1000));
     }
 
-    log.info(`Daily digest: sent ${sent}, skipped ${skipped}, filtered-out ${filteredOut} (${byPerson.size} total people)`);
+    log.info(`Daily digest: sent ${sent} DMs to: ${sentTo.join(', ') || 'none'}`);
+    if (skippedReasons.length > 0) {
+      log.info(`Daily digest: skipped ${skipped + filteredOut}: ${skippedReasons.join('; ')}`);
+    }
   }
 
   /**
