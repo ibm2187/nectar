@@ -162,33 +162,38 @@ class NotificationEngine {
       return;
     }
 
-    // Daily DM digest: 9 AM ET every day
-    const digestTask = cron.schedule('0 9 * * *', () => {
-      log.info('Daily digest: cron fired (9 AM ET)');
-      if (!this.settings.get('dailyDigest')) {
-        log.info('Daily digest: skipped — dailyDigest toggle is OFF');
-        return;
-      }
-      this.sendDailyDigests().catch(err =>
-        log.error(`Daily digest error: ${err.message}`)
-      );
-    }, { timezone: 'America/New_York' });
-    this._cronTasks.push(digestTask);
+    // Daily DM digest: 9 AM and 11 AM ET every day (11 AM is a retry window
+    // in case the 9 AM run was missed due to a restart or toggle being off)
+    for (const schedule of ['0 9 * * *', '0 11 * * *']) {
+      const digestTask = cron.schedule(schedule, () => {
+        log.info(`Daily digest: cron fired (${schedule} ET)`);
+        if (!this.settings.get('dailyDigest')) {
+          log.info('Daily digest: skipped — dailyDigest toggle is OFF (master enabled: ' + this.settings.enabled + ')');
+          return;
+        }
+        this.sendDailyDigests().catch(err =>
+          log.error(`Daily digest error: ${err.message}`)
+        );
+      }, { timezone: 'America/New_York' });
+      this._cronTasks.push(digestTask);
+    }
 
     // Missed-cron recovery: if the server just started and it's within
-    // the digest window (9:00–9:20 AM ET), fire it now. This handles the
-    // case where an auto-update restart at ~9:00 causes the cron to miss.
+    // a digest window (9:00–9:20 or 11:00–11:20 AM ET), fire it now.
     const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
     const etHour = etNow.getHours();
     const etMinute = etNow.getMinutes();
-    if (etHour === 9 && etMinute <= 20) {
-      log.info('Daily digest: server started within digest window (9:00–9:20 AM ET) — firing now');
+    if ((etHour === 9 || etHour === 11) && etMinute <= 20) {
+      log.info(`Daily digest: server started within digest window (${etHour}:00–${etHour}:20 AM ET) — firing in 10s`);
       setTimeout(() => {
-        if (!this.settings.get('dailyDigest')) return;
+        if (!this.settings.get('dailyDigest')) {
+          log.info('Daily digest (startup recovery): skipped — toggle OFF');
+          return;
+        }
         this.sendDailyDigests().catch(err =>
           log.error(`Daily digest (startup recovery) error: ${err.message}`)
         );
-      }, 10_000); // 10s delay to let other services finish starting
+      }, 10_000);
     }
 
     // Ticket changes: append to the existing 9 AM + 2 PM release digests
