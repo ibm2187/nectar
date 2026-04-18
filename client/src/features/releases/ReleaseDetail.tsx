@@ -13,6 +13,7 @@ import { CustomerImpact } from './CustomerImpact'
 import { PipelineView } from './PipelineView'
 import { NectarLoader } from '../../components/NectarLoader'
 import { GenerateNotesDialog } from './GenerateNotesDialog'
+import { EditDraftDialog } from './EditDraftDialog'
 import { CustomerPills } from '../../components/CustomerPill'
 
 interface TaskArtifact {
@@ -83,6 +84,7 @@ export function ReleaseDetail() {
   const [audit, setAudit] = useState<AuditEntry[]>([])
   const [validation, setValidation] = useState<ValidationReport | null>(null)
   const [notesDialogOpen, setNotesDialogOpen] = useState(false)
+  const [editDraftOpen, setEditDraftOpen] = useState(false)
   const [notesTask, setNotesTask] = useState<TaskInfo | null>(null)
   const [notesTaskLoading, setNotesTaskLoading] = useState(false)
   const [notesTaskError, setNotesTaskError] = useState<string | null>(null)
@@ -148,7 +150,7 @@ export function ReleaseDetail() {
   }, [version])
 
   // Check for existing release-notes task for this release
-  useEffect(() => {
+  const refreshNotesTask = useCallback(() => {
     if (!version) return
     apiFetch<TaskInfo[]>(`/tasks?type=release-notes&limit=1`)
       .then(tasks => {
@@ -157,6 +159,8 @@ export function ReleaseDetail() {
       })
       .catch(() => {})
   }, [version])
+
+  useEffect(() => { refreshNotesTask() }, [refreshNotesTask])
 
   // Poll for notes task status when pending or in-progress
   useEffect(() => {
@@ -332,6 +336,14 @@ export function ReleaseDetail() {
                   <Button variant="outline" size="sm" className="text-xs h-7">Release Notes</Button>
                 </a>
               ))}
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs h-7"
+                onClick={() => setEditDraftOpen(true)}
+              >
+                Edit Draft
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -640,6 +652,14 @@ export function ReleaseDetail() {
         releaseVersion={release.version}
         loading={notesTaskLoading}
         initialPrompt={notesTask?.input?.prompt || ''}
+      />
+
+      {/* Edit draft dialog */}
+      <EditDraftDialog
+        open={editDraftOpen}
+        onOpenChange={setEditDraftOpen}
+        releaseVersion={release.version}
+        onRegenerated={refreshNotesTask}
       />
 
     </div>

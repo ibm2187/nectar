@@ -2307,34 +2307,21 @@ module.exports = function createRoutes(services, config) {
   router.get('/releases/:version/artifacts/:filename', asyncHandler(async (req, res) => {
     const { version, filename } = req.params;
 
-    // Only allow known filenames
     const ALLOWED = ['release-notes.pdf', 'release-notes-draft.md'];
     if (!ALLOWED.includes(filename)) {
       return res.status(400).json({ error: `Unknown artifact: ${filename}` });
     }
 
-    const bucket = process.env.RELEASE_ARTIFACTS_BUCKET;
-    const region = process.env.RELEASE_ARTIFACTS_REGION || 'us-east-1';
-    const accessKeyId = process.env.RELEASE_ARTIFACTS_AWS_ACCESS_KEY_ID;
-    const secretAccessKey = process.env.RELEASE_ARTIFACTS_AWS_SECRET_ACCESS_KEY;
+    const s3 = _getArtifactsS3();
+    if (!s3) return res.status(503).json({ error: 'S3 release artifacts not configured' });
 
-    if (!bucket || !accessKeyId || !secretAccessKey) {
-      return res.status(503).json({ error: 'S3 release artifacts not configured' });
-    }
-
-    const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+    const { GetObjectCommand } = require('@aws-sdk/client-s3');
     const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-
-    const s3 = new S3Client({
-      region,
-      credentials: { accessKeyId, secretAccessKey },
-    });
-
     const key = `releases/${version}/${filename}`;
 
     try {
-      const url = await getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: key }), {
-        expiresIn: 900, // 15 minutes
+      const url = await getSignedUrl(s3.client, new GetObjectCommand({ Bucket: s3.bucket, Key: key }), {
+        expiresIn: 900,
       });
       res.redirect(302, url);
     } catch (err) {
@@ -2343,6 +2330,108 @@ module.exports = function createRoutes(services, config) {
       }
       log.error(`Failed to sign artifact URL: ${err.message}`);
       res.status(500).json({ error: 'Failed to generate download URL' });
+    }
+  }));
+
+  // ── Draft editing + regeneration ───────────────────────
+  // GET raw draft content from S3, PUT edited content back, trigger re-render.
+
+  /**
+   * Helper: build an S3 client from the RELEASE_ARTIFACTS_* env vars.
+   * Returns null if not configured.
+   */
+  function _getArtifactsS3() {
+    const bucket = process.env.RELEASE_ARTIFACTS_BUCKET;
+    const region = process.env.RELEASE_ARTIFACTS_REGION || 'us-east-1';
+    const accessKeyId = process.env.RELEASE_ARTIFACTS_AWS_ACCESS_KEY_ID;
+    const secretAccessKey = process.env.RELEASE_ARTIFACTS_AWS_SECRET_ACCESS_KEY;
+    if (!bucket || !accessKeyId || !secretAccessKey) return null;
+    const { S3Client } = require('@aws-sdk/client-s3');
+    return {
+      client: new S3Client({ region, credentials: { accessKeyId, secretAccessKey } }),
+      bucket,
+    };
+  }
+
+  // GET /api/releases/:version/draft — return the raw draft markdown as text
+  router.get('/releases/:version/draft', asyncHandler(async (req, res) => {
+    const { version } = req.params;
+    const s3 = _getArtifactsS3();
+    if (!s3) return res.status(503).json({ error: 'S3 release artifacts not configured' });
+
+    const { GetObjectCommand } = require('@aws-sdk/client-s3');
+    const key = `releases/${version}/release-notes-draft.md`;
+
+    try {
+      const resp = await s3.client.send(new GetObjectCommand({ Bucket: s3.bucket, Key: key }));
+      const body = await resp.Body.transformToString('utf-8');
+      res.type('text/markdown').send(body);
+    } catch (err) {
+      if (err.name === 'NoSuchKey' || err.$metadata?.httpStatusCode === 404) {
+        return res.status(404).json({ error: 'No draft found for this release. Generate release notes first.' });
+      }
+      log.error(`Failed to fetch draft: ${err.message}`);
+      res.status(500).json({ error: 'Failed to fetch draft' });
+    }
+  }));
+
+  // PUT /api/releases/:version/draft — save edited draft and trigger re-render
+  router.put('/releases/:version/draft', asyncHandler(async (req, res) => {
+    const { version } = req.params;
+    const { content, regenerate } = req.body || {};
+
+    if (!content || typeof content !== 'string') {
+      return res.status(400).json({ error: 'content (string) is required' });
+    }
+    if (content.length > 500000) {
+      return res.status(400).json({ error: 'Draft too large (max 500KB)' });
+    }
+
+    const s3 = _getArtifactsS3();
+    if (!s3) return res.status(503).json({ error: 'S3 release artifacts not configured' });
+
+    // Save the edited draft to S3
+    const { PutObjectCommand } = require('@aws-sdk/client-s3');
+    const key = `releases/${version}/release-notes-draft.md`;
+
+    try {
+      await s3.client.send(new PutObjectCommand({
+        Bucket: s3.bucket,
+        Key: key,
+        Body: content,
+        ContentType: 'text/markdown',
+      }));
+    } catch (err) {
+      log.error(`Failed to save draft: ${err.message}`);
+      return res.status(500).json({ error: 'Failed to save draft to S3' });
+    }
+
+    // Optionally trigger re-render
+    if (regenerate !== false && taskQueue) {
+      // Cancel any existing pending/in-progress task for this release
+      const existing = taskQueue.findByRelease('release-notes', version);
+      if (existing && (existing.status === 'pending' || existing.status === 'in-progress')) {
+        taskQueue.fail(existing.id, 'Superseded by draft edit');
+      }
+
+      // Create a new task with editedDraft flag
+      const input = {
+        version,
+        editedDraft: true,
+        draftS3Key: key,
+      };
+
+      // Include prompt from previous task if available
+      const prevTask = taskQueue.findByRelease('release-notes', version);
+      if (prevTask && prevTask.input && prevTask.input.prompt) {
+        input.prompt = prevTask.input.prompt;
+      }
+
+      const requestedBy = req.user ? req.user.email : null;
+      const task = taskQueue.createTask('release-notes', input, requestedBy, {});
+      res.json({ saved: true, task });
+    } else {
+      res.json({ saved: true, task: null });
     }
   }));
 

@@ -1,10 +1,21 @@
 const BASE = '/api'
 
-export async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
+export async function apiFetch<T>(path: string, opts: RequestInit & { raw?: boolean } = {}): Promise<T> {
+  const { raw, ...fetchOpts } = opts
   const res = await fetch(BASE + path, {
     headers: { 'Content-Type': 'application/json' },
-    ...opts,
+    ...fetchOpts,
   })
+
+  // Raw mode: return response body as string (for non-JSON endpoints like draft markdown)
+  if (raw) {
+    if (!res.ok) {
+      const text = await res.text()
+      try { throw new Error(JSON.parse(text).error || `Request failed (${res.status})`) } catch { throw new Error(text || `Request failed (${res.status})`) }
+    }
+    return await res.text() as unknown as T
+  }
+
   const contentType = res.headers.get('content-type') || ''
   if (!contentType.includes('application/json')) {
     throw new Error(
