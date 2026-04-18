@@ -247,6 +247,16 @@ function applySchema(db) {
     CREATE INDEX IF NOT EXISTS idx_releases_state      ON releases(state);
     CREATE INDEX IF NOT EXISTS idx_releases_createdAt  ON releases(createdAt DESC);
 
+    -- ── notification_settings (singleton row) ────────────────
+    CREATE TABLE IF NOT EXISTS notification_settings (
+      id              INTEGER PRIMARY KEY CHECK (id = 1),
+      enabled         INTEGER NOT NULL DEFAULT 1,
+      redirectChannel TEXT,
+      redirectDM      TEXT,
+      groups          TEXT NOT NULL DEFAULT '{}',
+      updatedAt       TEXT
+    );
+
     -- ── audit ───────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS audit (
       id          TEXT PRIMARY KEY,

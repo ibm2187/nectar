@@ -10,6 +10,7 @@ class SlackNotifier {
     this.config = config;
     this.app = null;
     this.ready = false;
+    this.notificationSettings = null;
   }
 
   async start() {
@@ -45,6 +46,13 @@ class SlackNotifier {
 
   async postMessage(channel, text, blocks = null) {
     if (!this.ready) return { ok: false, error: 'Slack not connected' };
+
+    const redirect = this.notificationSettings?.redirectChannel;
+    if (redirect) {
+      text = `[-> ${channel}] ${text}`;
+      channel = redirect;
+    }
+
     // Skip bogus channels (failed once, don't retry every time)
     if (this._badChannels && this._badChannels.has(channel)) return { ok: false, error: `Channel ${channel} previously failed` };
     try {
@@ -67,6 +75,13 @@ class SlackNotifier {
 
   async dmUser(userId, text) {
     if (!this.ready) return;
+
+    const redirect = this.notificationSettings?.redirectDM;
+    if (redirect) {
+      text = `[-> DM ${userId}] ${text}`;
+      userId = redirect;
+    }
+
     if (this._badChannels && this._badChannels.has(userId)) return;
     try {
       await this.app.client.chat.postMessage({ channel: userId, text });

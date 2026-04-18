@@ -61,6 +61,7 @@ const jenkins = new JenkinsClient(config);
 
 const SlackNotifier = require('./integrations/slack');
 const slack = new SlackNotifier(config);
+slack.notificationSettings = notificationSettings;
 
 const ZohoClient = require('./integrations/zoho');
 const zoho = new ZohoClient();
@@ -123,7 +124,7 @@ jiraSync.setCustomerStore(customerStore);
 pipelineSync.setCustomerStore(customerStore);
 
 const ReleaseNotifier = require('./core/release-notifier');
-const releaseNotifier = new ReleaseNotifier(releases, slack, config);
+const releaseNotifier = new ReleaseNotifier(releases, slack, config, notificationSettings);
 
 const NotificationEngine = require('./core/notification-engine');
 const notificationEngine = new NotificationEngine({
@@ -141,7 +142,7 @@ const AUTOMATED_USERS = new Set(['discovery', 'jira-sync', 'cherry-pick-watcher'
 
 releases.on('release:transition', (release, { from, to, user }) => {
   if (AUTOMATED_USERS.has(user)) return;
-  if (!notificationSettings.get('releases')) return;
+  if (!notificationSettings.get('transitions')) return;
   slack.notifyTransition(release, from, to);
   if (to === 'cutting') {
     slack.notifyReleaseCut(release);
@@ -149,7 +150,7 @@ releases.on('release:transition', (release, { from, to, user }) => {
 });
 
 releases.on('approval:added', (release, approval) => {
-  if (!notificationSettings.get('releases')) return;
+  if (!notificationSettings.get('transitions')) return;
   slack.notifyApprovalAdded(release, approval);
   if (approvals.isFullyApproved(release)) {
     slack.notifyAllApproved(release);
@@ -171,6 +172,7 @@ releases.on('deployment:updated', (release, deployment) => {
 });
 
 cherryPickWatcher.on('cherry-pick:conflict', (release, parsed) => {
+  if (!notificationSettings.get('cherryPickConflicts')) return;
   slack.notifyCherryPickConflict(release, parsed, parsed.author);
 });
 
@@ -183,8 +185,9 @@ setInterval(() => {
 // ── Poll TaskQueue for sync triggers + Slack notifications ──
 setInterval(() => {
   try {
-    // Reload tasks from DB (web process may have created new ones)
+    // Reload from DB (web process may have created tasks or changed settings)
     taskQueue._loadState();
+    notificationSettings.reload();
 
     const pending = [...taskQueue.tasks.values()].filter(t => t.status === 'pending');
 
@@ -224,14 +227,20 @@ setInterval(() => {
             taskQueue.fail(task.id, `Release not found: ${releaseVersion}`);
             continue;
           }
-          if (template === 'transition') {
+          if (template === 'transition' && notificationSettings.get('transitions')) {
             slack.notifyTransition(release, task.input.from, task.input.to);
             if (task.input.to === 'cutting') slack.notifyReleaseCut(release);
-          } else if (template === 'approval') {
+          } else if (template === 'approval' && notificationSettings.get('transitions')) {
             slack.notifyApprovalAdded(release, task.input.approval);
             if (task.input.fullyApproved) slack.notifyAllApproved(release);
-          } else if (template === 'deployment') {
+          } else if (template === 'deployment' && notificationSettings.get('deploys')) {
             slack.notifyDeployment(release, task.input.deployment);
+          } else if (template === 'deployment-updated' && notificationSettings.get('deploys')) {
+            if (task.input.deployment.status === 'failed') {
+              slack.notifyDeployFailed(release, task.input.deployment);
+            } else {
+              slack.notifyDeployment(release, task.input.deployment);
+            }
           }
           taskQueue.complete(task.id, {});
         } catch (err) {
@@ -253,7 +262,7 @@ setInterval(() => {
   cherryPickWatcher.start();
 
   jiraSync.on('release:date-changed', (release, { oldDate, newDate }) => {
-    if (!notificationSettings.get('releaseStatus')) return;
+    if (!notificationSettings.get('dateChanges')) return;
     const SlackNotifier = require('./integrations/slack');
     const channel = SlackNotifier.releaseChannelName(release.version);
     const text = `\u{1f4c5} *Release ${release.version}* date changed: ~${oldDate}~ \u2192 *${newDate}*`;
@@ -299,7 +308,7 @@ setInterval(() => {
   envPoller.on('env:version-changed', ({ envName, customerId, newVersion, previousVersion }) => {
     const customer = customerStore.getCustomer ? customerStore.getCustomer(customerId) : null;
     const customerName = customer?.name || customerId;
-    if (notificationSettings.get('releaseStatus')) {
+    if (notificationSettings.get('envDeployments')) {
       slack.notifyReleaseDeployment(newVersion, envName, customerName, previousVersion);
     }
     pipelineSync.promoteToHot(newVersion);

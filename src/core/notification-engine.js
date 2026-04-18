@@ -171,11 +171,6 @@ class NotificationEngine {
   // ── Lifecycle ────────────────────────────────────────────
 
   start() {
-    if (process.env.NODE_ENV !== 'production') {
-      log.info('Notification engine: scheduled notifications disabled (not production). Manual triggers still work.');
-      return;
-    }
-
     if (!this.slack.isConfigured()) {
       log.warn('Notification engine: disabled (Slack not configured)');
       return;
@@ -220,8 +215,8 @@ class NotificationEngine {
     for (const schedule of ['0 9 * * 1-5', '0 14 * * 1-5']) {
       const task = cron.schedule(schedule, () => {
         log.info(`Ticket change digest: cron fired (${schedule})`);
-        if (!this.settings.get('releaseStatus')) {
-          log.info('Ticket change digest: skipped — releaseStatus toggle is OFF');
+        if (!this.settings.get('ticketChanges')) {
+          log.info('Ticket change digest: skipped — ticketChanges toggle is OFF');
           return;
         }
         setTimeout(() => {

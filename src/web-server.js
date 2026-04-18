@@ -76,6 +76,7 @@ const datadogPoller = new DatadogPoller(datadog);
 // Cron-based notifications (daily digest, build alerts) still run in sync worker.
 const SlackNotifier = require('./integrations/slack');
 const slack = new SlackNotifier(config);
+slack.notificationSettings = notificationSettings;
 slack.start().catch(err => log.warn(`[web] Slack start failed: ${err.message}`));
 
 const ZohoClient = require('./integrations/zoho');
@@ -127,7 +128,7 @@ const CherryPickWatcher = require('./core/cherry-pick');
 const cherryPickWatcher = new CherryPickWatcher(releases, github, config);
 
 const ReleaseNotifier = require('./core/release-notifier');
-const releaseNotifier = new ReleaseNotifier(releases, slack, config);
+const releaseNotifier = new ReleaseNotifier(releases, slack, config, notificationSettings);
 
 const NotificationEngine = require('./core/notification-engine');
 const notificationEngine = new NotificationEngine({
@@ -144,7 +145,7 @@ const AUTOMATED_USERS = new Set(['discovery', 'jira-sync', 'cherry-pick-watcher'
 
 releases.on('release:transition', (release, { from, to, user }) => {
   if (AUTOMATED_USERS.has(user)) return;
-  if (!notificationSettings.get('releases')) return;
+  if (!notificationSettings.get('transitions')) return;
   taskQueue.createTask('slack-notify', {
     template: 'transition',
     releaseVersion: release.version,
@@ -154,7 +155,7 @@ releases.on('release:transition', (release, { from, to, user }) => {
 });
 
 releases.on('approval:added', (release, approval) => {
-  if (!notificationSettings.get('releases')) return;
+  if (!notificationSettings.get('transitions')) return;
   taskQueue.createTask('slack-notify', {
     template: 'approval',
     releaseVersion: release.version,
@@ -168,6 +169,16 @@ releases.on('deployment:added', (release, deployment) => {
   if (!notificationSettings.get('deploys')) return;
   taskQueue.createTask('slack-notify', {
     template: 'deployment',
+    releaseVersion: release.version,
+    releaseRepo: release.repo,
+    deployment,
+  }, 'web-server');
+});
+
+releases.on('deployment:updated', (release, deployment) => {
+  if (!notificationSettings.get('deploys')) return;
+  taskQueue.createTask('slack-notify', {
+    template: 'deployment-updated',
     releaseVersion: release.version,
     releaseRepo: release.repo,
     deployment,
