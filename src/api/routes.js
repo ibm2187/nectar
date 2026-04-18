@@ -73,11 +73,44 @@ module.exports = function createRoutes(services, config) {
 
   // Home dashboard — overdue + upcoming 2 weeks of releases with tickets,
   // optionally filtered by person and role view.
+  /**
+   * Compute the horizon date from a range parameter.
+   * 'today' = end of today, 'week' = end of this Sunday,
+   * '2w' = end of next Sunday, '4w' = 4 weeks out.
+   * Also accepts numeric days via ?days= for backward compat.
+   */
+  function computeHorizon(query) {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const range = query.range || null;
+    if (range === 'today') {
+      return today.toISOString().slice(0, 10);
+    }
+    if (range === 'week') {
+      const dayOfWeek = today.getDay(); // 0=Sun
+      const daysToSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+      const sunday = new Date(today.getTime() + daysToSunday * 24 * 60 * 60 * 1000);
+      return sunday.toISOString().slice(0, 10);
+    }
+    if (range === '2w') {
+      const dayOfWeek = today.getDay();
+      const daysToSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+      const nextSunday = new Date(today.getTime() + (daysToSunday + 7) * 24 * 60 * 60 * 1000);
+      return nextSunday.toISOString().slice(0, 10);
+    }
+    if (range === '4w') {
+      const d = new Date(today.getTime() + 28 * 24 * 60 * 60 * 1000);
+      return d.toISOString().slice(0, 10);
+    }
+    // Fallback: numeric days param or default 7
+    const days = Math.min(Math.max(parseInt(query.days) || 7, 1), 90);
+    return new Date(today.getTime() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  }
+
   router.get('/releases/home', (req, res) => {
     const { view, person } = req.query;
-    const days = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 90);
     const today = new Date().toISOString().slice(0, 10);
-    const horizon = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const horizon = computeHorizon(req.query);
 
     let list = releases.list();
     // Exclude done/archived
@@ -229,9 +262,8 @@ module.exports = function createRoutes(services, config) {
    */
   router.get('/tickets/home', (req, res) => {
     const { view, person } = req.query;
-    const days = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 90);
     const today = new Date().toISOString().slice(0, 10);
-    const horizon = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const horizon = computeHorizon(req.query);
 
     const allReleases = releases.list();
 

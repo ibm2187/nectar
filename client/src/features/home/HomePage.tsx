@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useHomeStore, type HomeView, type HomeDays } from '../../stores/homeStore'
+import { useHomeStore, type HomeView, type HomeRange } from '../../stores/homeStore'
 import { apiFetch } from '../../api/client'
 import type { Release } from '../../api/client'
 import { Card, CardContent } from '../../components/ui/card'
@@ -94,7 +94,7 @@ function relativeDate(dateStr: string): { label: string; color: string } {
 // ── Component ────────────────────────────────────────────
 
 export function HomePage() {
-  const { view, person, groupBy, days, isFirstVisit, setView, setPerson, setGroupBy, setDays, dismissFirstVisit } = useHomeStore()
+  const { view, person, groupBy, range, isFirstVisit, setView, setPerson, setGroupBy, setRange, dismissFirstVisit } = useHomeStore()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -141,7 +141,7 @@ export function HomePage() {
     const params = new URLSearchParams()
     if (view) params.set('view', view)
     if (person) params.set('person', person)
-    params.set('days', String(days))
+    params.set('range', range)
 
     if (groupBy === 'tickets') {
       Promise.all([
@@ -169,7 +169,7 @@ export function HomePage() {
         .catch(() => {})
         .finally(() => setLoading(false))
     }
-  }, [view, person, groupBy, days])
+  }, [view, person, groupBy, range])
 
   const toggleCollapse = (id: string) => {
     setCollapsed(prev => {
@@ -426,16 +426,21 @@ export function HomePage() {
 
         {/* Date range toggle */}
         <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
-          {([7, 14, 30] as HomeDays[]).map(d => (
+          {([
+            { key: 'today', label: 'Today' },
+            { key: 'week', label: 'This Week' },
+            { key: '2w', label: '2 Weeks' },
+            { key: '4w', label: '4 Weeks' },
+          ] as { key: HomeRange; label: string }[]).map(r => (
             <button
-              key={d}
-              onClick={() => setDays(d)}
+              key={r.key}
+              onClick={() => setRange(r.key)}
               className={cn(
                 'px-2 py-1.5 text-sm font-medium rounded-md transition-colors',
-                days === d ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                range === r.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
               )}
             >
-              {d}d
+              {r.label}
             </button>
           ))}
         </div>
@@ -550,7 +555,7 @@ export function HomePage() {
               )}
               {upcoming.length > 0 && (
                 <ReleaseGroup
-                  title={`Upcoming (next ${days} days)`}
+                  title={`Upcoming (${range === 'today' ? 'today' : range === 'week' ? 'this week' : range === '2w' ? 'next 2 weeks' : 'next 4 weeks'})`}
                   releases={upcoming}
                   view={view}
                   person={person}

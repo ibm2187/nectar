@@ -2,7 +2,7 @@ import { create } from 'zustand'
 
 export type HomeView = 'dev' | 'qa' | 'pm' | 'support' | 'cs'
 export type HomeGroupBy = 'releases' | 'tickets' | 'people'
-export type HomeDays = 7 | 14 | 30
+export type HomeRange = 'today' | 'week' | '2w' | '4w'
 
 interface HomeState {
   /** Active role view */
@@ -11,8 +11,8 @@ interface HomeState {
   person: string | null
   /** Whether to group results by release (default) or by ticket */
   groupBy: HomeGroupBy
-  /** How many days ahead to show upcoming releases */
-  days: HomeDays
+  /** Date range for upcoming releases */
+  range: HomeRange
   /** Whether this is the first visit (show role picker) */
   isFirstVisit: boolean
   /** Set the active view */
@@ -21,8 +21,8 @@ interface HomeState {
   setPerson: (person: string | null) => void
   /** Set the grouping mode */
   setGroupBy: (groupBy: HomeGroupBy) => void
-  /** Set the horizon days */
-  setDays: (days: HomeDays) => void
+  /** Set the date range */
+  setRange: (range: HomeRange) => void
   /** Mark first visit as complete */
   dismissFirstVisit: () => void
 }
@@ -30,22 +30,22 @@ interface HomeState {
 const STORAGE_KEY_VIEW = 'nectar-home-view'
 const STORAGE_KEY_PERSON = 'nectar-home-person'
 const STORAGE_KEY_GROUP_BY = 'nectar-home-group-by'
-const STORAGE_KEY_DAYS = 'nectar-home-days'
+const STORAGE_KEY_RANGE = 'nectar-home-range'
 const STORAGE_KEY_FIRST_VISIT = 'nectar-home-first-visit'
 
-const VALID_DAYS: HomeDays[] = [7, 14, 30]
+const VALID_RANGES: HomeRange[] = ['today', 'week', '2w', '4w']
 
-function loadFromStorage(): { view: HomeView; person: string | null; groupBy: HomeGroupBy; days: HomeDays; isFirstVisit: boolean } {
+function loadFromStorage(): { view: HomeView; person: string | null; groupBy: HomeGroupBy; range: HomeRange; isFirstVisit: boolean } {
   try {
     const view = (localStorage.getItem(STORAGE_KEY_VIEW) as HomeView) || 'dev'
     const person = localStorage.getItem(STORAGE_KEY_PERSON) || null
     const groupBy = (localStorage.getItem(STORAGE_KEY_GROUP_BY) as HomeGroupBy) || 'releases'
-    const rawDays = parseInt(localStorage.getItem(STORAGE_KEY_DAYS) || '7')
-    const days = VALID_DAYS.includes(rawDays as HomeDays) ? rawDays as HomeDays : 7
+    const raw = localStorage.getItem(STORAGE_KEY_RANGE) || 'week'
+    const range = VALID_RANGES.includes(raw as HomeRange) ? raw as HomeRange : 'week'
     const isFirstVisit = localStorage.getItem(STORAGE_KEY_FIRST_VISIT) !== 'false'
-    return { view, person, groupBy, days, isFirstVisit }
+    return { view, person, groupBy, range, isFirstVisit }
   } catch {
-    return { view: 'dev', person: null, groupBy: 'releases', days: 7, isFirstVisit: true }
+    return { view: 'dev', person: null, groupBy: 'releases', range: 'week', isFirstVisit: true }
   }
 }
 
@@ -73,9 +73,9 @@ export const useHomeStore = create<HomeState>((set) => {
       set({ groupBy })
     },
 
-    setDays: (days) => {
-      try { localStorage.setItem(STORAGE_KEY_DAYS, String(days)) } catch { /* ok */ }
-      set({ days })
+    setRange: (range) => {
+      try { localStorage.setItem(STORAGE_KEY_RANGE, range) } catch { /* ok */ }
+      set({ range })
     },
 
     dismissFirstVisit: () => {
