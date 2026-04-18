@@ -6,7 +6,8 @@ const { getDb } = require('./db');
 // ── Column contracts ────────────────────────────────────────────────────────
 
 const CUSTOMER_COLUMNS = [
-  'id','name','domain','domainPrefix','integrations','hasFranchises','active',
+  'id','name','shortName','color','hidden','sortOrder',
+  'domain','domainPrefix','integrations','hasFranchises','active',
   'syncedFrom','lastSyncedAt','notes','createdAt','updatedAt',
 ];
 
@@ -19,7 +20,10 @@ const ENVIRONMENT_COLUMNS = [
 
 const ENV_JSON_FIELDS = ['health','features','integrations','upgrades'];
 const ENV_BOOL_FIELDS = ['franchise','reachable','disabled','versionSetManually'];
-const CUST_BOOL_FIELDS = ['hasFranchises','active'];
+const CUST_BOOL_FIELDS = ['hasFranchises','active','hidden'];
+
+// Fields that users can edit via the Config UI — scanner must not overwrite these.
+const USER_EDITABLE_FIELDS = new Set(['shortName', 'color', 'hidden', 'sortOrder', 'notes']);
 
 /**
  * CustomerStore — manages customers, environments, deployments, and mobile releases.
@@ -59,7 +63,13 @@ class CustomerStore extends EventEmitter {
   listCustomers(filter = {}) {
     let list = [...this.customers.values()];
     if (filter.active !== undefined) list = list.filter(c => c.active === filter.active);
-    return list.sort((a, b) => a.id.localeCompare(b.id));
+    if (filter.hidden !== undefined) list = list.filter(c => !!c.hidden === filter.hidden);
+    return list.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.id.localeCompare(b.id));
+  }
+
+  /** List only visible (non-hidden) customers, sorted by sortOrder. */
+  listVisibleCustomers() {
+    return this.listCustomers({ hidden: false });
   }
 
   getCustomer(id) {
@@ -69,12 +79,13 @@ class CustomerStore extends EventEmitter {
   upsertCustomer(customer) {
     const existing = this.customers.get(customer.id);
     if (existing) {
-      const merged = {
-        ...existing,
-        ...customer,
-        notes: existing.notes ?? customer.notes,
-        updatedAt: new Date().toISOString(),
-      };
+      const merged = { ...existing, updatedAt: new Date().toISOString() };
+      // Apply incoming fields, but preserve user-editable fields if already set
+      for (const [key, value] of Object.entries(customer)) {
+        if (key === 'id' || key === 'createdAt' || key === 'updatedAt') continue;
+        if (USER_EDITABLE_FIELDS.has(key) && existing[key] != null) continue;
+        merged[key] = value;
+      }
       this.customers.set(customer.id, merged);
       this._upsertCustomerRow(merged);
       this.emit('customer:updated', merged);
@@ -82,6 +93,8 @@ class CustomerStore extends EventEmitter {
     }
     const created = {
       ...customer,
+      hidden: customer.hidden ?? false,
+      sortOrder: customer.sortOrder ?? 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -89,6 +102,54 @@ class CustomerStore extends EventEmitter {
     this._upsertCustomerRow(created);
     this.emit('customer:updated', created);
     return created;
+  }
+
+  /**
+   * Update user-editable customer fields (from Config UI).
+   * Only touches the fields provided — does not reset others.
+   */
+  updateCustomer(id, changes) {
+    const existing = this.customers.get(id);
+    if (!existing) return null;
+    const merged = { ...existing, ...changes, id, updatedAt: new Date().toISOString() };
+    this.customers.set(id, merged);
+    this._upsertCustomerRow(merged);
+    this.emit('customer:updated', merged);
+    return merged;
+  }
+
+  /**
+   * Seed display defaults (shortName, color, sortOrder, hidden) for customers
+   * that don't have them yet. Called after the initial webplatform scan to
+   * populate newly discovered customers with sensible defaults.
+   */
+  seedDisplayDefaults() {
+    const defaults = {
+      bayada:      { shortName: 'Bayada',       color: '#E31A38', sortOrder: 1 },
+      ck:          { shortName: 'CK',           color: '#0054A6', sortOrder: 2 },
+      tribute:     { shortName: 'Tribute',      color: '#FF671F', sortOrder: 3 },
+      lumen:       { shortName: 'Lumen',        color: '#6D1D68', sortOrder: 4 },
+      qualitycare: { shortName: 'Quality Care', color: '#8B2323', sortOrder: 5 },
+      viv:         { shortName: 'Viv',          color: '#22c55e', sortOrder: 6, name: 'Viv (Internal)' },
+      haven:       { shortName: 'Haven',        color: '#64748b', sortOrder: 7, hidden: true },
+    };
+    let seeded = 0;
+    for (const c of this.customers.values()) {
+      if (c.shortName) continue; // already has display config
+      const d = defaults[c.id] || { shortName: c.name || c.id, color: '#64748b', sortOrder: 99 };
+      const updated = {
+        ...c,
+        shortName: d.shortName,
+        color: d.color,
+        sortOrder: d.sortOrder,
+        hidden: d.hidden || false,
+        updatedAt: new Date().toISOString(),
+      };
+      this.customers.set(c.id, updated);
+      this._upsertCustomerRow(updated);
+      seeded++;
+    }
+    if (seeded > 0) log.info(`Seeded display defaults for ${seeded} customers`);
   }
 
   // ── Environment CRUD ────────────────────────────────
@@ -452,12 +513,18 @@ class CustomerStore extends EventEmitter {
 
   _upsertCustomerRow(c) {
     this.db.prepare(`
-      INSERT INTO customers (id, name, domain, domainPrefix, integrations, hasFranchises, active,
+      INSERT INTO customers (id, name, shortName, color, hidden, sortOrder,
+                             domain, domainPrefix, integrations, hasFranchises, active,
                              syncedFrom, lastSyncedAt, notes, extra, createdAt, updatedAt)
-      VALUES (@id, @name, @domain, @domainPrefix, @integrations, @hasFranchises, @active,
+      VALUES (@id, @name, @shortName, @color, @hidden, @sortOrder,
+              @domain, @domainPrefix, @integrations, @hasFranchises, @active,
               @syncedFrom, @lastSyncedAt, @notes, @extra, @createdAt, @updatedAt)
       ON CONFLICT(id) DO UPDATE SET
         name          = excluded.name,
+        shortName     = excluded.shortName,
+        color         = excluded.color,
+        hidden        = excluded.hidden,
+        sortOrder     = excluded.sortOrder,
         domain        = excluded.domain,
         domainPrefix  = excluded.domainPrefix,
         integrations  = excluded.integrations,
@@ -551,6 +618,10 @@ function customerToRow(c) {
   return {
     id: c.id,
     name: c.name ?? null,
+    shortName: c.shortName ?? null,
+    color: c.color ?? null,
+    hidden: boolOrNull(c.hidden),
+    sortOrder: c.sortOrder ?? 0,
     domain: c.domain ?? null,
     domainPrefix: c.domainPrefix ?? null,
     integrations: c.integrations == null ? null : JSON.stringify(c.integrations),
@@ -569,6 +640,9 @@ function customerFromRow(row) {
   const customer = {
     id: row.id,
     name: row.name,
+    shortName: row.shortName,
+    color: row.color,
+    sortOrder: row.sortOrder ?? 0,
     domain: row.domain,
     domainPrefix: row.domainPrefix,
     integrations: row.integrations == null ? null : safeParse(row.integrations, null),

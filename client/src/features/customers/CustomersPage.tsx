@@ -43,18 +43,6 @@ const TIER_COLORS: Record<string, string> = {
 
 const ALL_KEY = 'all'
 
-const CUSTOMER_LABELS: Record<string, string> = {
-  bayada: 'Bayada',
-  ck: 'Comfort Keepers',
-  tribute: 'Tribute',
-  lumen: 'Lumen',
-  qualitycare: 'Quality Care',
-  viv: 'Viv',
-}
-
-// Haven is under the Tribute AWS account and no longer served separately — hide from pills
-const HIDDEN_CUSTOMER_IDS = new Set(['haven'])
-
 export function CustomersPage() {
   const customers = useWsStore(s => s.customers)
   const environments = useWsStore(s => s.environments)
@@ -93,7 +81,7 @@ export function CustomersPage() {
   const filteredCustomers = useMemo(() => {
     const q = search.toLowerCase()
     return customers.filter(c => {
-      if (HIDDEN_CUSTOMER_IDS.has(c.id)) return false
+      if (c.hidden) return false
       if (activeCustomer === ALL_KEY ? c.id === 'viv' : c.id !== activeCustomer) return false
       if (q && !(
         c.id.toLowerCase().includes(q) ||
@@ -178,11 +166,11 @@ export function CustomersPage() {
           {[
             { id: ALL_KEY, label: 'All' },
             ...customers
-              .filter(c => !HIDDEN_CUSTOMER_IDS.has(c.id) && c.id !== 'viv')
-              .map(c => ({ id: c.id, label: CUSTOMER_LABELS[c.id] || c.name })),
+              .filter(c => !c.hidden && c.id !== 'viv')
+              .map(c => ({ id: c.id, label: c.shortName || c.name })),
             ...customers
               .filter(c => c.id === 'viv')
-              .map(c => ({ id: c.id, label: CUSTOMER_LABELS[c.id] || c.name })),
+              .map(c => ({ id: c.id, label: c.shortName || c.name })),
           ].map(pill => (
             <button
               key={pill.id}

@@ -1,6 +1,7 @@
 const { EventEmitter } = require('events');
 const log = require('./log');
 const JiraClient = require('../integrations/jira');
+const { resolveTargetCustomers } = require('./customer-resolver');
 
 /**
  * JIRA-first release sync.
@@ -20,10 +21,26 @@ class JiraSync extends EventEmitter {
     this.releases = releases;
     this.jira = jira;
     this.config = config;
+    this._customerStore = null;
     this._timer = null;
     this._running = false;
     this.lastRun = null;
     this.lastResults = null;
+  }
+
+  /**
+   * Set the CustomerStore so target customers can be resolved from known IDs.
+   */
+  setCustomerStore(customerStore) {
+    this._customerStore = customerStore || null;
+  }
+
+  /**
+   * Get known customer IDs from the customer store.
+   */
+  _getKnownCustomerIds() {
+    if (!this._customerStore) return [];
+    return this._customerStore.listCustomers().map(c => c.id);
   }
 
   start() {
@@ -275,6 +292,16 @@ class JiraSync extends EventEmitter {
     release.jiraReleased = jiraVersion.released;
     release.jiraReleaseDate = newDate;
     release.jiraArchived = jiraVersion.archived;
+
+    // Resolve target customers from version name suffix + description override
+    const knownIds = this._getKnownCustomerIds();
+    if (knownIds.length > 0) {
+      const { customers, source } = resolveTargetCustomers(
+        cleanVersion, jiraVersion.description || null, knownIds
+      );
+      release.targetCustomers = customers;
+      release.targetCustomerSource = source;
+    }
 
     // Emit event if release date changed
     if (oldDate && newDate && oldDate !== newDate && release.state !== 'done') {

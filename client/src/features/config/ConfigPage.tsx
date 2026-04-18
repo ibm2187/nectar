@@ -9,13 +9,14 @@ import { cn } from '../../lib/utils'
 import { IntegrationsConfigPage } from '../integrations-config/IntegrationsConfigPage'
 import { UpdatePage } from '../admin/UpdatePage'
 import { SortableHeader, useSortableData, useSortState } from '../../components/SortableHeader'
+import { lightenHex } from '../../lib/color-utils'
 
 // ── Tab types ─────────────────────────────────────────
 
-type Tab = 'themes' | 'api-keys' | 'users' | 'connections' | 'notifications' | 'logs' | 'backfills' | 'update'
+type Tab = 'display' | 'api-keys' | 'users' | 'connections' | 'notifications' | 'logs' | 'backfills' | 'update'
 
 const TABS: { key: Tab; label: string }[] = [
-  { key: 'themes', label: 'Themes' },
+  { key: 'display', label: 'Display' },
   { key: 'api-keys', label: 'API Keys' },
   { key: 'users', label: 'Users' },
   { key: 'connections', label: 'Connections' },
@@ -40,7 +41,7 @@ interface ThemeConfig {
 }
 
 export function ConfigPage() {
-  const [activeTab, setActiveTab] = useState<Tab>('themes')
+  const [activeTab, setActiveTab] = useState<Tab>('display')
 
   return (
     <div className="w-full space-y-6 max-w-4xl">
@@ -66,7 +67,12 @@ export function ConfigPage() {
       </div>
 
       {/* Tab content */}
-      {activeTab === 'themes' && <ThemesTab />}
+      {activeTab === 'display' && (
+        <div className="space-y-8">
+          <CustomersTab />
+          <ThemesTab />
+        </div>
+      )}
       {activeTab === 'api-keys' && <ApiKeysSection />}
       {activeTab === 'users' && <UsersTab />}
       {activeTab === 'connections' && <IntegrationsConfigPage />}
@@ -390,6 +396,234 @@ function ThemesTab() {
 }
 
 // ── Merge dropdown ─────────────────────────────────────
+
+// ── Customers Tab ────────────────────────────────────
+
+interface CustomerConfig {
+  id: string
+  name: string
+  shortName: string | null
+  color: string | null
+  hidden: boolean
+  sortOrder: number
+}
+
+function CustomersTab() {
+  const [customers, setCustomers] = useState<CustomerConfig[]>([])
+  const [loading, setLoading] = useState(true)
+  const [savingId, setSavingId] = useState<string | null>(null)
+  const [saveMsg, setSaveMsg] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [dirty, setDirty] = useState<Set<string>>(new Set())
+
+  async function load() {
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await apiFetch<CustomerConfig[]>('/customers')
+      data.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.id.localeCompare(b.id))
+      setCustomers(data)
+      setDirty(new Set())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load')
+    }
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  function updateField(id: string, field: keyof CustomerConfig, value: string | boolean | number) {
+    setCustomers(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c))
+    setDirty(prev => new Set(prev).add(id))
+  }
+
+  function moveCustomer(fromIdx: number, toIdx: number) {
+    setCustomers(prev => {
+      const updated = [...prev]
+      const [moved] = updated.splice(fromIdx, 1)
+      updated.splice(toIdx, 0, moved)
+      const reordered = updated.map((c, i) => ({ ...c, sortOrder: i + 1 }))
+      setDirty(() => new Set(reordered.map(c => c.id)))
+      return reordered
+    })
+  }
+
+  async function saveCustomer(c: CustomerConfig) {
+    if (c.color && !/^#[0-9a-fA-F]{6}$/.test(c.color)) {
+      setError(`Invalid color for ${c.shortName || c.id}: must be 6-digit hex (e.g. #FF0000)`)
+      return
+    }
+    setSavingId(c.id)
+    setSaveMsg(null)
+    setError(null)
+    try {
+      await apiFetch(`/customers/${c.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          name: c.name,
+          shortName: c.shortName,
+          color: c.color,
+          hidden: c.hidden,
+          sortOrder: c.sortOrder,
+        }),
+      })
+      setDirty(prev => { const s = new Set(prev); s.delete(c.id); return s })
+      setSaveMsg(`${c.shortName || c.id} saved`)
+      setTimeout(() => setSaveMsg(null), 3000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save')
+    }
+    setSavingId(null)
+  }
+
+  async function saveAll() {
+    const toSave = customers.filter(c => dirty.has(c.id))
+    for (const c of toSave) {
+      await saveCustomer(c)
+    }
+  }
+
+  if (loading) {
+    return <NectarLoader size="lg" message="Loading customers..." className="mt-8" />
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <p className="text-sm text-muted-foreground">
+            Manage customer display settings. Changes are used across all views.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {saveMsg && <span className="text-xs text-green-400">{saveMsg}</span>}
+          {error && <span className="text-xs text-destructive">{error}</span>}
+          <Button variant="outline" size="sm" onClick={load}>Reset</Button>
+          <Button size="sm" onClick={saveAll} disabled={dirty.size === 0 || savingId !== null}>
+            {savingId ? 'Saving...' : dirty.size > 0 ? `Save ${dirty.size} change${dirty.size > 1 ? 's' : ''}` : 'Saved'}
+          </Button>
+        </div>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left">
+                  <th className="px-1 py-2 w-8"></th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-28">Color</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-24">ID</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Full Name</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-32">Short Name</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-16 text-center">Visible</th>
+                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-32">Preview</th>
+                </tr>
+              </thead>
+              <tbody>
+                {customers.map((c, idx) => {
+                  const color = c.color || '#64748b'
+                  const isDirty = dirty.has(c.id)
+                  return (
+                    <tr key={c.id} className={cn(
+                      'border-b border-border/30 hover:bg-accent/20',
+                      c.hidden && 'opacity-50',
+                      isDirty && 'bg-yellow-500/5',
+                    )}>
+                      <td className="px-1 py-2 text-center">
+                        <div className="flex flex-col items-center gap-0.5">
+                          <button
+                            disabled={idx === 0}
+                            onClick={() => moveCustomer(idx, idx - 1)}
+                            className="text-muted-foreground/40 hover:text-foreground disabled:opacity-20 text-xs leading-none"
+                            title="Move up"
+                          >▲</button>
+                          <span className="text-muted-foreground/30 text-[10px] select-none" title="Drag to reorder">⠿</span>
+                          <button
+                            disabled={idx === customers.length - 1}
+                            onClick={() => moveCustomer(idx, idx + 1)}
+                            className="text-muted-foreground/40 hover:text-foreground disabled:opacity-20 text-xs leading-none"
+                            title="Move down"
+                          >▼</button>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className="w-5 h-5 rounded border border-border/50 shrink-0"
+                            style={{ background: color }}
+                          />
+                          <Input
+                            value={color}
+                            onChange={e => updateField(c.id, 'color', e.target.value)}
+                            className="h-7 text-xs font-mono w-20"
+                            placeholder="#000000"
+                            maxLength={7}
+                          />
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{c.id}</td>
+                      <td className="px-3 py-2">
+                        <Input
+                          value={c.name || ''}
+                          onChange={e => updateField(c.id, 'name', e.target.value)}
+                          className="h-7 text-sm"
+                          placeholder="Full business name"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <Input
+                          value={c.shortName || ''}
+                          onChange={e => updateField(c.id, 'shortName', e.target.value)}
+                          className="h-7 text-sm"
+                          placeholder="Short label"
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <button
+                          onClick={() => updateField(c.id, 'hidden', !c.hidden)}
+                          className={cn(
+                            'w-8 h-5 rounded-full transition-colors relative',
+                            c.hidden ? 'bg-muted/30' : 'bg-green-500/30',
+                          )}
+                        >
+                          <span className={cn(
+                            'absolute top-0.5 w-4 h-4 rounded-full transition-all',
+                            c.hidden ? 'left-0.5 bg-muted-foreground/50' : 'left-3.5 bg-green-500',
+                          )} />
+                        </button>
+                      </td>
+                      <td className="px-3 py-2">
+                        <CustomerPillPreview label={c.shortName || c.name || c.id} color={color} />
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+function CustomerPillPreview({ label, color }: { label: string; color: string }) {
+  const textColor = lightenHex(color, 0.55)
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-0.5 rounded-full border"
+      style={{
+        background: `${color}20`,
+        borderColor: `${color}55`,
+        color: textColor,
+      }}
+    >
+      <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
+      {label}
+    </span>
+  )
+}
 
 function MergeDropdown({ themes, currentIndex, onMerge }: {
   themes: ThemeEntry[]

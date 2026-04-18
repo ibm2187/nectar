@@ -25,7 +25,7 @@ const KNOWN_BRANDS = [
   { id: 'haven',       name: 'Haven Home Care',       dir: 'haven',       tofuDir: 'tribute', urlPrefix: 'haven',          eppDomain: 'mavencare.com' },
   { id: 'lumen',       name: 'Help at Home',          dir: 'lumen',       tofuDir: 'lumen',   urlPrefix: 'lumen',          eppDomain: 'vivtechnologies.com' },
   { id: 'qualitycare', name: 'Quality Care',          dir: 'qualitycare', tofuDir: 'tribute', urlPrefix: 'qualitycare',    eppDomain: 'vivtechnologies.com' },
-  { id: 'viv',         name: 'Mavencare (Internal)',  dir: 'viv',         tofuDir: 'viv',     urlPrefix: 'viv',            eppDomain: 'vivtechnologies.com' },
+  { id: 'viv',         name: 'Viv (Internal)',        dir: 'viv',         tofuDir: 'viv',     urlPrefix: 'viv',            eppDomain: 'vivtechnologies.com' },
 ];
 
 // Map tofu env name → brand id (for envs that aren't prefixed with brand name)

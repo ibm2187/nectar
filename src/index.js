@@ -140,6 +140,8 @@ const releaseNotifier = new ReleaseNotifier(releases, slack, config);
 const CustomerStore = require('./core/customer-store');
 const customerStore = new CustomerStore();
 customerStore.setDatadogClient(datadog);
+jiraSync.setCustomerStore(customerStore);
+pipelineSync.setCustomerStore(customerStore);
 
 const WebplatformScanner = require('./core/webplatform-scanner');
 const webplatformScanner = new WebplatformScanner(repoManager, config);
@@ -289,6 +291,7 @@ setInterval(() => {
   try {
     const scanResults = await webplatformScanner.scan();
     customerStore.applyScanResults(scanResults);
+    customerStore.seedDisplayDefaults();
   } catch (err) {
     log.error('Initial webplatform scan failed:', err.message);
   }

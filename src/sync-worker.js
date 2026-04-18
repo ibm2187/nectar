@@ -99,6 +99,8 @@ const prSync = new PrSync(releases, github, config);
 const PipelineSync = require('./core/pipeline-sync');
 const pipelineSync = new PipelineSync(releases, aws, repoManager, config);
 pipelineSync.setPrSync(prSync);
+jiraSync.setCustomerStore(customerStore);
+pipelineSync.setCustomerStore(customerStore);
 
 const ReleaseNotifier = require('./core/release-notifier');
 const releaseNotifier = new ReleaseNotifier(releases, slack, config);
@@ -260,6 +262,7 @@ setInterval(() => {
   try {
     const scanResults = await webplatformScanner.scan();
     customerStore.applyScanResults(scanResults);
+    customerStore.seedDisplayDefaults();
   } catch (err) {
     log.error('[sync] Initial webplatform scan failed:', err.message);
   }

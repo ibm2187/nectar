@@ -295,7 +295,33 @@ function applyMigrations(db) {
   const current = db.pragma('user_version', { simple: true });
 
   const migrations = [
-    // index 0 = v1 (first migration). None yet beyond the initial schema.
+    // v1: Add customerColors column to theme_config
+    (db) => {
+      db.prepare(`ALTER TABLE theme_config ADD COLUMN customerColors TEXT NOT NULL DEFAULT '{}'`).run();
+    },
+    // v2: Add customer display fields — shortName, color, hidden, sortOrder
+    (db) => {
+      db.prepare(`ALTER TABLE customers ADD COLUMN shortName TEXT`).run();
+      db.prepare(`ALTER TABLE customers ADD COLUMN color TEXT`).run();
+      db.prepare(`ALTER TABLE customers ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`).run();
+      db.prepare(`ALTER TABLE customers ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0`).run();
+      // Seed defaults for known customers
+      const defaults = [
+        { id: 'bayada',      shortName: 'Bayada',       color: '#E31A38', sortOrder: 1 },
+        { id: 'ck',          shortName: 'CK',           color: '#0054A6', sortOrder: 2 },
+        { id: 'tribute',     shortName: 'Tribute',      color: '#FF671F', sortOrder: 3 },
+        { id: 'lumen',       shortName: 'Lumen',        color: '#6D1D68', sortOrder: 4 },
+        { id: 'qualitycare', shortName: 'Quality Care', color: '#8B2323', sortOrder: 5 },
+        { id: 'viv',         shortName: 'Viv',          color: '#22c55e', sortOrder: 6 },
+        { id: 'haven',       shortName: 'Haven',        color: '#64748b', sortOrder: 7, hidden: 1 },
+      ];
+      const stmt = db.prepare(
+        `UPDATE customers SET shortName = @shortName, color = @color, sortOrder = @sortOrder, hidden = COALESCE(@hidden, 0) WHERE id = @id`
+      );
+      for (const d of defaults) {
+        stmt.run({ shortName: d.shortName, color: d.color, sortOrder: d.sortOrder, hidden: d.hidden || 0, id: d.id });
+      }
+    },
   ];
 
   for (let v = current; v < migrations.length; v++) {

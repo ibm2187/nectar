@@ -36,8 +36,10 @@ function createMockServices() {
     releaseTruth: { compute: vi.fn(), computeImpact: vi.fn() },
     customerStore: {
       listCustomers: () => [],
+      listVisibleCustomers: () => [],
       listEnvironments: () => [],
       getCustomer: () => null,
+      updateCustomer: vi.fn(),
       getEnvironment: () => null,
       listDeployments: () => [],
       setManualVersionBulk: vi.fn(() => []),
@@ -254,6 +256,62 @@ describe('API Routes', () => {
       const res = await request(app, 'GET', '/api/customers');
       expect(res.status).toBe(200);
       expect(res.body).toEqual([]);
+    });
+  });
+
+  describe('PUT /api/customers/:id', () => {
+    it('returns 404 for unknown customer', async () => {
+      const { app } = createTestApp();
+      const res = await request(app, 'PUT', '/api/customers/nonexistent', { shortName: 'X' });
+      expect(res.status).toBe(404);
+    });
+
+    it('updates customer and returns result', async () => {
+      const services = createMockServices();
+      const customer = { id: 'ck', name: 'CK', shortName: 'CK', color: '#0054A6' };
+      services.customerStore.getCustomer = (id) => id === 'ck' ? customer : null;
+      services.customerStore.updateCustomer = vi.fn(() => ({ ...customer, color: '#FF0000' }));
+      const { app } = createTestApp(services);
+      const res = await request(app, 'PUT', '/api/customers/ck', { color: '#FF0000' });
+      expect(res.status).toBe(200);
+      expect(res.body.color).toBe('#FF0000');
+      expect(services.customerStore.updateCustomer).toHaveBeenCalledWith('ck', { color: '#FF0000' });
+    });
+
+    it('rejects invalid color format', async () => {
+      const services = createMockServices();
+      services.customerStore.getCustomer = () => ({ id: 'ck', name: 'CK' });
+      const { app } = createTestApp(services);
+      const res = await request(app, 'PUT', '/api/customers/ck', { color: 'not-hex' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/color/);
+    });
+
+    it('rejects non-integer sortOrder', async () => {
+      const services = createMockServices();
+      services.customerStore.getCustomer = () => ({ id: 'ck', name: 'CK' });
+      const { app } = createTestApp(services);
+      const res = await request(app, 'PUT', '/api/customers/ck', { sortOrder: 'abc' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/sortOrder/);
+    });
+
+    it('rejects non-boolean hidden', async () => {
+      const services = createMockServices();
+      services.customerStore.getCustomer = () => ({ id: 'ck', name: 'CK' });
+      const { app } = createTestApp(services);
+      const res = await request(app, 'PUT', '/api/customers/ck', { hidden: 'yes' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/hidden/);
+    });
+
+    it('only passes allowed fields to updateCustomer', async () => {
+      const services = createMockServices();
+      services.customerStore.getCustomer = () => ({ id: 'ck', name: 'CK' });
+      services.customerStore.updateCustomer = vi.fn(() => ({ id: 'ck' }));
+      const { app } = createTestApp(services);
+      await request(app, 'PUT', '/api/customers/ck', { name: 'New', evilField: 'injected' });
+      expect(services.customerStore.updateCustomer).toHaveBeenCalledWith('ck', { name: 'New' });
     });
   });
 
