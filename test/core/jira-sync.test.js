@@ -5,7 +5,7 @@ const ReleaseManager = require('../../src/core/release');
 const JiraSync = require('../../src/core/jira-sync');
 const CustomerStore = require('../../src/core/customer-store');
 const { createTestDb } = require('../../src/core/db');
-
+const TicketStore = require('../../src/core/ticket-store');
 describe('JiraSync', () => {
   let audit, releases, jiraSync, db, customerStore;
   let mockJira;
@@ -38,7 +38,11 @@ describe('JiraSync', () => {
       getIssuesForVersion: vi.fn(),
     };
 
+    const ticketStore = new TicketStore({ db });
+    releases.setTicketStore(ticketStore);
+
     jiraSync = new JiraSync(releases, mockJira, config);
+    jiraSync.setTicketStore(ticketStore);
     jiraSync.setCustomerStore(customerStore);
   });
 
@@ -202,8 +206,9 @@ describe('JiraSync', () => {
       const wpRelease = releases.get('4.2.3', 'webplatform');
       const bsRelease = releases.get('4.2.3', 'bluesummit');
 
-      expect(wpRelease.tickets.some(t => t.key === 'DEV-100')).toBe(true);
-      expect(bsRelease.tickets.some(t => t.key === 'DEV-100')).toBe(true);
+      expect(releases.getTickets(wpRelease).some(t => t.key === 'DEV-100')).toBe(true);
+      // bluesummit shares the same version — ticket is found via TicketStore query
+      expect(releases.getTickets(bsRelease).some(t => t.key === 'DEV-100')).toBe(true);
     });
 
     it('does not fail if sharing repo has no release for this version', async () => {
@@ -228,7 +233,7 @@ describe('JiraSync', () => {
       expect(result.tickets).toBe(1);
 
       const wpRelease = releases.get('4.2.3', 'webplatform');
-      expect(wpRelease.tickets).toHaveLength(1);
+      expect(releases.getTickets(wpRelease)).toHaveLength(1);
     });
   });
 
@@ -257,8 +262,8 @@ describe('JiraSync', () => {
       await jiraSync._syncVersionTickets('4.2.3');
 
       const release = releases.get('4.2.3', 'webplatform');
-      expect(release.tickets).toHaveLength(1);
-      expect(release.tickets[0].key).toBe('DEV-100');
+      expect(releases.getTickets(release)).toHaveLength(1);
+      expect(releases.getTickets(release)[0].key).toBe('DEV-100');
     });
 
     it('also prunes stale tickets from sharing repos', async () => {
@@ -274,7 +279,7 @@ describe('JiraSync', () => {
       await jiraSync._syncVersionTickets('4.2.3');
 
       const bsRelease = releases.get('4.2.3', 'bluesummit');
-      expect(bsRelease.tickets.filter(t => t.source === 'jira')).toHaveLength(0);
+      expect(releases.getTickets(bsRelease).filter(t => t.source === 'jira')).toHaveLength(0);
     });
   });
 
@@ -545,8 +550,8 @@ describe('JiraSync', () => {
 
       const release = releases.get('4.3.0', 'webplatform');
       expect(release).not.toBeNull();
-      expect(release.tickets).toHaveLength(1);
-      expect(release.tickets[0].key).toBe('DEV-500');
+      expect(releases.getTickets(release)).toHaveLength(1);
+      expect(releases.getTickets(release)[0].key).toBe('DEV-500');
     });
 
     it('skips concurrent runs', async () => {
@@ -626,14 +631,13 @@ describe('JiraSync', () => {
 
       await jiraSync._syncVersionTickets('4.2.3');
 
-      // Should be exactly 1 persist call for the primary release (batch write),
-      // NOT 3 individual addTicket calls
-      expect(persistSpy).toHaveBeenCalledTimes(1);
+      // No persist calls — tickets go to TicketStore, not release.tickets[]
+      expect(persistSpy).toHaveBeenCalledTimes(0);
 
       // All tickets should still be present
       const release = releases.get('4.2.3', 'webplatform');
-      expect(release.tickets).toHaveLength(3);
-      expect(release.tickets.map(t => t.key).sort()).toEqual(['DEV-1', 'DEV-2', 'DEV-3']);
+      expect(releases.getTickets(release)).toHaveLength(3);
+      expect(releases.getTickets(release).map(t => t.key).sort()).toEqual(['DEV-1', 'DEV-2', 'DEV-3']);
 
       persistSpy.mockRestore();
     });
@@ -661,19 +665,22 @@ describe('JiraSync', () => {
 
       await jiraSync._syncVersionTickets('4.2.3');
 
-      // 1 persist for webplatform + 1 persist for bluesummit = 2 total
-      expect(persistSpy).toHaveBeenCalledTimes(2);
+      // No persist calls — tickets go to TicketStore, not release.tickets[]
+      expect(persistSpy).toHaveBeenCalledTimes(0);
 
       const bsRelease = releases.get('4.2.3', 'bluesummit');
-      expect(bsRelease.tickets).toHaveLength(2);
+      expect(releases.getTickets(bsRelease)).toHaveLength(2);
 
       persistSpy.mockRestore();
     });
 
-    it('preserves non-JIRA tickets during batch sync', async () => {
+    it('JIRA sync is authoritative — prunes manually-added tickets not in JIRA', async () => {
       releases.create({ repo: 'webplatform', version: '4.2.3' });
-      // Add a non-JIRA ticket (e.g., from git discovery)
-      releases.addTicket('webplatform:4.2.3', { key: 'DEV-MANUAL', summary: 'Manual', source: 'git' });
+      // Add a ticket manually
+      releases.addTicket('webplatform:4.2.3', {
+        key: 'DEV-MANUAL', summary: 'Manually added', jiraStatus: 'Open',
+        fixVersions: ['4.2.3'], targetFixVersions: [],
+      });
 
       mockJira.getIssuesForVersion.mockResolvedValue([
         {
@@ -687,10 +694,10 @@ describe('JiraSync', () => {
       await jiraSync._syncVersionTickets('4.2.3');
 
       const release = releases.get('4.2.3', 'webplatform');
-      // Should have both: the non-JIRA ticket + the JIRA ticket
-      expect(release.tickets).toHaveLength(2);
-      expect(release.tickets.find(t => t.key === 'DEV-MANUAL')).toBeDefined();
-      expect(release.tickets.find(t => t.key === 'DEV-50')).toBeDefined();
+      const tickets = releases.getTickets(release);
+      // Only JIRA-returned ticket survives — manual ticket pruned (version removed from fixVersions)
+      expect(tickets).toHaveLength(1);
+      expect(tickets[0].key).toBe('DEV-50');
     });
   });
 });

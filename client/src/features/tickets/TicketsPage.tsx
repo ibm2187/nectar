@@ -9,6 +9,8 @@ import { cn, exportToCsv } from '../../lib/utils'
 import { SavedViews } from '../../components/SavedViews'
 import { TicketRow, type ReleaseMembership } from '../../components/TicketRow'
 import { SortableHeader, useSortableData, nextSortState, type SortState, type SortDir as SortableSortDir } from '../../components/SortableHeader'
+import { JiraLink } from '../../components/JiraLink'
+import { getStatusBadgeColor } from '../../lib/status-colors'
 
 interface ReleaseColumn {
   repo: string
@@ -45,14 +47,118 @@ interface TicketsResponse {
   tickets: Ticket[]
 }
 
+// ── Flat ticket from jira_tickets table ────────────────
+
+interface FlatTicket {
+  key: string
+  summary: string
+  status: string | null
+  statusCategory: string | null
+  type: string | null
+  assignee: string | null
+  qaAssignee: string | null
+  priority: string | null
+  component: string | null
+  created: string | null
+  fixVersions: string[]
+  targetFixVersions: string[]
+}
+
+interface FlatTicketsResponse {
+  tickets: FlatTicket[]
+  total: number
+  hasMore: boolean
+  since?: string
+}
+
+interface SyncStatus {
+  sync: { lastTicketSyncTime: string | null; totalTicketsSynced: number; lastSyncDurationMs: number | null; lastSyncError: string | null }
+  stats: { total: number; byStatusCategory: Record<string, number>; byType: Record<string, number> }
+}
+
 // ── Filter types ───────────────────────────────────────
 
 type GapFilter = 'any' | 'missing' | 'unplanned' | 'matched'
 type SortKey = 'key' | 'summary' | 'status' | 'assignee' | 'qaAssignee' | 'releases'
+type TicketsTab = 'releases' | 'qa-scope' | 'triage'
+
+const TAB_CONFIG: Record<TicketsTab, { label: string }> = {
+  releases:   { label: 'Releases' },
+  'qa-scope': { label: 'QA Scope' },
+  triage:     { label: 'Triage' },
+}
+const TAB_ORDER: TicketsTab[] = ['releases', 'qa-scope', 'triage']
 
 // ── Page ───────────────────────────────────────────────
 
 export function TicketsPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = (searchParams.get('tab') as TicketsTab) || 'releases'
+
+  function setTab(t: TicketsTab) {
+    setSearchParams(() => {
+      const next = new URLSearchParams()
+      if (t !== 'releases') next.set('tab', t)
+      return next
+    }, { replace: true })
+  }
+
+  return (
+    <div className="w-full space-y-6">
+      {/* Tab bar + sync status */}
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
+          {TAB_ORDER.map(t => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={cn(
+                'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                tab === t
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {TAB_CONFIG[t].label}
+            </button>
+          ))}
+        </div>
+        <SyncStatusBadge />
+      </div>
+
+      {tab === 'releases' && <ReleasesTicketsTab />}
+      {tab === 'qa-scope' && <QAScopeTab />}
+      {tab === 'triage' && <TriageTab />}
+    </div>
+  )
+}
+
+// ── Sync status badge ─────────────────────────────────
+
+function SyncStatusBadge() {
+  const [status, setStatus] = useState<SyncStatus | null>(null)
+  useEffect(() => {
+    apiFetch<SyncStatus>('/tickets/sync-status').then(setStatus).catch(() => {})
+  }, [])
+  if (!status) return null
+  const { sync, stats } = status
+  return (
+    <span className="text-xs text-muted-foreground">
+      {stats.total > 0
+        ? `${stats.total.toLocaleString()} tickets synced`
+        : 'Ticket sync pending...'}
+      {sync.lastTicketSyncTime && (
+        <span className="ml-1 opacity-60">
+          (last: {new Date(sync.lastTicketSyncTime).toLocaleTimeString()})
+        </span>
+      )}
+    </span>
+  )
+}
+
+// ── Releases tab (existing view) ──────────────────────
+
+function ReleasesTicketsTab() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   const search = searchParams.get('q') || ''
@@ -330,6 +436,237 @@ export function TicketsPage() {
         </Card>
       )}
     </div>
+  )
+}
+
+// ── QA Scope tab ──────────────────────────────────────
+
+function QAScopeTab() {
+  const [data, setData] = useState<FlatTicketsResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+
+  async function load() {
+    setLoading(true)
+    try {
+      const result = await apiFetch<FlatTicketsResponse>('/tickets/scope?limit=500')
+      setData(result)
+    } catch { /* ignore */ }
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  const filtered = useMemo(() => {
+    if (!data) return []
+    if (!search.trim()) return data.tickets
+    const q = search.toLowerCase()
+    return data.tickets.filter(t =>
+      t.key.toLowerCase().includes(q) ||
+      t.summary.toLowerCase().includes(q) ||
+      (t.assignee || '').toLowerCase().includes(q)
+    )
+  }, [data, search])
+
+  if (loading) return <NectarLoader size="lg" message="Loading QA scope..." className="mt-32" />
+  if (!data) return null
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-2xl font-bold">QA Scope</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Tickets completed but not assigned to any release. If you cut from master today, these would be included.
+        </p>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <Input
+          placeholder="Search key, summary, assignee..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="max-w-sm"
+        />
+        <span className="text-sm text-muted-foreground ml-auto">
+          {filtered.length} of {data.total} tickets
+        </span>
+        <Button variant="outline" size="sm" onClick={load}>Refresh</Button>
+      </div>
+
+      {filtered.length === 0 ? (
+        <Card>
+          <CardContent className="p-12 text-center text-muted-foreground text-sm">
+            No tickets in QA scope.
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-background z-10">
+                  <tr className="border-b text-left">
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-28">Key</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Summary</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-40">Status</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-24">Type</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-32">Assignee</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-28 hidden md:table-cell">QA</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-24 hidden md:table-cell">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(t => <FlatTicketRow key={t.key} ticket={t} />)}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+// ── Triage tab ────────────────────────────────────────
+
+function TriageTab() {
+  const [data, setData] = useState<FlatTicketsResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [days, setDays] = useState(7)
+
+  async function load(d: number) {
+    setLoading(true)
+    try {
+      const since = new Date(Date.now() - d * 86400000).toISOString().slice(0, 10)
+      const result = await apiFetch<FlatTicketsResponse>(`/tickets/triage?since=${since}&limit=500`)
+      setData(result)
+    } catch { /* ignore */ }
+    setLoading(false)
+  }
+
+  useEffect(() => { load(days) }, [days])
+
+  const filtered = useMemo(() => {
+    if (!data) return []
+    if (!search.trim()) return data.tickets
+    const q = search.toLowerCase()
+    return data.tickets.filter(t =>
+      t.key.toLowerCase().includes(q) ||
+      t.summary.toLowerCase().includes(q) ||
+      (t.assignee || '').toLowerCase().includes(q)
+    )
+  }, [data, search])
+
+  if (loading) return <NectarLoader size="lg" message="Loading triage..." className="mt-32" />
+  if (!data) return null
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-2xl font-bold">Triage</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Recently created tickets that need prioritization. Status: To Do.
+        </p>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <Input
+          placeholder="Search key, summary, assignee..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="max-w-sm"
+        />
+        <div className="flex rounded-md border text-xs">
+          {[1, 3, 7, 14, 30].map((d, i, arr) => (
+            <button
+              key={d}
+              type="button"
+              onClick={() => setDays(d)}
+              className={cn(
+                "px-3 py-2 transition-colors",
+                i === 0 && "rounded-l-md",
+                i === arr.length - 1 && "rounded-r-md",
+                i > 0 && "border-l",
+                days === d ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+              )}
+            >
+              {d}d
+            </button>
+          ))}
+        </div>
+        <span className="text-sm text-muted-foreground ml-auto">
+          {filtered.length} of {data.total} tickets
+        </span>
+        <Button variant="outline" size="sm" onClick={() => load(days)}>Refresh</Button>
+      </div>
+
+      {filtered.length === 0 ? (
+        <Card>
+          <CardContent className="p-12 text-center text-muted-foreground text-sm">
+            No new tickets in the last {days} day{days > 1 ? 's' : ''}.
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-background z-10">
+                  <tr className="border-b text-left">
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-28">Key</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Summary</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-40">Status</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-24">Type</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-24">Priority</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-32">Assignee</th>
+                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-24 hidden md:table-cell">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(t => <FlatTicketRow key={t.key} ticket={t} showPriority />)}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+// ── Shared flat ticket row ────────────────────────────
+
+function FlatTicketRow({ ticket: t, showPriority }: { ticket: FlatTicket; showPriority?: boolean }) {
+  const badgeColor = t.status ? getStatusBadgeColor(t.status) : ''
+  const created = t.created ? new Date(t.created).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'
+
+  return (
+    <tr className="border-b hover:bg-accent/30 transition-colors">
+      <td className="px-3 py-2">
+        <JiraLink jiraKey={t.key} className="text-xs" />
+      </td>
+      <td className="px-3 py-2">
+        <span className="line-clamp-1">{t.summary}</span>
+      </td>
+      <td className="px-3 py-2">
+        {badgeColor ? (
+          <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", badgeColor)}>
+            {t.status}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">{t.status || '—'}</span>
+        )}
+      </td>
+      {showPriority ? (
+        <td className="px-3 py-2 text-xs text-muted-foreground">{t.priority || '—'}</td>
+      ) : (
+        <td className="px-3 py-2 text-xs text-muted-foreground">{t.type || '—'}</td>
+      )}
+      <td className="px-3 py-2 text-xs">{t.assignee || '—'}</td>
+      <td className="px-3 py-2 text-xs hidden md:table-cell">{t.qaAssignee || '—'}</td>
+      <td className="px-3 py-2 text-xs text-muted-foreground hidden md:table-cell">{created}</td>
+    </tr>
   )
 }
 

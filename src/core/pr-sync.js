@@ -4,22 +4,21 @@ const log = require('./log');
 const JIRA_KEY_REGEX = /\b(DEV|MAV)-\d+\b/g;
 
 /**
- * GitHub PR sync — fetches PRs across tracked repos and matches them
- * to JIRA tickets in active releases.
+ * GitHub PR sync — fetches PRs across tracked repos and persists them
+ * to PrStore (SQLite).
  *
  * Strategy:
  *   1. List open PRs + recently updated PRs across all tracked repos
  *   2. Extract JIRA keys from PR title + body
- *   3. Build a cache: JIRA key → [PR info]
- *   4. Store associations on releases as prsByJiraKey
+ *   3. Persist to PrStore with JIRA key associations
  *
  * Incremental:
- *   - First run: all open + recently merged (last 14 days)
- *   - Subsequent runs: only PRs updated since last sync
+ *   - First run: all open + last 2000 closed PRs
+ *   - Subsequent runs: open + closed PRs updated since last sync
  *
  * Events:
  *   sync:started
- *   sync:completed ({ prsFetched, matched, releasesUpdated, durationMs, incremental })
+ *   sync:completed ({ prsFetched, jiraKeysFound, durationMs, incremental })
  */
 class PrSync extends EventEmitter {
   constructor(releases, github, config) {
@@ -27,15 +26,19 @@ class PrSync extends EventEmitter {
     this.releases = releases;
     this.github = github;
     this.config = config;
+    this._prStore = null;
     this._timer = null;
     this._running = false;
     this.lastRun = null;
     this.lastResults = null;
     this._lastSyncTime = null;
-    // Cache: JIRA key → [normalized PR]
-    this._prCache = new Map();
-    // Index: head branch → normalized PR (for builds page lookup)
-    this._prByBranch = new Map();
+  }
+
+  /**
+   * Set the PrStore for SQLite persistence.
+   */
+  setPrStore(prStore) {
+    this._prStore = prStore || null;
   }
 
   start() {
@@ -79,26 +82,21 @@ class PrSync extends EventEmitter {
       incremental: isIncremental,
       prsFetched: 0,
       jiraKeysFound: 0,
-      matched: 0,
-      releasesUpdated: 0,
       errors: 0,
     };
 
-    // Rebuild the branch index per scan so stale entries (force-push, branch
-    // reuse, deleted branches) are dropped. Swap-at-end avoids torn reads.
-    const nextByBranch = new Map();
+    const syncedAt = new Date().toISOString();
+    // Collect all PRs with their JIRA keys for batch persist
+    const batch = [];
 
     try {
-      // Fetch PRs from all tracked repos
       const repos = (this.config.repos || []).filter(r => r.github);
       for (const repo of repos) {
         try {
           const prs = await this._fetchRepoPRs(repo.github, isIncremental);
           results.prsFetched += prs.length;
 
-          // Extract JIRA keys and add/update cache
           for (const pr of prs) {
-            const headRef = pr.head?.ref || null;
             const normalized = {
               prNumber: pr.number,
               prTitle: pr.title,
@@ -109,26 +107,13 @@ class PrSync extends EventEmitter {
               status: pr.merged_at ? 'merged' : pr.state === 'closed' ? 'closed' : 'open',
               repo: repo.github,
               baseBranch: pr.base?.ref || null,
-              headBranch: headRef,
+              headBranch: pr.head?.ref || null,
+              syncedAt,
             };
 
-            if (headRef) {
-              const existing = nextByBranch.get(headRef);
-              // Prefer open PRs; tiebreak by highest prNumber so we always surface the newest/active one
-              if (!existing || (existing.status !== 'open' && normalized.status === 'open') ||
-                  (existing.status === normalized.status && normalized.prNumber > existing.prNumber)) {
-                nextByBranch.set(headRef, normalized);
-              }
-            }
-
             const jiraKeys = this._extractJiraKeys(pr);
-            if (jiraKeys.length === 0) continue;
-
-            for (const key of jiraKeys) {
-              if (!this._prCache.has(key)) this._prCache.set(key, new Map());
-              // Always overwrite — ensures state updates (open→merged) are captured
-              this._prCache.get(key).set(pr.number, normalized);
-            }
+            batch.push({ pr: normalized, jiraKeys });
+            if (jiraKeys.length > 0) results.jiraKeysFound++;
           }
         } catch (err) {
           results.errors++;
@@ -136,15 +121,14 @@ class PrSync extends EventEmitter {
         }
       }
 
-      // Swap in the freshly-built branch index atomically
-      this._prByBranch = nextByBranch;
-
-      // Step 2: Count unique JIRA keys
-      results.jiraKeysFound = this._prCache.size;
-
-      // Step 3: Match to active releases
-      const jiraKeyIndex = this._buildJiraKeyIndex();
-      this._matchAndStore(jiraKeyIndex, results);
+      // Persist to PrStore
+      if (this._prStore && batch.length > 0) {
+        this._prStore.upsertBatch(batch);
+        this._prStore.updateSyncMeta({
+          lastSyncTime: syncedAt,
+          totalPrsSynced: this._prStore.count(),
+        });
+      }
 
     } catch (err) {
       results.errors++;
@@ -152,26 +136,18 @@ class PrSync extends EventEmitter {
     }
 
     results.durationMs = Date.now() - startTime;
-    this._lastSyncTime = new Date().toISOString();
+    this._lastSyncTime = syncedAt;
     this.lastRun = this._lastSyncTime;
     this.lastResults = results;
     this._running = false;
 
     const mode = isIncremental ? 'incremental' : 'full';
-    log.info(`PR sync complete (${mode}): ${results.prsFetched} PRs fetched, ${results.jiraKeysFound} JIRA keys, ${results.matched} matched, ${results.releasesUpdated} releases updated in ${results.durationMs}ms`);
+    log.info(`PR sync complete (${mode}): ${results.prsFetched} PRs, ${results.jiraKeysFound} with JIRA keys in ${results.durationMs}ms`);
     this.emit('sync:completed', results);
 
     return results;
   }
 
-  /**
-   * Fetch PRs from a repo.
-   *
-   * Every run:
-   *   - All open PRs (always fresh — typically ~20-50 per repo)
-   *   - Closed/merged PRs updated since last sync (catches merges + closes)
-   *   - On first run, also grabs closed PRs from last 14 days to seed the cache
-   */
   /**
    * Fetch PRs from a repo.
    *
@@ -200,7 +176,7 @@ class PrSync extends EventEmitter {
         if (new Date(pr.updated_at).getTime() >= sinceTime) addPr(pr);
       }
     } else {
-      // First run: backfill last 2000 closed PRs (20 pages × 100)
+      // First run: backfill last 2000 closed PRs (20 pages x 100)
       log.info(`PR sync: backfilling closed PRs for ${repoPath} (up to 2000)`);
       const closedPrs = await this.github._paginate(
         `/repos/${repoPath}/pulls?state=closed&per_page=100&sort=updated&direction=desc`, 20
@@ -222,77 +198,12 @@ class PrSync extends EventEmitter {
   }
 
   /**
-   * Build JIRA key → release index from active releases.
+   * Find the best PR for a branch. Delegates to PrStore if available.
    */
-  _buildJiraKeyIndex() {
-    const index = new Map();
-    const activeReleases = this.releases.list().filter(r =>
-      r.state !== 'done' && !r.jiraArchived
-    );
-
-    for (const release of activeReleases) {
-      const releaseKey = this.releases._key(release.repo, release.version);
-      for (const ticket of (release.tickets || [])) {
-        if (!ticket.key) continue;
-        if (!index.has(ticket.key)) index.set(ticket.key, []);
-        index.get(ticket.key).push({ releaseKey, ticket });
-      }
-    }
-
-    return index;
-  }
-
-  /**
-   * Match cached PRs to releases and store.
-   */
-  _matchAndStore(jiraKeyIndex, results) {
-    // Build releaseKey → { prsByJiraKey }
-    const releaseMap = new Map();
-
-    for (const [jiraKey, prMap] of this._prCache) {
-      const entries = jiraKeyIndex.get(jiraKey);
-      if (!entries) continue;
-      results.matched++;
-
-      const prs = Array.from(prMap.values());
-      for (const { releaseKey } of entries) {
-        if (!releaseMap.has(releaseKey)) releaseMap.set(releaseKey, {});
-        const data = releaseMap.get(releaseKey);
-        if (!data[jiraKey]) data[jiraKey] = [];
-        // Deduplicate by PR number
-        for (const pr of prs) {
-          if (!data[jiraKey].some(p => p.prNumber === pr.prNumber)) {
-            data[jiraKey].push(pr);
-          }
-        }
-      }
-    }
-
-    // Store on releases
-    for (const [releaseKey, prsByJiraKey] of releaseMap) {
-      const release = this.releases.releases.get(releaseKey);
-      if (!release) continue;
-
-      release.prsByJiraKey = prsByJiraKey;
-      release.prSyncedAt = new Date().toISOString();
-      this.releases.persist(release);
-      results.releasesUpdated++;
-    }
-
-    // Clear stale PR data
-    for (const release of this.releases.list()) {
-      const key = this.releases._key(release.repo, release.version);
-      if (!releaseMap.has(key) && release.prsByJiraKey && Object.keys(release.prsByJiraKey).length > 0) {
-        release.prsByJiraKey = {};
-        release.prSyncedAt = new Date().toISOString();
-        this.releases.persist(release);
-      }
-    }
-  }
-
   findPRByBranch(branch) {
     if (!branch) return null;
-    return this._prByBranch.get(branch) || null;
+    if (this._prStore) return this._prStore.findByBranch(branch);
+    return null;
   }
 
   getStatus() {
@@ -301,7 +212,10 @@ class PrSync extends EventEmitter {
       lastRun: this.lastRun,
       lastResults: this.lastResults,
       configured: this.github.isConfigured(),
-      cacheSize: this._prCache.size,
+      prStore: this._prStore ? {
+        totalPrs: this._prStore.count(),
+        ...this._prStore.getSyncMeta(),
+      } : null,
     };
   }
 }

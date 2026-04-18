@@ -25,11 +25,21 @@ const DONE_STATUSES_FOR_RISK = new Set([
  * @param {object} config
  */
 module.exports = function createRoutes(services, config) {
-  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig, apiKeys, taskQueue, userStore, datadog, datadogPoller } = services;
+  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig, apiKeys, taskQueue, userStore, datadog, datadogPoller, ticketStore, prStore } = services;
 
   // Nectar's own repo — used by the Issues page so users can file bugs/feedback.
   const NECTAR_REPO = 'mavencare/nectar';
   const router = Router();
+
+  // ── Ticket helpers — get tickets from normalized TicketStore ──
+
+  /**
+   * Get tickets for a release from the normalized TicketStore.
+   * Delegates to releases.getTickets() which queries by fixVersions/targetFixVersions.
+   */
+  function getTicketsForRelease(release) {
+    return releases.getTickets(release);
+  }
 
   // NOTE: Auth is now handled by the unified auth middleware in web/server.js.
   // The old WEB_TOKEN-only middleware has been replaced by createAuthMiddleware
@@ -147,10 +157,11 @@ module.exports = function createRoutes(services, config) {
     };
 
     let result = annotated.map(release => {
-      let tickets = release.tickets || [];
+      let tickets = getTicketsForRelease(release);
 
       // Enrich tickets with PR data + build status + OOO annotations
-      const prsByJiraKey = release.prsByJiraKey || {};
+      const ticketKeys = tickets.map(t => t.key);
+      const prLookup = prStore ? prStore.findByJiraKeys(ticketKeys) : new Map();
       const buildByJiraKey = release.buildByJiraKey || {};
       const releaseDate = release.jiraReleaseDate;
       const isImminentRelease = releaseDate && releaseDate <= tomorrow && release.state !== 'done';
@@ -158,7 +169,7 @@ module.exports = function createRoutes(services, config) {
       tickets = tickets.map(t => {
         const enriched = {
           ...t,
-          prs: prsByJiraKey[t.key] || [],
+          prs: prLookup.get(t.key) || [],
           build: buildByJiraKey[t.key] || null,
         };
         if (availability) {
@@ -233,7 +244,7 @@ module.exports = function createRoutes(services, config) {
         ...release,
         tickets,
         ticketCount: tickets.length,
-        totalTicketCount: (release.tickets || []).length,
+        totalTicketCount: getTicketsForRelease(release).length,
         zohoTicketCount: (release.zohoTickets || []).length,
         zohoTickets: release.zohoTickets || [],
         pipeline: release.pipeline || null,
@@ -282,11 +293,9 @@ module.exports = function createRoutes(services, config) {
     const ticketsByKey = new Map();
 
     for (const release of immediateReleases) {
-      const prsByJiraKey = release.prsByJiraKey || {};
       const buildByJiraKey = release.buildByJiraKey || {};
 
-      for (const ticket of (release.tickets || [])) {
-        if (ticket.source !== 'jira') continue;
+      for (const ticket of getTicketsForRelease(release)) {
 
         // Person/role filter (same as /releases/home)
         if (personLower && view) {
@@ -318,7 +327,7 @@ module.exports = function createRoutes(services, config) {
           zohoRef: ticket.zohoRef || null,
           fixVersions: Array.isArray(ticket.fixVersions) ? ticket.fixVersions : [],
           targetFixVersions: Array.isArray(ticket.targetFixVersions) ? ticket.targetFixVersions : [],
-          prs: prsByJiraKey[ticket.key] || [],
+          prs: [],  // enriched below after dedup
           build: buildByJiraKey[ticket.key] || null,
           releases: [],
         });
@@ -333,6 +342,15 @@ module.exports = function createRoutes(services, config) {
       jiraReleaseDate: r.jiraReleaseDate || null,
     })).sort((a, b) => (a.jiraReleaseDate || 'zzzz').localeCompare(b.jiraReleaseDate || 'zzzz'));
 
+    // Enrich tickets with PR data from PrStore
+    if (prStore && ticketsByKey.size > 0) {
+      const prLookup = prStore.findByJiraKeys([...ticketsByKey.keys()]);
+      for (const [key, prs] of prLookup) {
+        const t = ticketsByKey.get(key);
+        if (t) t.prs = prs;
+      }
+    }
+
     if (ticketsByKey.size === 0) {
       return res.json({ releases: releaseColumns, tickets: [] });
     }
@@ -345,8 +363,7 @@ module.exports = function createRoutes(services, config) {
       const isShipped = release.state === 'done' || !!release.jiraReleased;
       const isOverdue = !!release.jiraReleaseDate && release.jiraReleaseDate < today && !isShipped;
 
-      for (const ticket of (release.tickets || [])) {
-        if (ticket.source !== 'jira') continue;
+      for (const ticket of getTicketsForRelease(release)) {
         const enriched = ticketsByKey.get(ticket.key);
         if (!enriched) continue;
 
@@ -572,7 +589,7 @@ module.exports = function createRoutes(services, config) {
   router.post('/releases/:version/tickets', (req, res) => {
     try {
       const release = releases.addTicket(req.params.version, req.body, req.body.user);
-      res.json(release);
+      res.json({ ...release, tickets: getTicketsForRelease(release) });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -581,7 +598,7 @@ module.exports = function createRoutes(services, config) {
   router.delete('/releases/:version/tickets/:key', (req, res) => {
     try {
       const release = releases.removeTicket(req.params.version, req.params.key, req.body.user);
-      res.json(release);
+      res.json({ ...release, tickets: getTicketsForRelease(release) });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -1067,18 +1084,89 @@ module.exports = function createRoutes(services, config) {
       });
   }));
 
+  // ── Ticket database (jira_tickets) ─────────────────────
+
+  router.get('/tickets/scope', (req, res) => {
+    if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
+    const limit = parseInt(req.query.limit) || 100;
+    const offset = parseInt(req.query.offset) || 0;
+    res.json(ticketStore.getQAScope({ limit, offset }));
+  });
+
+  router.get('/tickets/triage', (req, res) => {
+    if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
+    const since = req.query.since || new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+    const limit = parseInt(req.query.limit) || 100;
+    const offset = parseInt(req.query.offset) || 0;
+    res.json(ticketStore.getTriage({ since, limit, offset }));
+  });
+
+  router.get('/tickets/sync-status', (req, res) => {
+    if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
+    const meta = ticketStore.getSyncMeta();
+    const stats = ticketStore.getStats();
+    res.json({ sync: meta, stats });
+  });
+
+  router.post('/tickets/sync', asyncHandler(async (req, res) => {
+    if (!jiraSync) return res.status(503).json({ error: 'JIRA sync not available' });
+    const result = await jiraSync.runTicketSync();
+    res.json(result || { error: 'Sync already running or ticket store not configured' });
+  }));
+
+  router.get('/tickets/search', (req, res) => {
+    if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
+    const { q, statusCategory, assignee, type } = req.query;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = parseInt(req.query.offset) || 0;
+    if (q) {
+      res.json(ticketStore.search(q, { limit, offset }));
+    } else {
+      res.json(ticketStore.getByFilter({ statusCategory, assignee, type, limit, offset }));
+    }
+  });
+
+  // ── PR database (github_prs) ───────────────────────────
+
+  router.get('/prs/by-ticket/:key', (req, res) => {
+    if (!prStore) return res.status(503).json({ error: 'PR store not available' });
+    const prs = prStore.findByJiraKey(req.params.key);
+    res.json({ prs });
+  });
+
+  router.get('/prs/search', (req, res) => {
+    if (!prStore) return res.status(503).json({ error: 'PR store not available' });
+    const { q, repo, status, author } = req.query;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = parseInt(req.query.offset) || 0;
+    if (q) {
+      res.json(prStore.search(q, { limit, offset }));
+    } else {
+      res.json(prStore.getByFilter({ repo, status, author, limit, offset }));
+    }
+  });
+
+  router.get('/prs/sync-status', (req, res) => {
+    if (!prStore) return res.status(503).json({ error: 'PR store not available' });
+    res.json({ total: prStore.count(), ...prStore.getSyncMeta() });
+  });
+
   // ── Ticket lookup ─────────────────────────────────────
 
   router.get('/tickets/:key/releases', (req, res) => {
     const key = req.params.key;
-    const matches = releases.list().filter(
-      r => r.tickets.some(t => t.key === key)
-    );
-    res.json(matches.map(r => ({
-      version: r.version,
-      state: r.state,
-      ticketState: r.tickets.find(t => t.key === key).state,
-    })));
+    if (!ticketStore) return res.json([]);
+    const ticket = ticketStore.get(key);
+    if (!ticket) return res.json([]);
+    const allVersions = new Set([...(ticket.fixVersions || []), ...(ticket.targetFixVersions || [])]);
+    const result = [];
+    for (const v of allVersions) {
+      const release = releases.list().find(r => r.version === v);
+      if (release) {
+        result.push({ version: release.version, state: release.state, ticketState: ticket.state });
+      }
+    }
+    res.json(result);
   });
 
   // ── Audit trail ───────────────────────────────────────
@@ -1167,7 +1255,7 @@ module.exports = function createRoutes(services, config) {
     const people = new Map(); // name → { name, roles: Set }
     const allReleases = releases.list();
     for (const release of allReleases) {
-      for (const ticket of (release.tickets || [])) {
+      for (const ticket of getTicketsForRelease(release)) {
         if (ticket.assignee) {
           const p = people.get(ticket.assignee) || { name: ticket.assignee, roles: new Set() };
           p.roles.add('dev');
@@ -1434,19 +1522,16 @@ module.exports = function createRoutes(services, config) {
       return a.jiraReleaseDate.localeCompare(b.jiraReleaseDate);
     });
 
-    // Walk every active release's tickets[], dedupe by key, accumulate
-    // per-release membership.
+    // Walk every active release, get tickets from TicketStore, dedupe by key,
+    // accumulate per-release membership.
     const byKey = new Map();
     for (const release of activeReleases) {
       const releaseVersion = release.version;
-      for (const ticket of release.tickets || []) {
-        if (ticket.source !== 'jira') continue;
-
+      for (const ticket of getTicketsForRelease(release)) {
         const targetVersions = Array.isArray(ticket.targetFixVersions) ? ticket.targetFixVersions : [];
         const fixVersions = Array.isArray(ticket.fixVersions) ? ticket.fixVersions : [];
         const inTarget = targetVersions.includes(releaseVersion);
         const inFixVersion = fixVersions.includes(releaseVersion);
-        // Should never happen given the sync JQL, but guard anyway
         if (!inTarget && !inFixVersion) continue;
 
         let record = byKey.get(ticket.key);
@@ -1774,7 +1859,7 @@ module.exports = function createRoutes(services, config) {
     if (themeConfig.themes.length === 0) {
       const components = new Set();
       for (const release of activeReleases) {
-        for (const ticket of release.tickets || []) {
+        for (const ticket of getTicketsForRelease(release)) {
           if (ticket.component) components.add(ticket.component);
         }
       }
@@ -1834,9 +1919,7 @@ module.exports = function createRoutes(services, config) {
 
       // Group tickets by theme
       const ticketsByTheme = new Map();
-      for (const ticket of release.tickets || []) {
-        if (ticket.source !== 'jira') continue;
-
+      for (const ticket of getTicketsForRelease(release)) {
         // Check customer filter at ticket level too
         const ticketCustomers = Array.isArray(ticket.customerTags) ? ticket.customerTags : [];
         if (customerFilter && ticketCustomers.length > 0) {
@@ -1960,7 +2043,7 @@ module.exports = function createRoutes(services, config) {
     if (themeConfig.themes.length === 0) {
       const components = new Set();
       for (const r of releases.active()) {
-        for (const t of r.tickets || []) {
+        for (const t of getTicketsForRelease(r)) {
           if (t.component) components.add(t.component);
         }
       }
@@ -1968,8 +2051,7 @@ module.exports = function createRoutes(services, config) {
     }
 
     const tickets = [];
-    for (const ticket of release.tickets || []) {
-      if (ticket.source !== 'jira') continue;
+    for (const ticket of getTicketsForRelease(release)) {
       const resolved = themeConfig.resolveComponent(ticket.component);
       if (resolved !== themeName) continue;
 
@@ -2019,7 +2101,7 @@ module.exports = function createRoutes(services, config) {
     if (themeConfig.themes.length === 0) {
       const components = new Set();
       for (const release of releases.active()) {
-        for (const ticket of release.tickets || []) {
+        for (const ticket of getTicketsForRelease(release)) {
           if (ticket.component) components.add(ticket.component);
         }
       }
@@ -2044,7 +2126,7 @@ module.exports = function createRoutes(services, config) {
     // Gather all observed components from active releases
     const components = new Set();
     for (const release of releases.list()) {
-      for (const ticket of release.tickets || []) {
+      for (const ticket of getTicketsForRelease(release)) {
         if (ticket.component) components.add(ticket.component);
       }
     }
@@ -2184,7 +2266,7 @@ module.exports = function createRoutes(services, config) {
           version: release.version,
           branch: release.branch,
           jiraReleaseDate: release.jiraReleaseDate || null,
-          tickets: truth ? truth.verified.map(mapTicket) : (release.tickets || []).map(mapRawTicket),
+          tickets: truth ? truth.verified.map(mapTicket) : getTicketsForRelease(release).map(mapRawTicket),
           rogues: truth ? truth.rogues : [],
           riskScore: release.risk ? release.risk.numericScore : null,
           riskFactors: release.risk ? release.risk.factors : [],
@@ -2913,27 +2995,17 @@ module.exports = function createRoutes(services, config) {
       }
     }
 
-    // Search tickets — match key or summary across all releases
-    const seenTickets = new Set();
-    let ticketCount = 0;
-    for (const r of allReleases) {
-      if (ticketCount >= MAX_PER_CATEGORY) break;
-      for (const t of r.tickets || []) {
-        if (ticketCount >= MAX_PER_CATEGORY) break;
-        if (seenTickets.has(t.key)) continue;
-        const matchKey = (t.key || '').toLowerCase().includes(q);
-        const matchSummary = (t.summary || '').toLowerCase().includes(q);
-        if (matchKey || matchSummary) {
-          seenTickets.add(t.key);
-          results.push({
-            type: 'ticket',
-            key: t.key,
-            summary: t.summary || '',
-            jiraStatus: t.jiraStatus || t.state || null,
-            version: r.version,
-          });
-          ticketCount++;
-        }
+    // Search tickets from TicketStore
+    if (ticketStore) {
+      const ticketResults = ticketStore.search(q, { limit: MAX_PER_CATEGORY });
+      for (const t of ticketResults.tickets) {
+        results.push({
+          type: 'ticket',
+          key: t.key,
+          summary: t.summary || '',
+          jiraStatus: t.status || t.state || null,
+          version: (t.fixVersions && t.fixVersions[0]) || null,
+        });
       }
     }
 

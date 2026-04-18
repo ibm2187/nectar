@@ -33,6 +33,7 @@ const CUSTOMER_PRIORITY_FIELD = 'customfield_11023'; // URGENT / High / Medium /
 const NECTAR_FIELDS = [
   'summary', 'status', 'issuetype', 'assignee', 'reporter', 'fixVersions', 'labels',
   'priority',           // Built-in priority (Urgent/High/Medium/Low/Lowest)
+  'created',            // Issue creation date (for triage views)
   'customfield_10594',  // Target FixVersion
   'customfield_10463',  // Component / area
   'customfield_11056',  // Customer tag
@@ -291,6 +292,10 @@ class JiraClient {
       zohoRef: rawZoho ? JiraClient.parseZohoRef(rawZoho) : null,
       submitterName: fields[ZOHO_SUBMITTER_NAME_FIELD] || null,
       submitterEmail: fields[ZOHO_SUBMITTER_EMAIL_FIELD] || null,
+      statusCategory: fields.status && fields.status.statusCategory
+        ? fields.status.statusCategory.name : null,
+      created: fields.created || null,
+      state: JiraClient.mapStatus(fields.status ? fields.status.name : 'Unknown'),
     };
   }
 

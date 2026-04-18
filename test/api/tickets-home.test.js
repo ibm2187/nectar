@@ -6,6 +6,7 @@ const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
 const ApprovalEngine = require('../../src/core/approvals');
 const ThemeConfig = require('../../src/core/theme-config');
+const TicketStore = require('../../src/core/ticket-store');
 const createRoutes = require('../../src/api/routes');
 const { createTestDb } = require('../../src/core/db');
 
@@ -21,10 +22,12 @@ function createMockServices() {
   const db = createTestDb();
   const audit = new Audit({ db });
   const releases = new ReleaseManager(audit, { db });
+  const ticketStore = new TicketStore({ db });
+  releases.setTicketStore(ticketStore);
   const themeConfig = new ThemeConfig({ db });
 
   return {
-    releases,
+    releases, ticketStore,
     repoManager: { getStatus: () => [] },
     github: { isConfigured: () => false, listIssues: vi.fn(), createIssue: vi.fn() },
     risk: { assess: vi.fn() },
@@ -348,15 +351,9 @@ describe('GET /api/tickets/home', () => {
     expect(versions).toEqual(['4.2.0', '4.3.0', '4.0.0']);
   });
 
-  it('skips tickets without source=jira', async () => {
+  it('returns empty when no tickets exist in TicketStore', async () => {
     createReleaseWithDate(services, { version: '4.2.0', repo: 'webplatform', jiraReleaseDate: yesterday });
-    // addTicket directly to bypass the jira source default
-    const release = services.releases.get('4.2.0', 'webplatform');
-    release.tickets.push({
-      key: 'MANUAL-1', summary: 'Manual', state: 'pending', jiraStatus: 'Open',
-      fixVersions: ['4.2.0'], targetFixVersions: [], source: 'manual',
-    });
-
+    // No tickets added to TicketStore
     const res = await request(app, 'GET', '/api/tickets/home');
     expect(res.body.tickets).toHaveLength(0);
   });

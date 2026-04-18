@@ -20,6 +20,7 @@ describe('NotificationEngine', () => {
     mockReleases = {
       list: vi.fn().mockReturnValue([]),
       get: vi.fn(),
+      getTickets: vi.fn((release) => (release.tickets || []).filter(t => !t.source || t.source === 'jira')),
     };
 
     mockPeople = {

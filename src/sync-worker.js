@@ -84,8 +84,14 @@ const cherryPickWatcher = new CherryPickWatcher(releases, github, config);
 const Discovery = require('./core/discovery');
 const discovery = new Discovery(releases, repoManager, config);
 
+const TicketStore = require('./core/ticket-store');
+const ticketStore = new TicketStore();
+log.info(`[sync] Ticket store: ${ticketStore.count()} tickets`);
+releases.setTicketStore(ticketStore);
+
 const JiraSync = require('./core/jira-sync');
 const jiraSync = new JiraSync(releases, jira, config);
+jiraSync.setTicketStore(ticketStore);
 
 const ReleaseTruth = require('./core/release-truth');
 const releaseTruth = new ReleaseTruth(releases, repoManager, github, jira, config);
@@ -93,8 +99,13 @@ const releaseTruth = new ReleaseTruth(releases, repoManager, github, jira, confi
 const ZohoSync = require('./core/zoho-sync');
 const zohoSync = new ZohoSync(releases, zoho, config);
 
+const PrStore = require('./core/pr-store');
+const prStore = new PrStore();
+log.info(`[sync] PR store: ${prStore.count()} PRs`);
+
 const PrSync = require('./core/pr-sync');
 const prSync = new PrSync(releases, github, config);
+prSync.setPrStore(prStore);
 
 const PipelineSync = require('./core/pipeline-sync');
 const pipelineSync = new PipelineSync(releases, aws, repoManager, config);

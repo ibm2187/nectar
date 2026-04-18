@@ -6,6 +6,7 @@ const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
 const ApprovalEngine = require('../../src/core/approvals');
 const ThemeConfig = require('../../src/core/theme-config');
+const TicketStore = require('../../src/core/ticket-store');
 const createRoutes = require('../../src/api/routes');
 const { createTestDb } = require('../../src/core/db');
 
@@ -14,10 +15,12 @@ function createMockServices() {
   const db = createTestDb();
   const audit = new Audit({ db });
   const releases = new ReleaseManager(audit, { db });
+  const ticketStore = new TicketStore({ db });
+  releases.setTicketStore(ticketStore);
   const themeConfig = new ThemeConfig({ db });
 
   return {
-    releases,
+    releases, ticketStore,
     repoManager: { getStatus: () => [] },
     github: {
       isConfigured: () => false,

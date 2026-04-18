@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
 const { createTestDb } = require('../../src/core/db');
-
+const TicketStore = require('../../src/core/ticket-store');
 describe('ReleaseManager', () => {
   let audit, rm, db;
 
@@ -11,6 +11,7 @@ describe('ReleaseManager', () => {
     db = createTestDb();
     audit = new Audit({ db });
     rm = new ReleaseManager(audit, { db });
+    rm.setTicketStore(new TicketStore({ db }));
   });
 
   afterEach(() => {
@@ -23,7 +24,7 @@ describe('ReleaseManager', () => {
       expect(r.version).toBe('4.2.0');
       expect(r.repo).toBe('webplatform');
       expect(r.state).toBe('planning');
-      expect(r.tickets).toEqual([]);
+      expect(r.tickets).toBeUndefined();  // Tickets live in TicketStore, not on release
       expect(r.cherryPicks).toEqual([]);
     });
 
@@ -143,8 +144,9 @@ describe('ReleaseManager', () => {
       rm.create({ version: '4.2.0' });
       rm.addTicket('4.2.0', { key: 'DEV-100', summary: 'Fix bug' });
       const r = rm.get('4.2.0');
-      expect(r.tickets).toHaveLength(1);
-      expect(r.tickets[0].key).toBe('DEV-100');
+      const tickets = rm.getTickets(r);
+      expect(tickets).toHaveLength(1);
+      expect(tickets[0].key).toBe('DEV-100');
     });
 
     it('updates existing ticket by key', () => {
@@ -152,8 +154,9 @@ describe('ReleaseManager', () => {
       rm.addTicket('4.2.0', { key: 'DEV-100', summary: 'Fix bug', state: 'pending' });
       rm.addTicket('4.2.0', { key: 'DEV-100', state: 'done' });
       const r = rm.get('4.2.0');
-      expect(r.tickets).toHaveLength(1);
-      expect(r.tickets[0].state).toBe('done');
+      const tickets = rm.getTickets(r);
+      expect(tickets).toHaveLength(1);
+      expect(tickets[0].state).toBe('done');
     });
 
     it('removes a ticket', () => {
@@ -162,8 +165,9 @@ describe('ReleaseManager', () => {
       rm.addTicket('4.2.0', { key: 'DEV-101' });
       rm.removeTicket('4.2.0', 'DEV-100');
       const r = rm.get('4.2.0');
-      expect(r.tickets).toHaveLength(1);
-      expect(r.tickets[0].key).toBe('DEV-101');
+      const tickets = rm.getTickets(r);
+      expect(tickets).toHaveLength(1);
+      expect(tickets[0].key).toBe('DEV-101');
     });
   });
 
@@ -181,7 +185,7 @@ describe('ReleaseManager', () => {
       rm.addTicket('4.2.0', { key: 'DEV-100', state: 'pending' });
       rm.addCherryPick('4.2.0', { sha: 'abc', ticket: 'DEV-100', status: 'merged' });
       const r = rm.get('4.2.0');
-      expect(r.tickets[0].state).toBe('cherry-picked');
+      expect(rm.getTickets(r)[0].state).toBe('cherry-picked');
     });
 
     it('updates existing cherry-pick by SHA', () => {
@@ -319,15 +323,18 @@ describe('ReleaseManager', () => {
       rm.addDeployment('4.2.0', { customer: 'CK', env: 'staging', status: 'success' });
       rm.transition('4.2.0', 'cutting');
 
-      // Reload from the same DB
+      // Reload from the same DB — TicketStore shares the same SQLite file
       const audit2 = new Audit({ db });
       const rm2 = new ReleaseManager(audit2, { db });
+      rm2.setTicketStore(new TicketStore({ db }));
 
       const reloaded = rm2.get('4.2.0');
       expect(reloaded).not.toBeNull();
       expect(reloaded.state).toBe('cutting');
-      expect(reloaded.tickets).toHaveLength(1);
-      expect(reloaded.tickets[0].key).toBe('DEV-100');
+      // Tickets now live in TicketStore, queried via getTickets()
+      const tickets = rm2.getTickets(reloaded);
+      expect(tickets).toHaveLength(1);
+      expect(tickets[0].key).toBe('DEV-100');
       expect(reloaded.deployments).toHaveLength(1);
       expect(reloaded.deployments[0].status).toBe('success');
 

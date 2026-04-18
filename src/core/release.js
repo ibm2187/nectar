@@ -22,13 +22,13 @@ const UPDATABLE_FIELDS = ['branch', 'cutFrom', 'cutBy', 'ci', 'risk', 'notes', '
 // Anything outside this set (that we also preserve on load) is stashed in `extra`.
 const KNOWN_COLUMNS = [
   'id','repo','version','state','branch','cutFrom','cutAt','cutBy',
-  'tickets','cherryPicks','ci','risk','comments','deployments','approvals',
+  'cherryPicks','ci','risk','comments','deployments','approvals',
   'notes','presentationUrl',
   'jiraVersionId','jiraVersionName','jiraReleased','jiraReleaseDate','jiraArchived',
   'createdAt','updatedAt',
 ];
 
-const JSON_COLUMNS = ['tickets','cherryPicks','ci','risk','comments','deployments','approvals'];
+const JSON_COLUMNS = ['cherryPicks','ci','risk','comments','deployments','approvals'];
 
 // ── Release factory ─────────────────────────────────────────────────────────
 
@@ -44,7 +44,6 @@ function createRelease({ repo, version, branch, cutFrom, cutBy }) {
     cutAt: null,
     cutBy: cutBy || null,
 
-    tickets: [],
     cherryPicks: [],
 
     ci: { status: null, buildUrl: null, lastRun: null },
@@ -92,7 +91,48 @@ class ReleaseManager extends EventEmitter {
     this.db = opts.db || getDb();
     this.releases = new Map(); // id → release object
     this.audit = audit;
+    this._ticketStore = null;
     this._loadState();
+  }
+
+  /**
+   * Set the TicketStore for normalized ticket queries.
+   * When set, getTickets() reads from TicketStore instead of release.tickets[].
+   */
+  setTicketStore(ticketStore) {
+    this._ticketStore = ticketStore || null;
+  }
+
+  /**
+   * Get tickets for a release. Queries the normalized TicketStore.
+   * Returns tickets in the standard format with jiraStatus, state, etc.
+   */
+  getTickets(release) {
+    if (this._ticketStore) {
+      return this._ticketStore.getForVersion(release.version).map(t => ({
+        key: t.key,
+        summary: t.summary || '',
+        state: t.state || 'pending',
+        jiraStatus: t.status || 'Unknown',
+        type: t.type || null,
+        assignee: t.assignee || null,
+        reporter: t.reporter || null,
+        qaAssignee: t.qaAssignee || null,
+        productAssignee: t.productAssignee || null,
+        fixVersions: t.fixVersions || [],
+        targetFixVersions: t.targetFixVersions || [],
+        component: t.component || null,
+        customerTags: t.customerTags || [],
+        deployedEnvironments: t.deployedEnvironments || [],
+        priority: t.priority || null,
+        riskLevel: t.riskLevel || null,
+        customerPriority: t.customerPriority || null,
+        zohoRef: t.zohoRef || null,
+        source: 'jira',
+        _releaseSource: t._releaseSource || null,
+      }));
+    }
+    return [];
   }
 
   // ── Key helpers ─────────────────────────────────────────
@@ -203,31 +243,48 @@ class ReleaseManager extends EventEmitter {
 
   addTicket(version, ticket, user = null) {
     const release = this._getOrThrow(version);
-    const existing = release.tickets.find(t => t.key === ticket.key);
-    if (existing) {
-      Object.assign(existing, ticket);
-    } else {
-      release.tickets.push({
-        ...ticket,
-        summary: ticket.summary || '',
-        state: ticket.state || 'pending',
-        pr: ticket.pr || null,
-      });
+    if (!this._ticketStore) throw new Error('TicketStore not configured');
+
+    const existing = this._ticketStore.get(ticket.key);
+    const releaseVersion = release.version;
+    const data = {
+      ...ticket,
+      summary: ticket.summary || '',
+      state: ticket.state || 'pending',
+      status: ticket.jiraStatus || ticket.status || 'Unknown',
+      statusCategory: ticket.statusCategory || null,
+      fixVersions: Array.isArray(ticket.fixVersions) ? ticket.fixVersions : (existing ? existing.fixVersions : []),
+      targetFixVersions: Array.isArray(ticket.targetFixVersions) ? ticket.targetFixVersions : (existing ? existing.targetFixVersions : []),
+      syncedAt: new Date().toISOString(),
+    };
+    // Ensure the release version is in fixVersions
+    if (!data.fixVersions.includes(releaseVersion)) {
+      data.fixVersions = [...data.fixVersions, releaseVersion];
     }
+    this._ticketStore.upsert(data);
+
     release.updatedAt = new Date().toISOString();
     this._upsertRow(this._keyOf(release), release);
     this.audit.record(version, 'ticket:added', { key: ticket.key }, user);
-    this.emit('release:updated', release, { tickets: release.tickets });
+    this.emit('release:updated', release, { tickets: this.getTickets(release) });
     return release;
   }
 
   removeTicket(version, ticketKey, user = null) {
     const release = this._getOrThrow(version);
-    release.tickets = release.tickets.filter(t => t.key !== ticketKey);
+    if (!this._ticketStore) throw new Error('TicketStore not configured');
+
+    const ticket = this._ticketStore.get(ticketKey);
+    if (ticket) {
+      ticket.fixVersions = (ticket.fixVersions || []).filter(v => v !== release.version);
+      ticket.targetFixVersions = (ticket.targetFixVersions || []).filter(v => v !== release.version);
+      this._ticketStore.upsert(ticket);
+    }
+
     release.updatedAt = new Date().toISOString();
     this._upsertRow(this._keyOf(release), release);
     this.audit.record(version, 'ticket:removed', { key: ticketKey }, user);
-    this.emit('release:updated', release, { tickets: release.tickets });
+    this.emit('release:updated', release, { tickets: this.getTickets(release) });
     return release;
   }
 
@@ -247,12 +304,12 @@ class ReleaseManager extends EventEmitter {
       });
     }
 
-    // Update matching ticket state
-    if (cp.ticket) {
-      const ticket = release.tickets.find(t => t.key === cp.ticket);
+    // Update matching ticket state in TicketStore
+    if (cp.ticket && this._ticketStore) {
+      const ticket = this._ticketStore.get(cp.ticket);
       if (ticket) {
         ticket.state = cp.status === 'merged' ? 'cherry-picked' : 'in-progress';
-        if (cp.pr) ticket.pr = cp.pr;
+        this._ticketStore.upsert(ticket);
       }
     }
 
@@ -415,12 +472,12 @@ class ReleaseManager extends EventEmitter {
     const row = releaseToRow(key, release);
     this.db.prepare(`
       INSERT INTO releases (key, id, repo, version, state, branch, cutFrom, cutAt, cutBy,
-                            tickets, cherryPicks, ci, risk, comments, deployments, approvals,
+                            cherryPicks, ci, risk, comments, deployments, approvals,
                             notes, presentationUrl,
                             jiraVersionId, jiraVersionName, jiraReleased, jiraReleaseDate, jiraArchived,
                             extra, createdAt, updatedAt)
       VALUES (@key, @id, @repo, @version, @state, @branch, @cutFrom, @cutAt, @cutBy,
-              @tickets, @cherryPicks, @ci, @risk, @comments, @deployments, @approvals,
+              @cherryPicks, @ci, @risk, @comments, @deployments, @approvals,
               @notes, @presentationUrl,
               @jiraVersionId, @jiraVersionName, @jiraReleased, @jiraReleaseDate, @jiraArchived,
               @extra, @createdAt, @updatedAt)
@@ -433,7 +490,6 @@ class ReleaseManager extends EventEmitter {
         cutFrom         = excluded.cutFrom,
         cutAt           = excluded.cutAt,
         cutBy           = excluded.cutBy,
-        tickets         = excluded.tickets,
         cherryPicks     = excluded.cherryPicks,
         ci              = excluded.ci,
         risk            = excluded.risk,
@@ -472,7 +528,6 @@ function releaseToRow(key, release) {
     cutFrom: release.cutFrom ?? null,
     cutAt: release.cutAt ?? null,
     cutBy: release.cutBy ?? null,
-    tickets: JSON.stringify(release.tickets || []),
     cherryPicks: JSON.stringify(release.cherryPicks || []),
     ci: JSON.stringify(release.ci || {}),
     risk: JSON.stringify(release.risk || {}),

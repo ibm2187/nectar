@@ -32,7 +32,8 @@ class ReleaseValidator {
     };
 
     // ── JIRA validation ─────────────────────────────────
-    if (this.jira.isConfigured() && release.tickets.length > 0) {
+    const tickets = this.releases.getTickets(release);
+    if (this.jira.isConfigured() && tickets.length > 0) {
       await this._validateJira(release, report);
     } else {
       // Validate from local ticket state
@@ -59,7 +60,8 @@ class ReleaseValidator {
   }
 
   async _validateJira(release, report) {
-    const keys = release.tickets.map(t => t.key);
+    const tickets = this.releases.getTickets(release);
+    const keys = tickets.map(t => t.key);
     if (!keys.length) return;
 
     try {
@@ -69,7 +71,7 @@ class ReleaseValidator {
       const issues = await this.jira.searchIssues(jql);
       const issueMap = new Map(issues.map(i => [i.key, i]));
 
-      for (const ticket of release.tickets) {
+      for (const ticket of tickets) {
         const jiraIssue = issueMap.get(ticket.key);
         if (!jiraIssue) {
           report.jira.issues.push({ key: ticket.key, problem: 'Not found in JIRA' });
@@ -103,7 +105,8 @@ class ReleaseValidator {
   }
 
   _validateTicketsLocal(release, report) {
-    const pending = release.tickets.filter(t => t.state === 'pending');
+    const tickets = this.releases.getTickets(release);
+    const pending = tickets.filter(t => t.state === 'pending');
     if (pending.length > 0) {
       report.jira.ok = false;
       for (const t of pending) {
@@ -128,7 +131,8 @@ class ReleaseValidator {
     }
 
     // Check for tickets planned but not cherry-picked
-    for (const ticket of release.tickets) {
+    const tickets = this.releases.getTickets(release);
+    for (const ticket of tickets) {
       if (ticket.state === 'pending') {
         const hasCherryPick = release.cherryPicks.some(c => c.ticket === ticket.key);
         if (!hasCherryPick) {
@@ -143,7 +147,7 @@ class ReleaseValidator {
 
     // Check for cherry-picks not in ticket list (orphans)
     for (const cp of release.cherryPicks) {
-      if (cp.ticket && !release.tickets.find(t => t.key === cp.ticket)) {
+      if (cp.ticket && !tickets.find(t => t.key === cp.ticket)) {
         report.git.issues.push({
           ticket: cp.ticket,
           pr: cp.pr,

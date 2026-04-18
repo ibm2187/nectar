@@ -118,21 +118,18 @@ async function handleJiraEvent(payload, releases) {
   const key = issue.key;
   const newStatus = issue.fields && issue.fields.status && issue.fields.status.name;
 
-  // Find all releases containing this ticket and update state
-  for (const release of releases.list()) {
-    const ticket = release.tickets.find(t => t.key === key);
-    if (ticket && newStatus) {
-      // Map JIRA status to our ticket states
-      let state = ticket.state;
-      if (newStatus.toLowerCase().includes('cherry picked')) state = 'cherry-picked';
-      else if (newStatus.toLowerCase().includes('ready for testing')) state = 'ready-for-testing';
-      else if (newStatus.toLowerCase().includes('in progress')) state = 'in-progress';
-      else if (newStatus.toLowerCase().includes('done') || newStatus.toLowerCase().includes('closed')) state = 'done';
+  // Update ticket state in TicketStore
+  const JiraClient = require('../integrations/jira');
+  const newState = newStatus ? JiraClient.mapStatus(newStatus) : null;
 
-      if (state !== ticket.state) {
-        releases.addTicket(release.version, { key, state }, 'jira-webhook');
-        log.info(`Webhook: ${key} status → ${state} in release ${release.version}`);
-      }
+  if (releases._ticketStore && newState) {
+    const ticket = releases._ticketStore.get(key);
+    if (ticket && ticket.state !== newState) {
+      ticket.state = newState;
+      ticket.status = newStatus;
+      ticket.statusCategory = null; // Will be refreshed on next sync
+      releases._ticketStore.upsert(ticket);
+      log.info(`Webhook: ${key} status → ${newState}`);
     }
   }
 }
