@@ -99,6 +99,12 @@ const releaseTruth = new ReleaseTruth(releases, repoManager, github, jira, confi
 const ZohoSync = require('./core/zoho-sync');
 const zohoSync = new ZohoSync(releases, zoho, config);
 
+const CommitStore = require('./core/commit-store');
+const commitStore = new CommitStore();
+log.info(`[sync] Commit store: ${commitStore.count()} commits`);
+
+const TruthSync = require('./core/truth-sync');
+
 const PrStore = require('./core/pr-store');
 const prStore = new PrStore();
 log.info(`[sync] PR store: ${prStore.count()} PRs`);
@@ -298,6 +304,44 @@ setInterval(() => {
   envPoller.start();
 
   datadogPoller.start();
+
+  // ── Truth Sync: git commits + per-ticket truth ─────────
+  const truthSync = new TruthSync(releases, repoManager, commitStore, ticketStore, prStore, config);
+
+  // Sync git commits for active release branches, then compute truth.
+  // Runs after a short delay to let JIRA/PR syncs finish on startup,
+  // then every 15 minutes staggered from JIRA sync.
+  const runTruthSync = async () => {
+    try {
+      // 1. Fetch latest from git
+      for (const repoConfig of config.repos || []) {
+        try {
+          await repoManager.fetch(repoConfig.name);
+        } catch (err) {
+          log.warn(`[truth-sync] Fetch failed for ${repoConfig.name}: ${err.message}`);
+        }
+      }
+
+      // 2. Sync commits for active release branches
+      const activeReleases = releases.active().filter(r => r.branch && r.repo);
+      for (const release of activeReleases) {
+        const repoConfig = config.repos.find(r => r.name === release.repo);
+        const jiraProject = repoConfig?.jiraProject || 'DEV';
+        await truthSync.syncCommitsForBranch(release.repo, release.branch, jiraProject);
+      }
+
+      // 3. Compute truth for all active releases
+      await truthSync.run();
+    } catch (err) {
+      log.error(`[truth-sync] Error: ${err.message}`);
+    }
+  };
+
+  // Initial run after 30s to let other syncs complete
+  setTimeout(runTruthSync, 30000);
+
+  // Then every 15 minutes
+  setInterval(runTruthSync, 15 * 60 * 1000);
 
   log.info('[sync] All sync engines started');
 })();

@@ -641,6 +641,161 @@ class TicketStore extends EventEmitter {
   }
 
   flush() { /* no-op — writes are synchronous */ }
+
+  // ── Truth persistence (ticket_truth table) ────────
+
+  /**
+   * Upsert truth for a ticket in a release.
+   * @param {string} jiraKey
+   * @param {string} repo
+   * @param {string} version
+   * @param {object} truthData - { health, healthCategory, healthMessage, onBranch, prNumber, prUrl, stage, inTarget, inFixVersion }
+   */
+  upsertTruth(jiraKey, repo, version, truthData) {
+    this.db.prepare(`
+      INSERT INTO ticket_truth (jiraKey, repo, version, health, healthCategory, healthMessage,
+                                onBranch, prNumber, prUrl, stage, inTarget, inFixVersion, computedAt)
+      VALUES (@jiraKey, @repo, @version, @health, @healthCategory, @healthMessage,
+              @onBranch, @prNumber, @prUrl, @stage, @inTarget, @inFixVersion, @computedAt)
+      ON CONFLICT(jiraKey, repo, version) DO UPDATE SET
+        health         = excluded.health,
+        healthCategory = excluded.healthCategory,
+        healthMessage  = excluded.healthMessage,
+        onBranch       = excluded.onBranch,
+        prNumber       = excluded.prNumber,
+        prUrl          = excluded.prUrl,
+        stage          = excluded.stage,
+        inTarget       = excluded.inTarget,
+        inFixVersion   = excluded.inFixVersion,
+        computedAt     = excluded.computedAt
+    `).run({
+      jiraKey,
+      repo,
+      version,
+      health: truthData.health,
+      healthCategory: truthData.healthCategory,
+      healthMessage: truthData.healthMessage || null,
+      onBranch: truthData.onBranch ? 1 : 0,
+      prNumber: truthData.prNumber || null,
+      prUrl: truthData.prUrl || null,
+      stage: truthData.stage || null,
+      inTarget: truthData.inTarget ? 1 : 0,
+      inFixVersion: truthData.inFixVersion ? 1 : 0,
+      computedAt: new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Batch upsert truth rows in a transaction.
+   * @param {Array<{jiraKey, repo, version, ...truthData}>} rows
+   */
+  upsertTruthBatch(rows) {
+    const stmt = this.db.prepare(`
+      INSERT INTO ticket_truth (jiraKey, repo, version, health, healthCategory, healthMessage,
+                                onBranch, prNumber, prUrl, stage, inTarget, inFixVersion, computedAt)
+      VALUES (@jiraKey, @repo, @version, @health, @healthCategory, @healthMessage,
+              @onBranch, @prNumber, @prUrl, @stage, @inTarget, @inFixVersion, @computedAt)
+      ON CONFLICT(jiraKey, repo, version) DO UPDATE SET
+        health         = excluded.health,
+        healthCategory = excluded.healthCategory,
+        healthMessage  = excluded.healthMessage,
+        onBranch       = excluded.onBranch,
+        prNumber       = excluded.prNumber,
+        prUrl          = excluded.prUrl,
+        stage          = excluded.stage,
+        inTarget       = excluded.inTarget,
+        inFixVersion   = excluded.inFixVersion,
+        computedAt     = excluded.computedAt
+    `);
+
+    const run = this.db.transaction((rows) => {
+      for (const row of rows) {
+        stmt.run({
+          jiraKey: row.jiraKey,
+          repo: row.repo,
+          version: row.version,
+          health: row.health,
+          healthCategory: row.healthCategory,
+          healthMessage: row.healthMessage || null,
+          onBranch: row.onBranch ? 1 : 0,
+          prNumber: row.prNumber || null,
+          prUrl: row.prUrl || null,
+          stage: row.stage || null,
+          inTarget: row.inTarget ? 1 : 0,
+          inFixVersion: row.inFixVersion ? 1 : 0,
+          computedAt: row.computedAt || new Date().toISOString(),
+        });
+      }
+    });
+    run(rows);
+  }
+
+  /**
+   * Get truth for a specific ticket across all releases.
+   * @param {string} jiraKey
+   * @returns {Array<object>}
+   */
+  getTruthForTicket(jiraKey) {
+    return this.db.prepare(
+      'SELECT * FROM ticket_truth WHERE jiraKey = ? ORDER BY version ASC'
+    ).all(jiraKey).map(truthFromRow);
+  }
+
+  /**
+   * Get truth for all tickets in a release.
+   * @param {string} repo
+   * @param {string} version
+   * @returns {Array<object>}
+   */
+  getTruthForRelease(repo, version) {
+    return this.db.prepare(
+      'SELECT * FROM ticket_truth WHERE repo = ? AND version = ? ORDER BY jiraKey ASC'
+    ).all(repo, version).map(truthFromRow);
+  }
+
+  /**
+   * Get truth rollup for a release (counts by healthCategory).
+   * @param {string} repo
+   * @param {string} version
+   * @returns {{ done: number, inQa: number, awaitingCp: number, inDev: number, attention: number, rogue: number }}
+   */
+  getTruthRollup(repo, version) {
+    const rows = this.db.prepare(`
+      SELECT healthCategory, COUNT(*) AS n
+      FROM ticket_truth WHERE repo = ? AND version = ?
+      GROUP BY healthCategory
+    `).all(repo, version);
+
+    const rollup = { done: 0, inQa: 0, awaitingCp: 0, inDev: 0, attention: 0, rogue: 0 };
+    for (const row of rows) {
+      switch (row.healthCategory) {
+        case 'done': rollup.done = row.n; break;
+        case 'in-qa': rollup.inQa = row.n; break;
+        case 'awaiting-cp': rollup.awaitingCp = row.n; break;
+        case 'in-dev': rollup.inDev = row.n; break;
+        case 'attention': rollup.attention = row.n; break;
+      }
+    }
+
+    // Count rogues separately (health='rogue' in attention category)
+    const rogueCount = this.db.prepare(
+      "SELECT COUNT(*) AS n FROM ticket_truth WHERE repo = ? AND version = ? AND health = 'rogue'"
+    ).get(repo, version).n;
+    rollup.rogue = rogueCount;
+
+    return rollup;
+  }
+
+  /**
+   * Clear truth for a release (before recompute).
+   * @param {string} repo
+   * @param {string} version
+   */
+  clearTruthForRelease(repo, version) {
+    this.db.prepare(
+      'DELETE FROM ticket_truth WHERE repo = ? AND version = ?'
+    ).run(repo, version);
+  }
 }
 
 // ── Row mapping ─────────────────────────────────────
@@ -708,6 +863,24 @@ function ticketFromRow(row) {
     created: row.created,
     updatedInJira: row.updatedInJira,
     syncedAt: row.syncedAt,
+  };
+}
+
+function truthFromRow(row) {
+  return {
+    jiraKey: row.jiraKey,
+    repo: row.repo,
+    version: row.version,
+    health: row.health,
+    healthCategory: row.healthCategory,
+    healthMessage: row.healthMessage,
+    onBranch: !!row.onBranch,
+    prNumber: row.prNumber,
+    prUrl: row.prUrl,
+    stage: row.stage,
+    inTarget: !!row.inTarget,
+    inFixVersion: !!row.inFixVersion,
+    computedAt: row.computedAt,
   };
 }
 

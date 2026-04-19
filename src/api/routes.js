@@ -1267,6 +1267,13 @@ module.exports = function createRoutes(services, config) {
 
   // ── Ticket lookup ─────────────────────────────────────
 
+  router.get('/tickets/:key/truth', (req, res) => {
+    if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
+    const key = req.params.key;
+    const truth = ticketStore.getTruthForTicket(key);
+    res.json({ key, truth });
+  });
+
   router.get('/tickets/:key/releases', (req, res) => {
     const key = req.params.key;
     if (!ticketStore) return res.json([]);

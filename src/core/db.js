@@ -371,6 +371,50 @@ function applySchema(db) {
       lastSyncError        TEXT,
       updatedAt            TEXT
     );
+
+    -- ── git_commits (persisted commit data per branch) ──────
+    CREATE TABLE IF NOT EXISTS git_commits (
+      sha          TEXT NOT NULL,
+      repo         TEXT NOT NULL,
+      branch       TEXT NOT NULL,
+      message      TEXT,
+      author       TEXT,
+      authorDate   TEXT,
+      isPostCut    INTEGER DEFAULT 0,
+      syncedAt     TEXT NOT NULL,
+      PRIMARY KEY (repo, sha, branch)
+    );
+    CREATE INDEX IF NOT EXISTS idx_gc_branch ON git_commits(repo, branch);
+    CREATE INDEX IF NOT EXISTS idx_gc_repo_sha ON git_commits(repo, sha);
+
+    -- ── commit_jira_keys (commit ↔ JIRA key junction) ───────
+    CREATE TABLE IF NOT EXISTS commit_jira_keys (
+      repo    TEXT NOT NULL,
+      sha     TEXT NOT NULL,
+      jiraKey TEXT NOT NULL,
+      PRIMARY KEY (repo, sha, jiraKey)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cjk_jiraKey ON commit_jira_keys(jiraKey);
+
+    -- ── ticket_truth (per-ticket per-release truth) ─────────
+    CREATE TABLE IF NOT EXISTS ticket_truth (
+      jiraKey        TEXT NOT NULL,
+      repo           TEXT NOT NULL,
+      version        TEXT NOT NULL,
+      health         TEXT NOT NULL,
+      healthCategory TEXT NOT NULL,
+      healthMessage  TEXT,
+      onBranch       INTEGER DEFAULT 0,
+      prNumber       INTEGER,
+      prUrl          TEXT,
+      stage          TEXT,
+      inTarget       INTEGER DEFAULT 0,
+      inFixVersion   INTEGER DEFAULT 0,
+      computedAt     TEXT NOT NULL,
+      PRIMARY KEY (jiraKey, repo, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tt_version ON ticket_truth(repo, version);
+    CREATE INDEX IF NOT EXISTS idx_tt_health ON ticket_truth(healthCategory);
   `);
 }
 
@@ -447,6 +491,53 @@ function applyMigrations(db) {
       if (deleted.changes > 0) {
         log.info(`DB migration v6: purged ${deleted.changes} bulk audit entries`);
       }
+    },
+    // v7: Add git_commits, commit_jira_keys, and ticket_truth tables.
+    // Fresh installs already have these via CREATE TABLE IF NOT EXISTS in applySchema.
+    // This migration is a no-op for fresh installs (tables already exist).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS git_commits (
+          sha          TEXT NOT NULL,
+          repo         TEXT NOT NULL,
+          branch       TEXT NOT NULL,
+          message      TEXT,
+          author       TEXT,
+          authorDate   TEXT,
+          isPostCut    INTEGER DEFAULT 0,
+          syncedAt     TEXT NOT NULL,
+          PRIMARY KEY (repo, sha, branch)
+        );
+        CREATE INDEX IF NOT EXISTS idx_gc_branch ON git_commits(repo, branch);
+        CREATE INDEX IF NOT EXISTS idx_gc_repo_sha ON git_commits(repo, sha);
+
+        CREATE TABLE IF NOT EXISTS commit_jira_keys (
+          repo    TEXT NOT NULL,
+          sha     TEXT NOT NULL,
+          jiraKey TEXT NOT NULL,
+          PRIMARY KEY (repo, sha, jiraKey)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cjk_jiraKey ON commit_jira_keys(jiraKey);
+
+        CREATE TABLE IF NOT EXISTS ticket_truth (
+          jiraKey        TEXT NOT NULL,
+          repo           TEXT NOT NULL,
+          version        TEXT NOT NULL,
+          health         TEXT NOT NULL,
+          healthCategory TEXT NOT NULL,
+          healthMessage  TEXT,
+          onBranch       INTEGER DEFAULT 0,
+          prNumber       INTEGER,
+          prUrl          TEXT,
+          stage          TEXT,
+          inTarget       INTEGER DEFAULT 0,
+          inFixVersion   INTEGER DEFAULT 0,
+          computedAt     TEXT NOT NULL,
+          PRIMARY KEY (jiraKey, repo, version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tt_version ON ticket_truth(repo, version);
+        CREATE INDEX IF NOT EXISTS idx_tt_health ON ticket_truth(healthCategory);
+      `);
     },
   ];
 
