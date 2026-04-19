@@ -308,14 +308,10 @@ class ReleaseManager extends EventEmitter {
       });
     }
 
-    // Update matching ticket state in TicketStore
-    if (cp.ticket && this._ticketStore) {
-      const ticket = this._ticketStore.get(cp.ticket);
-      if (ticket) {
-        ticket.state = cp.status === 'merged' ? 'cherry-picked' : 'in-progress';
-        this._ticketStore.upsert(ticket);
-      }
-    }
+    // NOTE: We no longer update the global ticket state here.
+    // Cherry-pick status is per-release, stored in ticket_truth table.
+    // The global jira_tickets.state reflects the JIRA workflow status
+    // and should only be updated by JIRA sync or webhook.
 
     release.updatedAt = new Date().toISOString();
     this._upsertRow(this._keyOf(release), release);

@@ -180,12 +180,13 @@ describe('ReleaseManager', () => {
       expect(r.cherryPicks[0].status).toBe('merged');
     });
 
-    it('updates matching ticket state on cherry-pick merge', () => {
+    it('does not modify global ticket state on cherry-pick (per-release truth handles this)', () => {
       rm.create({ version: '4.2.0' });
       rm.addTicket('4.2.0', { key: 'DEV-100', state: 'pending' });
       rm.addCherryPick('4.2.0', { sha: 'abc', ticket: 'DEV-100', status: 'merged' });
       const r = rm.get('4.2.0');
-      expect(rm.getTickets(r)[0].state).toBe('cherry-picked');
+      // Global ticket state stays unchanged — cherry-pick status is per-release via ticket_truth
+      expect(rm.getTickets(r)[0].state).toBe('pending');
     });
 
     it('updates existing cherry-pick by SHA', () => {

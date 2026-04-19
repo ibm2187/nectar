@@ -1103,9 +1103,10 @@ module.exports = function createRoutes(services, config) {
     const allVersions = new Set([...(ticket.fixVersions || []), ...(ticket.targetFixVersions || [])]);
     const result = [];
     for (const v of allVersions) {
-      const release = releases.list().find(r => r.version === v);
-      if (release) {
-        result.push({ version: release.version, state: release.state, ticketState: ticket.state });
+      // Find ALL releases matching this version (multiple repos can share version numbers)
+      const matching = releases.list().filter(r => r.version === v);
+      for (const release of matching) {
+        result.push({ repo: release.repo, version: release.version, state: release.state, ticketState: ticket.state });
       }
     }
     res.json(result);

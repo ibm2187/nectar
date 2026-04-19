@@ -159,17 +159,26 @@ class TicketStore extends EventEmitter {
    * Returns tickets with release membership info (source: 'both'|'target'|'fixVersion').
    */
   getForVersion(version) {
+    // Match both clean version ("2026.4.0") and prefixed forms ("iOS 2026.4.0", "Android 2026.4.0")
+    // JIRA stores the prefixed form in fixVersions; releases store the clean form.
     const pattern = `%"${version}"%`;
+    const prefixedPatterns = [
+      `%"iOS ${version}"%`,
+      `%"Android ${version}"%`,
+    ];
     const rows = this.db.prepare(`
       SELECT * FROM jira_tickets
       WHERE fixVersions LIKE ? OR targetFixVersions LIKE ?
+         OR fixVersions LIKE ? OR targetFixVersions LIKE ?
+         OR fixVersions LIKE ? OR targetFixVersions LIKE ?
       ORDER BY key ASC
-    `).all(pattern, pattern);
+    `).all(pattern, pattern, prefixedPatterns[0], prefixedPatterns[0], prefixedPatterns[1], prefixedPatterns[1]);
 
     return rows.map(row => {
       const ticket = ticketFromRow(row);
-      const inFix = ticket.fixVersions.includes(version);
-      const inTarget = ticket.targetFixVersions.includes(version);
+      // Check membership with both clean and prefixed version names
+      const inFix = ticket.fixVersions.some(v => v === version || v === `iOS ${version}` || v === `Android ${version}`);
+      const inTarget = ticket.targetFixVersions.some(v => v === version || v === `iOS ${version}` || v === `Android ${version}`);
       ticket._releaseSource = inFix && inTarget ? 'both' : inTarget ? 'target' : 'fixVersion';
       return ticket;
     });
@@ -192,11 +201,15 @@ class TicketStore extends EventEmitter {
    */
   getKeysForVersion(version) {
     const pattern = `%"${version}"%`;
+    const iosPattern = `%"iOS ${version}"%`;
+    const androidPattern = `%"Android ${version}"%`;
     return this.db.prepare(`
       SELECT key FROM jira_tickets
       WHERE fixVersions LIKE ? OR targetFixVersions LIKE ?
+         OR fixVersions LIKE ? OR targetFixVersions LIKE ?
+         OR fixVersions LIKE ? OR targetFixVersions LIKE ?
       ORDER BY key ASC
-    `).all(pattern, pattern).map(r => r.key);
+    `).all(pattern, pattern, iosPattern, iosPattern, androidPattern, androidPattern).map(r => r.key);
   }
 
   // ── Search ────────────────────────────────────────
