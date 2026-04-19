@@ -238,6 +238,10 @@ class TicketStore extends EventEmitter {
       conditions.push('projects LIKE ?');
       params.push(`%"${opts.project}"%`);
     }
+    if (opts.person) {
+      conditions.push('(assignee = ? OR qaAssignee = ?)');
+      params.push(opts.person, opts.person);
+    }
     if (opts.product) {
       conditions.push('product LIKE ?');
       params.push(`%"${opts.product}"%`);
@@ -381,6 +385,10 @@ class TicketStore extends EventEmitter {
         params.push(...statuses);
       }
     }
+    if (opts.person) {
+      conditions.push('(jt.assignee = ? OR jt.qaAssignee = ?)');
+      params.push(opts.person, opts.person);
+    }
 
     const where = 'WHERE ' + conditions.join(' AND ');
 
@@ -517,7 +525,16 @@ class TicketStore extends EventEmitter {
       ) ORDER BY value
     `).all().map(r => r.value);
 
-    return { modules, components, customers, projects, products };
+    // People: union of assignees and QA assignees
+    const people = this.db.prepare(`
+      SELECT DISTINCT name FROM (
+        SELECT assignee AS name FROM jira_tickets WHERE assignee IS NOT NULL
+        UNION
+        SELECT qaAssignee AS name FROM jira_tickets WHERE qaAssignee IS NOT NULL
+      ) ORDER BY name
+    `).all().map(r => r.name);
+
+    return { modules, components, customers, projects, products, people };
   }
 
   getStats() {

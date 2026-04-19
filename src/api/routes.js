@@ -1182,10 +1182,10 @@ module.exports = function createRoutes(services, config) {
 
   router.get('/tickets/cut-scope', (req, res) => {
     if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
-    const { sort, sortDir, q, module, statusGroup } = req.query;
+    const { sort, sortDir, q, module, statusGroup, person } = req.query;
     const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
-    res.json(enrichWithReleases(enrichWithPrs(ticketStore.getCutScope({ sort, sortDir, search: q, module, statusGroup, limit, offset }))));
+    res.json(enrichWithReleases(enrichWithPrs(ticketStore.getCutScope({ sort, sortDir, search: q, module, statusGroup, person, limit, offset }))));
   });
 
   router.get('/tickets/triage', (req, res) => {
@@ -1211,7 +1211,7 @@ module.exports = function createRoutes(services, config) {
 
   router.get('/tickets/search', (req, res) => {
     if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
-    const { q, statusCategory, assignee, type, module, component, customer, project, product, sort, sortDir, statusGroup } = req.query;
+    const { q, statusCategory, assignee, type, module, component, customer, project, product, sort, sortDir, statusGroup, person } = req.query;
     const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
     const hasFixVersion = req.query.hasFixVersion === 'true' ? true : req.query.hasFixVersion === 'false' ? false : undefined;
@@ -1221,7 +1221,7 @@ module.exports = function createRoutes(services, config) {
     if (q) {
       res.json(enrichWithReleases(enrichWithPrs(ticketStore.search(q, { limit, offset }))));
     } else {
-      res.json(enrichWithReleases(enrichWithPrs(ticketStore.getByFilter({ statusCategory, assignee, type, module, component, customer, project, product, hasFixVersion, createdSince, excludeStatuses, excludeStatusCategory, statusGroup, sort, sortDir, limit, offset }))));
+      res.json(enrichWithReleases(enrichWithPrs(ticketStore.getByFilter({ statusCategory, assignee, type, module, component, customer, project, product, person, hasFixVersion, createdSince, excludeStatuses, excludeStatusCategory, statusGroup, sort, sortDir, limit, offset }))));
     }
   });
 
@@ -1969,23 +1969,66 @@ module.exports = function createRoutes(services, config) {
     const customerFilter = req.query.customer || null;
     const projectFilter = req.query.project || null;
     const productFilter = req.query.product || null;
+    const moduleFilter = req.query.module || null;
+    const statusFilter = req.query.status || null; // 'done' or 'notdone'
+    const labelFilter = req.query.label || null;
+    const personFilter = req.query.person || null; // matches assignee OR qaAssignee
+    const zoom = req.query.zoom || 'month'; // 'month' or 'week'
     const activeReleases = releases.active().filter(r => !r.jiraArchived);
 
-    // ── Build time buckets: monthly columns for 12 months forward ───
+    // ── Build time buckets ───
     const now = new Date();
     const months = [];
-    for (let i = 0; i < 12; i++) {
-      const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-      months.push({
-        key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
-        label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
-        start: d.toISOString().slice(0, 10),
-        end: new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10),
-      });
+
+    if (zoom === 'week') {
+      // Weekly buckets: 12 weeks forward
+      // Find Monday of the current week
+      const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon...
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - ((dayOfWeek + 6) % 7)); // back to Monday
+      monday.setHours(0, 0, 0, 0);
+
+      for (let i = 0; i < 12; i++) {
+        const weekStart = new Date(monday);
+        weekStart.setDate(monday.getDate() + i * 7);
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekStart.getDate() + 6);
+
+        // ISO week number
+        const jan4 = new Date(weekStart.getFullYear(), 0, 4);
+        const dayDiff = Math.floor((weekStart - jan4) / 86400000);
+        const weekNum = Math.ceil((dayDiff + jan4.getDay() + 1) / 7);
+
+        months.push({
+          key: `${weekStart.getFullYear()}-W${String(weekNum).padStart(2, '0')}`,
+          label: weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          start: weekStart.toISOString().slice(0, 10),
+          end: weekEnd.toISOString().slice(0, 10),
+        });
+      }
+    } else {
+      // Monthly buckets: 12 months forward (original behavior)
+      for (let i = 0; i < 12; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+        months.push({
+          key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+          label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+          start: d.toISOString().slice(0, 10),
+          end: new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10),
+        });
+      }
     }
 
-    function getMonthKey(dateStr) {
+    function getTimeBucketKey(dateStr) {
       if (!dateStr) return null;
+      if (zoom === 'week') {
+        // Find which weekly bucket this date falls into
+        const d = new Date(dateStr);
+        for (const bucket of months) {
+          if (d >= new Date(bucket.start) && d <= new Date(bucket.end)) return bucket.key;
+        }
+        return null; // date outside our 12-week window
+      }
       return dateStr.slice(0, 7);
     }
 
@@ -2006,10 +2049,14 @@ module.exports = function createRoutes(services, config) {
     const moduleGrid = new Map();
     const allCustomers = new Set();
     const allProjects = new Set();
+    const allLabels = new Set();
+    const allPeople = new Set();
+
+    const allModules = new Set();
 
     for (const release of activeReleases) {
-      const monthKey = getMonthKey(release.jiraReleaseDate);
-      const effectiveMonth = monthKey || 'unscheduled';
+      const bucketKey = getTimeBucketKey(release.jiraReleaseDate);
+      const effectiveMonth = bucketKey || 'unscheduled';
       const releaseCustomers = deriveCustomers(release);
       releaseCustomers.forEach(c => allCustomers.add(c));
 
@@ -2029,8 +2076,35 @@ module.exports = function createRoutes(services, config) {
         const ticketProduct = Array.isArray(ticket.product) ? ticket.product : [];
         if (productFilter && !ticketProduct.some(p => p.toLowerCase() === productFilter.toLowerCase())) continue;
 
+        // Label collection and filter
+        const ticketLabels = Array.isArray(ticket.labels) ? ticket.labels : [];
+        ticketLabels.forEach(l => allLabels.add(l));
+        if (labelFilter && !ticketLabels.some(l => l.toLowerCase() === labelFilter.toLowerCase())) continue;
+
+        // Person collection and filter (assignee OR qaAssignee)
+        if (ticket.assignee) allPeople.add(ticket.assignee);
+        if (ticket.qaAssignee) allPeople.add(ticket.qaAssignee);
+        if (personFilter) {
+          const pf = personFilter.toLowerCase();
+          const matchesAssignee = ticket.assignee && ticket.assignee.toLowerCase() === pf;
+          const matchesQa = ticket.qaAssignee && ticket.qaAssignee.toLowerCase() === pf;
+          if (!matchesAssignee && !matchesQa) continue;
+        }
+
+        // Status filter: filter individual tickets by done/not-done
+        if (statusFilter) {
+          const ticketState = (ticket.state || '').toLowerCase();
+          const isDone = ['done', 'cherry-picked', 'ready-for-testing'].includes(ticketState);
+          if (statusFilter === 'done' && !isDone) continue;
+          if (statusFilter === 'notdone' && isDone) continue;
+        }
+
         const mod = ticket.module || 'Uncategorized';
         const comp = ticket.component || 'Other';
+        allModules.add(mod);
+
+        // Module filter: skip tickets not in the selected module
+        if (moduleFilter && mod.toLowerCase() !== moduleFilter.toLowerCase()) continue;
 
         if (!moduleGrid.has(mod)) moduleGrid.set(mod, { components: new Map(), allTickets: [] });
         const modEntry = moduleGrid.get(mod);
@@ -2046,6 +2120,16 @@ module.exports = function createRoutes(services, config) {
     // Merge release-derived customers with ticket-level customers
     for (const c of filterOptions.customers) allCustomers.add(c);
     for (const p of filterOptions.projects) allProjects.add(p);
+
+    // ── Helper: classify ticket type into feature/bug/task ────
+    const CUSTOMER_PRIORITY_ORDER = { 'urgent': 0, 'high': 1, 'medium': 2, 'low': 3, 'internal only': 4 };
+    function classifyTicketType(type) {
+      if (!type) return 'tasks';
+      const t = type.toLowerCase();
+      if (t === 'story' || t === 'feature' || t === 'epic') return 'features';
+      if (t === 'bug') return 'bugs';
+      return 'tasks';
+    }
 
     // ── Helper: summarize a group of tickets per release ────
     function summarizeByRelease(entries) {
@@ -2071,6 +2155,36 @@ module.exports = function createRoutes(services, config) {
         const { tickets, ...meta } = group;
         const done = tickets.filter(t => ['done', 'cherry-picked', 'ready-for-testing'].includes((t.state || '').toLowerCase())).length;
         const inProgress = tickets.filter(t => (t.state || '').toLowerCase() === 'in-progress').length;
+
+        // Ticket type breakdown
+        const ticketBreakdown = { features: 0, tasks: 0, bugs: 0 };
+        for (const t of tickets) {
+          ticketBreakdown[classifyTicketType(t.type)]++;
+        }
+
+        // Top tickets: sorted by customer priority (urgent first), then type (features first)
+        const topTickets = tickets
+          .map(t => ({
+            key: t.key,
+            summary: t.summary || '',
+            type: t.type || null,
+            status: t.jiraStatus || t.status || 'Unknown',
+            customerPriority: t.customerPriority || null,
+            assignee: t.assignee || null,
+          }))
+          .sort((a, b) => {
+            // Sort by customer priority ascending (urgent=0 first, null last)
+            const aPri = a.customerPriority ? (CUSTOMER_PRIORITY_ORDER[a.customerPriority.toLowerCase()] ?? 5) : 99;
+            const bPri = b.customerPriority ? (CUSTOMER_PRIORITY_ORDER[b.customerPriority.toLowerCase()] ?? 5) : 99;
+            if (aPri !== bPri) return aPri - bPri;
+            // Then by type: features first
+            const aType = classifyTicketType(a.type);
+            const bType = classifyTicketType(b.type);
+            const typeOrder = { features: 0, tasks: 1, bugs: 2 };
+            return (typeOrder[aType] || 1) - (typeOrder[bType] || 1);
+          })
+          .slice(0, 5);
+
         cards.push({
           ...meta,
           tickets: tickets.length,
@@ -2078,6 +2192,8 @@ module.exports = function createRoutes(services, config) {
           inProgress,
           pending: tickets.length - done - inProgress,
           progress: tickets.length > 0 ? Math.round((done / tickets.length) * 100) : 0,
+          ticketBreakdown,
+          topTickets,
         });
       }
       return cards;
@@ -2136,7 +2252,7 @@ module.exports = function createRoutes(services, config) {
             progress: compTotal > 0 ? Math.round((compDone / compTotal) * 100) : 0,
           };
         })
-        .sort((a, b) => b.totalTickets - a.totalTickets);
+        .sort((a, b) => a.name.localeCompare(b.name));
 
       return {
         name: mod,
@@ -2149,11 +2265,15 @@ module.exports = function createRoutes(services, config) {
     });
 
     res.json({
+      zoom,
       months,
       modules,
       customers: Array.from(allCustomers).sort(),
       projects: Array.from(allProjects).sort(),
       products: filterOptions.products || [],
+      allModules: Array.from(allModules).sort(),
+      allLabels: Array.from(allLabels).sort(),
+      allPeople: Array.from(allPeople).sort(),
       stats: {
         totalModules: modules.length,
         totalReleases: activeReleases.length,
@@ -2168,6 +2288,7 @@ module.exports = function createRoutes(services, config) {
     const moduleName = decodeURIComponent(req.params.module);
     const version = decodeURIComponent(req.params.version);
     const componentFilter = req.query.component || null;
+    const typeFilter = req.query.type || null; // 'features', 'bugs', or 'tasks'
 
     const release = releases.get(version) || releases.active().find(r => r.version === version);
     if (!release) return res.status(404).json({ error: 'Release not found' });
@@ -2177,6 +2298,14 @@ module.exports = function createRoutes(services, config) {
       const ticketModule = ticket.module || 'Uncategorized';
       if (ticketModule !== moduleName) continue;
       if (componentFilter && (ticket.component || 'Other') !== componentFilter) continue;
+
+      // Type filter: classify ticket type and filter
+      if (typeFilter) {
+        const ticketType = (ticket.type || '').toLowerCase();
+        if (typeFilter === 'features' && ticketType !== 'story' && ticketType !== 'feature' && ticketType !== 'epic') continue;
+        if (typeFilter === 'bugs' && ticketType !== 'bug') continue;
+        if (typeFilter === 'tasks' && (ticketType === 'story' || ticketType === 'feature' || ticketType === 'epic' || ticketType === 'bug')) continue;
+      }
 
       const targetVersions = Array.isArray(ticket.targetFixVersions) ? ticket.targetFixVersions : [];
       const fixVersions = Array.isArray(ticket.fixVersions) ? ticket.fixVersions : [];
@@ -2189,6 +2318,8 @@ module.exports = function createRoutes(services, config) {
         jiraStatus: ticket.jiraStatus || ticket.status || 'Unknown',
         state: ticket.state || 'pending',
         type: ticket.type || null,
+        priority: ticket.priority || null,
+        customerPriority: ticket.customerPriority || null,
         assignee: ticket.assignee || null,
         module: ticket.module || null,
         component: ticket.component || null,

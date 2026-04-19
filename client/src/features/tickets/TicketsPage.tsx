@@ -104,6 +104,7 @@ interface FilterOptions {
   customers: string[]
   projects: string[]
   products: string[]
+  people: string[]
 }
 
 // ── Page ───────────────────────────────────────────────
@@ -426,7 +427,7 @@ type HomeSortKey = 'key' | 'summary' | 'status' | 'priority' | 'risk' | 'custome
 
 interface BuildUrlParams {
   offset: number; limit: number; sort: FlatSortKey; sortDir: 'asc' | 'desc'
-  search: string; module: string; statusGroup: StatusGroup
+  search: string; module: string; person: string; statusGroup: StatusGroup
 }
 
 function ServerTicketTable({
@@ -452,6 +453,7 @@ function ServerTicketTable({
   const [sort] = useState<FlatSortKey>('created')
   const [sortDir] = useState<'asc' | 'desc'>('desc')
   const [moduleFilter, setModuleFilter] = useState('')
+  const [personFilter, setPersonFilter] = useState('')
   const [statusGroup, setStatusGroup] = useState<StatusGroup>('all')
   const [filterOptions, setFilterOptions] = useState<FilterOptions | null>(null)
 
@@ -469,12 +471,12 @@ function ServerTicketTable({
 
   useEffect(() => {
     setLoading(true)
-    const url = buildUrl({ offset, limit: PAGE_SIZE, sort, sortDir, search: debouncedSearch, module: moduleFilter, statusGroup })
+    const url = buildUrl({ offset, limit: PAGE_SIZE, sort, sortDir, search: debouncedSearch, module: moduleFilter, person: personFilter, statusGroup })
     apiFetch<FlatTicketsResponse>(url)
       .then(setData)
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [offset, sort, sortDir, debouncedSearch, moduleFilter, statusGroup, buildUrl])
+  }, [offset, sort, sortDir, debouncedSearch, moduleFilter, personFilter, statusGroup, buildUrl])
 
   // Release filter chips — multi-select with OR semantics (same as Home)
   const [selectedReleases, setSelectedReleases] = useState<Set<string>>(new Set())
@@ -618,12 +620,20 @@ function ServerTicketTable({
               <option value="">All Modules</option>
               {filterOptions.modules.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
+            <select
+              value={personFilter}
+              onChange={e => { setPersonFilter(e.target.value); setOffset(0) }}
+              className="h-8 px-2 text-sm rounded-md border bg-background text-foreground"
+            >
+              <option value="">All People</option>
+              {filterOptions.people.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
           </>
         )}
         {extraControls}
-        {(search || moduleFilter || statusGroup !== 'all') && (
+        {(search || moduleFilter || personFilter || statusGroup !== 'all') && (
           <button
-            onClick={() => { setSearch(''); setModuleFilter(''); setStatusGroup('all'); setOffset(0) }}
+            onClick={() => { setSearch(''); setModuleFilter(''); setPersonFilter(''); setStatusGroup('all'); setOffset(0) }}
             className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-accent/50"
           >
             Clear filters
@@ -707,7 +717,7 @@ function ServerTicketTable({
 // ── Cut Scope tab ─────────────────────────────────────
 
 function CutScopeTab() {
-  const buildUrl = useCallback(({ offset, limit, sort, sortDir, search, module, statusGroup }: BuildUrlParams) => {
+  const buildUrl = useCallback(({ offset, limit, sort, sortDir, search, module, person, statusGroup }: BuildUrlParams) => {
     const params = new URLSearchParams()
     params.set('limit', String(limit))
     params.set('offset', String(offset))
@@ -715,6 +725,7 @@ function CutScopeTab() {
     params.set('sortDir', sortDir)
     if (search) params.set('q', search)
     if (module) params.set('module', module)
+    if (person) params.set('person', person)
     if (statusGroup && statusGroup !== 'all') params.set('statusGroup', statusGroup)
     return `/tickets/cut-scope?${params}`
   }, [])
@@ -734,7 +745,7 @@ function CutScopeTab() {
 function TriageTab() {
   const [days, setDays] = useState(7)
 
-  const buildUrl = useCallback(({ offset, limit, sort, sortDir, search, module, statusGroup }: BuildUrlParams) => {
+  const buildUrl = useCallback(({ offset, limit, sort, sortDir, search, module, person, statusGroup }: BuildUrlParams) => {
     const params = new URLSearchParams()
     if (statusGroup && statusGroup !== 'all') {
       params.set('statusGroup', statusGroup)
@@ -751,6 +762,7 @@ function TriageTab() {
     params.set('sortDir', sortDir)
     if (search) params.set('q', search)
     if (module) params.set('module', module)
+    if (person) params.set('person', person)
     return `/tickets/search?${params}`
   }, [days])
 
@@ -789,7 +801,7 @@ function TriageTab() {
 // ── All Tickets tab ───────────────────────────────────
 
 function AllTicketsTab() {
-  const buildUrl = useCallback(({ offset, limit, sort, sortDir, search, module, statusGroup }: BuildUrlParams) => {
+  const buildUrl = useCallback(({ offset, limit, sort, sortDir, search, module, person, statusGroup }: BuildUrlParams) => {
     const params = new URLSearchParams()
     params.set('limit', String(limit))
     params.set('offset', String(offset))
@@ -797,6 +809,7 @@ function AllTicketsTab() {
     params.set('sortDir', sortDir)
     if (search) params.set('q', search)
     if (module) params.set('module', module)
+    if (person) params.set('person', person)
     if (statusGroup && statusGroup !== 'all') params.set('statusGroup', statusGroup)
     return `/tickets/search?${params}`
   }, [])
