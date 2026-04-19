@@ -163,9 +163,10 @@ module.exports = function createRoutes(services, config) {
     let list = releases.list();
     // Exclude done/archived
     list = list.filter(r => r.state !== 'done' && !r.jiraArchived);
-    // Include: overdue (past release date) OR upcoming (within horizon) OR no date (unscheduled active)
+    // Include: overdue (past release date) OR upcoming (within horizon)
+    // Unscheduled releases (no date) are excluded from the home view
     list = list.filter(r => {
-      if (!r.jiraReleaseDate) return true; // unscheduled active
+      if (!r.jiraReleaseDate) return false; // no date = not scheduled, hide
       if (r.jiraReleaseDate < today) return true; // overdue
       if (r.jiraReleaseDate <= horizon) return true; // upcoming
       return false;
