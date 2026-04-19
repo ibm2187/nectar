@@ -252,8 +252,8 @@ export function ReleaseDetail() {
   // Timeline progress: how far between cut → release date are we?
   const timelineProgress = (() => {
     if (!cutDate || !releaseDate) return null
-    const start = new Date(cutDate).getTime()
-    const end = new Date(releaseDate).getTime()
+    const start = new Date(cutDate + 'T00:00:00').getTime()
+    const end = new Date(releaseDate + 'T00:00:00').getTime()
     const now = Date.now()
     if (end <= start) return 100
     return Math.min(100, Math.max(0, Math.round(((now - start) / (end - start)) * 100)))

@@ -202,12 +202,12 @@ class JiraSync extends EventEmitter {
         // Unreleased with near-future or recent release date
         if (!v.released) {
           if (!v.releaseDate) return true; // No date, include it
-          const relDate = new Date(v.releaseDate).getTime();
+          const relDate = new Date(v.releaseDate + 'T00:00:00').getTime();
           return relDate > (now - NINETY_DAYS_MS); // Release date within 90 days past/future
         }
         // Released recently
         if (v.releaseDate) {
-          const relDate = new Date(v.releaseDate).getTime();
+          const relDate = new Date(v.releaseDate + 'T00:00:00').getTime();
           return (now - relDate) < FOURTEEN_DAYS_MS;
         }
         return false;

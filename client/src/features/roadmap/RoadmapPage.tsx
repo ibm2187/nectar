@@ -783,7 +783,7 @@ function CardViewReleaseCard({ card, onClick }: { card: ReleaseCard; onClick: ()
     card.progress > 0 ? '🟡' : '🔵'
 
   const dateStr = card.jiraReleaseDate
-    ? new Date(card.jiraReleaseDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    ? new Date(card.jiraReleaseDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     : 'Unscheduled'
 
   return (
