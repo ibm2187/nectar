@@ -328,27 +328,12 @@ class ReleaseTruth {
     const branchHasCommits = branchExists && gitCommits.length > 0;
     const verified = jiraTickets.map(t => this._verifyTicket(t, gitKeys, prByKey, branchHasCommits, version));
 
-    // ── 5. Find rogue keys ────────────────────────────────
-    // Rogues = JIRA keys cherry-picked POST-CUT but not in ANY release for this repo.
-    // Inherited commits (from parent releases like 4.1.3 appearing on 4.1.4) are excluded.
-    const allRepoVersions = new Set(
-      this.releases.list({ repo }).map(r => r.version)
-    );
+    // ── 5. Rogue detection skipped in base truth ──────────
+    // Rogues only make sense in the impact view (computeImpact) where we
+    // know the prod version and can compute a proper delta. Without that
+    // context, post-cut keys from parent/sibling releases cause massive
+    // false positives.
     const rogueKeys = [];
-    for (const key of pickedKeys) {
-      if (jiraKeys.has(key)) continue; // in this release — not rogue
-
-      // Check if the ticket belongs to any release in the same repo
-      if (this.releases._ticketStore) {
-        const ticket = this.releases._ticketStore.get(key);
-        if (ticket) {
-          const ticketVersions = [...(ticket.fixVersions || []), ...(ticket.targetFixVersions || [])];
-          if (ticketVersions.some(v => allRepoVersions.has(v))) continue;
-        }
-      }
-
-      rogueKeys.push(key);
-    }
 
     // Enrich rogues with JIRA ticket data so they render like real tickets
     const rogues = [];
