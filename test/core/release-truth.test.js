@@ -4,7 +4,7 @@ const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
 const ReleaseTruth = require('../../src/core/release-truth');
 const { createTestDb } = require('../../src/core/db');
-
+const TicketStore = require('../../src/core/ticket-store');
 describe('ReleaseTruth', () => {
   let audit, releases, truth, db;
   let mockRepoManager, mockGithub, mockJira;
@@ -43,6 +43,7 @@ describe('ReleaseTruth', () => {
     db = createTestDb();
     audit = new Audit({ db });
     releases = new ReleaseManager(audit, { db });
+    releases.setTicketStore(new TicketStore({ db }));
 
     mockRepoManager = {
       fetch: vi.fn().mockResolvedValue(undefined),

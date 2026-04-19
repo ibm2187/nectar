@@ -300,7 +300,7 @@ class ZohoSync extends EventEmitter {
 
     for (const release of activeReleases) {
       const releaseKey = this.releases._key(release.repo, release.version);
-      for (const ticket of (release.tickets || [])) {
+      for (const ticket of this.releases.getTickets(release)) {
         if (!ticket.key) continue;
         if (!index.has(ticket.key)) index.set(ticket.key, []);
         index.get(ticket.key).push({ releaseKey, ticket });

@@ -6,6 +6,7 @@ const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
 const ApprovalEngine = require('../../src/core/approvals');
 const ThemeConfig = require('../../src/core/theme-config');
+const TicketStore = require('../../src/core/ticket-store');
 const createRoutes = require('../../src/api/routes');
 const { createTestDb } = require('../../src/core/db');
 
@@ -14,10 +15,12 @@ function createMockServices() {
   const db = createTestDb();
   const audit = new Audit({ db });
   const releases = new ReleaseManager(audit, { db });
+  const ticketStore = new TicketStore({ db });
+  releases.setTicketStore(ticketStore);
   const themeConfig = new ThemeConfig({ db });
 
   return {
-    releases,
+    releases, ticketStore,
     repoManager: { getStatus: () => [] },
     github: {
       isConfigured: () => false,
@@ -325,13 +328,16 @@ describe('API Routes', () => {
   });
 
   describe('GET /api/roadmap', () => {
-    it('returns roadmap structure', async () => {
+    it('returns roadmap structure with modules', async () => {
       const { app } = createTestApp();
       const res = await request(app, 'GET', '/api/roadmap');
       expect(res.status).toBe(200);
       expect(res.body.months).toBeDefined();
-      expect(res.body.themes).toBeDefined();
+      expect(res.body.modules).toBeDefined();
       expect(res.body.customers).toBeDefined();
+      expect(res.body.projects).toBeDefined();
+      expect(res.body.products).toBeDefined();
+      expect(res.body.stats).toBeDefined();
     });
   });
 

@@ -197,7 +197,7 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth, taskQueu
             jiraVersionName: release.jiraVersionName,
             jiraReleased: release.jiraReleased,
             jiraReleaseDate: release.jiraReleaseDate,
-            ticketCount: (release.tickets || []).length,
+            ticketCount: releases.getTickets(release).length,
             cherryPickCount: (release.cherryPicks || []).length,
           }, null, 2),
         }],
@@ -287,7 +287,7 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth, taskQueu
         repo: r.repo,
         state: r.state,
         branch: r.branch,
-        tickets: (r.tickets || []).length,
+        tickets: releases.getTickets(r).length,
         jiraReleaseDate: r.jiraReleaseDate,
       }));
       return { content: [{ type: 'text', text: JSON.stringify({ count: summary.length, releases: summary }, null, 2) }] };

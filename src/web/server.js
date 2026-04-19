@@ -187,10 +187,18 @@ function createWebServer(services, config) {
     }
   });
 
+  // Enrich a release with tickets from TicketStore for WebSocket payloads
+  function enrichRelease(r) {
+    return { ...r, tickets: releases.getTickets(r) };
+  }
+  function enrichedReleaseList() {
+    return releases.list().map(enrichRelease);
+  }
+
   function sendInitialState(ws) {
     ws.send(JSON.stringify({
       type: 'init',
-      releases: releases.list(),
+      releases: enrichedReleaseList(),
       customers: customerStore ? customerStore.listCustomers() : [],
       environments: customerStore ? customerStore.listEnvironments() : [],
       config: {
@@ -202,34 +210,34 @@ function createWebServer(services, config) {
 
   // ── Bridge events → WebSocket broadcasts ──────────────
   releases.on('release:created', (release) =>
-    broadcast({ type: 'release:created', release })
+    broadcast({ type: 'release:created', release: enrichRelease(release) })
   );
   releases.on('release:updated', (release) =>
-    broadcast({ type: 'release:updated', release })
+    broadcast({ type: 'release:updated', release: enrichRelease(release) })
   );
   releases.on('release:transition', (release, transition) =>
-    broadcast({ type: 'release:transition', release, transition })
+    broadcast({ type: 'release:transition', release: enrichRelease(release), transition })
   );
   releases.on('release:deleted', (version) =>
     broadcast({ type: 'release:deleted', version })
   );
   releases.on('cherry-pick:added', (release) =>
-    broadcast({ type: 'release:updated', release })
+    broadcast({ type: 'release:updated', release: enrichRelease(release) })
   );
   releases.on('approval:added', (release) =>
-    broadcast({ type: 'release:updated', release })
+    broadcast({ type: 'release:updated', release: enrichRelease(release) })
   );
   releases.on('deployment:added', (release) =>
-    broadcast({ type: 'release:updated', release })
+    broadcast({ type: 'release:updated', release: enrichRelease(release) })
   );
   releases.on('deployment:updated', (release) =>
-    broadcast({ type: 'release:updated', release })
+    broadcast({ type: 'release:updated', release: enrichRelease(release) })
   );
   releases.on('comment:added', (release, comment) =>
-    broadcast({ type: 'comment:added', release, comment })
+    broadcast({ type: 'comment:added', release: enrichRelease(release), comment })
   );
   releases.on('comment:deleted', (release, commentId) =>
-    broadcast({ type: 'comment:deleted', release, commentId })
+    broadcast({ type: 'comment:deleted', release: enrichRelease(release), commentId })
   );
   releases.audit.on('entry', (entry) =>
     broadcast({ type: 'audit:entry', entry })
@@ -258,27 +266,27 @@ function createWebServer(services, config) {
   }
   if (discovery) {
     discovery.on('discovery:completed', (results) =>
-      broadcast({ type: 'discovery:completed', results, releases: releases.list() })
+      broadcast({ type: 'discovery:completed', results, releases: enrichedReleaseList() })
     );
   }
   if (jiraSync) {
     jiraSync.on('sync:completed', (results) =>
-      broadcast({ type: 'jira:sync-completed', results, releases: releases.list() })
+      broadcast({ type: 'jira:sync-completed', results, releases: enrichedReleaseList() })
     );
   }
   if (services.zohoSync) {
     services.zohoSync.on('sync:completed', (results) =>
-      broadcast({ type: 'zoho:sync-completed', results, releases: releases.list() })
+      broadcast({ type: 'zoho:sync-completed', results, releases: enrichedReleaseList() })
     );
   }
   if (services.prSync) {
     services.prSync.on('sync:completed', (results) =>
-      broadcast({ type: 'pr:sync-completed', results, releases: releases.list() })
+      broadcast({ type: 'pr:sync-completed', results, releases: enrichedReleaseList() })
     );
   }
   if (services.pipelineSync) {
     services.pipelineSync.on('sync:completed', (results) =>
-      broadcast({ type: 'pipeline:sync-completed', results, releases: releases.list() })
+      broadcast({ type: 'pipeline:sync-completed', results, releases: enrichedReleaseList() })
     );
   }
   if (envPoller) {

@@ -2,7 +2,7 @@ import { create } from 'zustand'
 
 export type HomeView = 'dev' | 'qa' | 'pm' | 'support' | 'cs'
 export type HomeGroupBy = 'releases' | 'tickets' | 'people'
-export type HomeRange = 'today' | 'week' | '2w' | '4w'
+export type HomeRange = 'today' | 'week' | 'nextweek' | '2w' | '4w'
 
 interface HomeState {
   /** Active role view */
@@ -33,7 +33,7 @@ const STORAGE_KEY_GROUP_BY = 'nectar-home-group-by'
 const STORAGE_KEY_RANGE = 'nectar-home-range'
 const STORAGE_KEY_FIRST_VISIT = 'nectar-home-first-visit'
 
-const VALID_RANGES: HomeRange[] = ['today', 'week', '2w', '4w']
+const VALID_RANGES: HomeRange[] = ['today', 'week', 'nextweek', '2w', '4w']
 
 function loadFromStorage(): { view: HomeView; person: string | null; groupBy: HomeGroupBy; range: HomeRange; isFirstVisit: boolean } {
   try {

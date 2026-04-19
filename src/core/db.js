@@ -224,7 +224,7 @@ function applySchema(db) {
       cutFrom           TEXT,
       cutAt             TEXT,
       cutBy             TEXT,
-      tickets           TEXT NOT NULL DEFAULT '[]',   -- JSON
+      tickets           TEXT NOT NULL DEFAULT '[]',   -- DEPRECATED: tickets now live in jira_tickets table. Column retained for SQLite compat (no DROP COLUMN before 3.35).
       cherryPicks       TEXT NOT NULL DEFAULT '[]',   -- JSON
       ci                TEXT NOT NULL DEFAULT '{}',   -- JSON
       risk              TEXT NOT NULL DEFAULT '{}',   -- JSON
@@ -284,6 +284,137 @@ function applySchema(db) {
       updatedAt     TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_deploy_states_tag ON deploy_states(imageTag);
+
+    -- ── jira_tickets (normalized ticket database) ──────────
+    CREATE TABLE IF NOT EXISTS jira_tickets (
+      key                  TEXT PRIMARY KEY,
+      summary              TEXT NOT NULL DEFAULT '',
+      status               TEXT,
+      statusCategory       TEXT,
+      state                TEXT,              -- Nectar-mapped state (pending|in-progress|ready-for-testing|cherry-picked|done)
+      type                 TEXT,
+      assignee             TEXT,
+      reporter             TEXT,
+      qaAssignee           TEXT,
+      productAssignee      TEXT,
+      component            TEXT,
+      module               TEXT,              -- Viv Module (customfield_11124)
+      product              TEXT NOT NULL DEFAULT '[]',   -- Viv Product JSON array (customfield_11123)
+      projects             TEXT NOT NULL DEFAULT '[]',   -- Projects JSON array (customfield_11122)
+      priority             TEXT,
+      riskLevel            TEXT,
+      customerPriority     TEXT,
+      fixVersions          TEXT NOT NULL DEFAULT '[]',   -- JSON array
+      targetFixVersions    TEXT NOT NULL DEFAULT '[]',   -- JSON array
+      customerTags         TEXT NOT NULL DEFAULT '[]',   -- JSON array
+      deployedEnvironments TEXT NOT NULL DEFAULT '[]',   -- JSON array
+      labels               TEXT NOT NULL DEFAULT '[]',   -- JSON array
+      zohoRef              TEXT,                          -- JSON object
+      submitterName        TEXT,
+      submitterEmail       TEXT,
+      created              TEXT,
+      updatedInJira        TEXT,
+      syncedAt             TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_jt_statusCategory ON jira_tickets(statusCategory);
+    CREATE INDEX IF NOT EXISTS idx_jt_status         ON jira_tickets(status);
+    CREATE INDEX IF NOT EXISTS idx_jt_assignee       ON jira_tickets(assignee);
+    CREATE INDEX IF NOT EXISTS idx_jt_created        ON jira_tickets(created);
+    CREATE INDEX IF NOT EXISTS idx_jt_module         ON jira_tickets(module);
+    CREATE INDEX IF NOT EXISTS idx_jt_component      ON jira_tickets(component);
+
+    -- ── github_prs (normalized PR database) ────────────────
+    CREATE TABLE IF NOT EXISTS github_prs (
+      prNumber      INTEGER NOT NULL,
+      repo          TEXT NOT NULL,
+      prTitle       TEXT,
+      prAuthor      TEXT,
+      prUrl         TEXT,
+      status        TEXT NOT NULL,           -- 'open', 'merged', 'closed'
+      baseBranch    TEXT,
+      headBranch    TEXT,
+      prCreatedAt   TEXT,
+      prUpdatedAt   TEXT,
+      syncedAt      TEXT NOT NULL,
+      PRIMARY KEY (repo, prNumber)
+    );
+    CREATE INDEX IF NOT EXISTS idx_gpr_status     ON github_prs(status);
+    CREATE INDEX IF NOT EXISTS idx_gpr_headBranch ON github_prs(headBranch);
+    CREATE INDEX IF NOT EXISTS idx_gpr_updatedAt  ON github_prs(prUpdatedAt);
+
+    -- ── pr_jira_keys (PR ↔ JIRA ticket junction) ──────────
+    CREATE TABLE IF NOT EXISTS pr_jira_keys (
+      repo       TEXT NOT NULL,
+      prNumber   INTEGER NOT NULL,
+      jiraKey    TEXT NOT NULL,
+      PRIMARY KEY (repo, prNumber, jiraKey),
+      FOREIGN KEY (repo, prNumber) REFERENCES github_prs(repo, prNumber) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_prjk_jiraKey ON pr_jira_keys(jiraKey);
+
+    -- ── pr_sync_meta (singleton — tracks PR sync state) ───
+    CREATE TABLE IF NOT EXISTS pr_sync_meta (
+      id                  INTEGER PRIMARY KEY CHECK (id = 1),
+      lastSyncTime        TEXT,
+      totalPrsSynced      INTEGER NOT NULL DEFAULT 0,
+      lastSyncDurationMs  INTEGER,
+      lastSyncError       TEXT,
+      updatedAt           TEXT
+    );
+
+    -- ── jira_sync_meta (singleton — tracks ticket sync state) ─
+    CREATE TABLE IF NOT EXISTS jira_sync_meta (
+      id                   INTEGER PRIMARY KEY CHECK (id = 1),
+      lastTicketSyncTime   TEXT,
+      totalTicketsSynced   INTEGER NOT NULL DEFAULT 0,
+      lastSyncDurationMs   INTEGER,
+      lastSyncError        TEXT,
+      updatedAt            TEXT
+    );
+
+    -- ── git_commits (persisted commit data per branch) ──────
+    CREATE TABLE IF NOT EXISTS git_commits (
+      sha          TEXT NOT NULL,
+      repo         TEXT NOT NULL,
+      branch       TEXT NOT NULL,
+      message      TEXT,
+      author       TEXT,
+      authorDate   TEXT,
+      isPostCut    INTEGER DEFAULT 0,
+      syncedAt     TEXT NOT NULL,
+      PRIMARY KEY (repo, sha, branch)
+    );
+    CREATE INDEX IF NOT EXISTS idx_gc_branch ON git_commits(repo, branch);
+    CREATE INDEX IF NOT EXISTS idx_gc_repo_sha ON git_commits(repo, sha);
+
+    -- ── commit_jira_keys (commit ↔ JIRA key junction) ───────
+    CREATE TABLE IF NOT EXISTS commit_jira_keys (
+      repo    TEXT NOT NULL,
+      sha     TEXT NOT NULL,
+      jiraKey TEXT NOT NULL,
+      PRIMARY KEY (repo, sha, jiraKey)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cjk_jiraKey ON commit_jira_keys(jiraKey);
+
+    -- ── ticket_truth (per-ticket per-release truth) ─────────
+    CREATE TABLE IF NOT EXISTS ticket_truth (
+      jiraKey        TEXT NOT NULL,
+      repo           TEXT NOT NULL,
+      version        TEXT NOT NULL,
+      health         TEXT NOT NULL,
+      healthCategory TEXT NOT NULL,
+      healthMessage  TEXT,
+      onBranch       INTEGER DEFAULT 0,
+      prNumber       INTEGER,
+      prUrl          TEXT,
+      stage          TEXT,
+      inTarget       INTEGER DEFAULT 0,
+      inFixVersion   INTEGER DEFAULT 0,
+      computedAt     TEXT NOT NULL,
+      PRIMARY KEY (jiraKey, repo, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tt_version ON ticket_truth(repo, version);
+    CREATE INDEX IF NOT EXISTS idx_tt_health ON ticket_truth(healthCategory);
   `);
 }
 
@@ -322,8 +453,123 @@ function applyMigrations(db) {
         stmt.run({ shortName: d.shortName, color: d.color, sortOrder: d.sortOrder, hidden: d.hidden || 0, id: d.id });
       }
     },
+    // v3: Seed jira_sync_meta singleton row
+    (db) => {
+      db.prepare('INSERT OR IGNORE INTO jira_sync_meta (id, totalTicketsSynced) VALUES (1, 0)').run();
+    },
+    // v4: Seed pr_sync_meta singleton row
+    (db) => {
+      db.prepare('INSERT OR IGNORE INTO pr_sync_meta (id, totalPrsSynced) VALUES (1, 0)').run();
+    },
+    // v5: Add product taxonomy columns to jira_tickets (module, product, projects)
+    // and indexes for roadmap queries. Fresh installs already have these in CREATE TABLE.
+    // Also purge bulk ticket:added audit entries — these were generated by the old
+    // per-release sync that wrote an audit row for every ticket on every cycle.
+    // With tickets now in jira_tickets, these entries are noise (~484K rows, ~140MB).
+    // Manual ticket:added entries (from API) are rare and get recreated naturally.
+    (db) => {
+      const cols = db.prepare("PRAGMA table_info(jira_tickets)").all().map(c => c.name);
+      if (!cols.includes('module')) {
+        db.prepare(`ALTER TABLE jira_tickets ADD COLUMN module TEXT`).run();
+      }
+      if (!cols.includes('product')) {
+        db.prepare(`ALTER TABLE jira_tickets ADD COLUMN product TEXT NOT NULL DEFAULT '[]'`).run();
+      }
+      if (!cols.includes('projects')) {
+        db.prepare(`ALTER TABLE jira_tickets ADD COLUMN projects TEXT NOT NULL DEFAULT '[]'`).run();
+      }
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_jt_module ON jira_tickets(module)').run();
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_jt_component ON jira_tickets(component)').run();
+      // Force a full re-sync so existing tickets get the new fields populated
+      db.prepare("UPDATE jira_sync_meta SET lastTicketSyncTime = NULL WHERE id = 1").run();
+    },
+    // v6: Purge bulk ticket:added/removed audit entries.
+    // These were generated by the old per-release sync (~484K rows, ~140MB).
+    // With tickets now in jira_tickets table, these are noise.
+    (db) => {
+      const deleted = db.prepare("DELETE FROM audit WHERE action IN ('ticket:added', 'ticket:removed')").run();
+      if (deleted.changes > 0) {
+        log.info(`DB migration v6: purged ${deleted.changes} bulk audit entries`);
+      }
+    },
+    // v7: Add git_commits, commit_jira_keys, and ticket_truth tables.
+    // Fresh installs already have these via CREATE TABLE IF NOT EXISTS in applySchema.
+    // This migration is a no-op for fresh installs (tables already exist).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS git_commits (
+          sha          TEXT NOT NULL,
+          repo         TEXT NOT NULL,
+          branch       TEXT NOT NULL,
+          message      TEXT,
+          author       TEXT,
+          authorDate   TEXT,
+          isPostCut    INTEGER DEFAULT 0,
+          syncedAt     TEXT NOT NULL,
+          PRIMARY KEY (repo, sha, branch)
+        );
+        CREATE INDEX IF NOT EXISTS idx_gc_branch ON git_commits(repo, branch);
+        CREATE INDEX IF NOT EXISTS idx_gc_repo_sha ON git_commits(repo, sha);
+
+        CREATE TABLE IF NOT EXISTS commit_jira_keys (
+          repo    TEXT NOT NULL,
+          sha     TEXT NOT NULL,
+          jiraKey TEXT NOT NULL,
+          PRIMARY KEY (repo, sha, jiraKey)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cjk_jiraKey ON commit_jira_keys(jiraKey);
+
+        CREATE TABLE IF NOT EXISTS ticket_truth (
+          jiraKey        TEXT NOT NULL,
+          repo           TEXT NOT NULL,
+          version        TEXT NOT NULL,
+          health         TEXT NOT NULL,
+          healthCategory TEXT NOT NULL,
+          healthMessage  TEXT,
+          onBranch       INTEGER DEFAULT 0,
+          prNumber       INTEGER,
+          prUrl          TEXT,
+          stage          TEXT,
+          inTarget       INTEGER DEFAULT 0,
+          inFixVersion   INTEGER DEFAULT 0,
+          computedAt     TEXT NOT NULL,
+          PRIMARY KEY (jiraKey, repo, version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tt_version ON ticket_truth(repo, version);
+        CREATE INDEX IF NOT EXISTS idx_tt_health ON ticket_truth(healthCategory);
+      `);
+    },
+    // v8: Normalize prefixed version names in fixVersions/targetFixVersions.
+    // JIRA stores "iOS 2026.4.0" but releases use "2026.4.0". normalizeIssue
+    // now strips prefixes at write time; this cleans up existing data.
+    (db) => {
+      const prefixes = [
+        { pattern: '"iOS ', prefix: 'iOS ' },
+        { pattern: '"Android ', prefix: 'Android ' },
+      ];
+      let cleaned = 0;
+      for (const { pattern, prefix } of prefixes) {
+        const rows = db.prepare(`
+          SELECT key, fixVersions, targetFixVersions FROM jira_tickets
+          WHERE fixVersions LIKE ? OR targetFixVersions LIKE ?
+        `).all(`%${pattern}%`, `%${pattern}%`);
+        for (const row of rows) {
+          let fix = JSON.parse(row.fixVersions || '[]');
+          let target = JSON.parse(row.targetFixVersions || '[]');
+          fix = fix.map(v => v.startsWith(prefix) ? v.substring(prefix.length).trim() : v);
+          target = target.map(v => v.startsWith(prefix) ? v.substring(prefix.length).trim() : v);
+          db.prepare('UPDATE jira_tickets SET fixVersions = ?, targetFixVersions = ? WHERE key = ?')
+            .run(JSON.stringify(fix), JSON.stringify(target), row.key);
+          cleaned++;
+        }
+      }
+      if (cleaned > 0) log.info(`DB migration v8: normalized ${cleaned} tickets with prefixed version names`);
+      // Force full re-sync so all tickets get re-normalized
+      db.prepare("UPDATE jira_sync_meta SET lastTicketSyncTime = NULL WHERE id = 1").run();
+    },
   ];
 
+  let ranMigration = false;
   for (let v = current; v < migrations.length; v++) {
     const fn = migrations[v];
     db.transaction(() => {
@@ -331,6 +577,12 @@ function applyMigrations(db) {
       db.pragma(`user_version = ${v + 1}`);
     })();
     log.info(`DB migration applied: v${v + 1}`);
+    ranMigration = true;
+  }
+
+  // VACUUM outside transaction to reclaim space after large deletes (e.g., audit purge)
+  if (ranMigration) {
+    try { db.prepare('VACUUM').run(); } catch { /* VACUUM may fail in test DBs — ok */ }
   }
 }
 

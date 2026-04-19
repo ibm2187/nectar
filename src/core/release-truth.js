@@ -173,7 +173,7 @@ class ReleaseTruth {
     // The periodic JIRA sync may have stale data. When the user explicitly
     // asks for truth (Refresh button), re-fetch current status for every
     // ticket in this release so the health verdicts are based on reality.
-    const allTickets = release.tickets || [];
+    const allTickets = this.releases.getTickets(release);
     const jiraTickets = allTickets.filter(t => t.source === 'jira');
 
     if (jiraTickets.length > 0 && this.jira && this.jira.isConfigured()) {
@@ -186,16 +186,29 @@ class ReleaseTruth {
             fields: JiraClient.NECTAR_FIELDS,
           });
           const freshByKey = new Map();
+          const freshNormalized = [];
           for (const issue of freshIssues) {
             const n = JiraClient.normalizeIssue(issue);
             freshByKey.set(n.key, n);
+            freshNormalized.push({
+              key: issue.key,
+              ...n,
+              updatedInJira: issue.fields?.updated || null,
+              syncedAt: new Date().toISOString(),
+            });
           }
-          // Update each ticket in-place with fresh JIRA data
+
+          // Upsert fresh data to TicketStore (if available)
+          if (this.releases._ticketStore && freshNormalized.length > 0) {
+            this.releases._ticketStore.upsertBatch(freshNormalized);
+          }
+
+          // Update the in-memory ticket objects for truth computation
           for (const ticket of jiraTickets) {
             const fresh = freshByKey.get(ticket.key);
             if (fresh) {
               ticket.jiraStatus = fresh.status;
-              ticket.state = JiraClient.mapStatus(fresh.status);
+              ticket.state = fresh.state || JiraClient.mapStatus(fresh.status);
               ticket.summary = fresh.summary;
               ticket.type = fresh.type;
               ticket.assignee = fresh.assignee;
@@ -209,27 +222,11 @@ class ReleaseTruth {
               ticket.riskLevel = fresh.riskLevel;
               ticket.customerPriority = fresh.customerPriority;
               ticket.zohoRef = fresh.zohoRef;
-              ticket.jiraRefreshedAt = new Date().toISOString();
             }
           }
-          // Remove tickets that no longer reference this release version
-          // in either fixVersions or targetFixVersions (e.g., version was
-          // removed from the ticket in JIRA after our last sync).
-          const before = release.tickets.length;
-          release.tickets = release.tickets.filter(t => {
-            if (t.source !== 'jira') return true;
-            const fresh = freshByKey.get(t.key);
-            if (!fresh) return true; // Couldn't refresh — keep it
-            const fv = Array.isArray(fresh.fixVersions) ? fresh.fixVersions : [];
-            const tv = Array.isArray(fresh.targetFixVersions) ? fresh.targetFixVersions : [];
-            return fv.includes(version) || tv.includes(version);
-          });
-          const pruned = before - release.tickets.length;
-          if (pruned > 0) {
-            log.info(`Truth ${repo}:${version}: pruned ${pruned} tickets no longer referencing this version`);
-            this.releases.persist(release);
-          }
 
+          // Prune is implicit — after TicketStore update, getForVersion()
+          // will only return tickets that still reference this version.
           log.info(`Truth ${repo}:${version}: refreshed ${freshByKey.size}/${keys.length} ticket statuses from JIRA`);
         }
       } catch (err) {
@@ -715,8 +712,8 @@ class ReleaseTruth {
     // "what's new" — a ticket is new if its key appears in commits
     // between prod and target.
     const prodTicketKeys = new Set();
-    if (prodRelease && prodRelease.tickets) {
-      for (const t of prodRelease.tickets) {
+    if (prodRelease) {
+      for (const t of this.releases.getTickets(prodRelease)) {
         prodTicketKeys.add(t.key);
       }
     }
