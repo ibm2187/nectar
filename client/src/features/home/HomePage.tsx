@@ -430,6 +430,7 @@ export function HomePage() {
           {([
             { key: 'today', label: 'Today' },
             { key: 'week', label: 'This Week' },
+            { key: 'nextweek', label: 'Next Week' },
             { key: '2w', label: '2 Weeks' },
             { key: '4w', label: '4 Weeks' },
           ] as { key: HomeRange; label: string }[]).map(r => (
@@ -556,7 +557,7 @@ export function HomePage() {
               )}
               {upcoming.length > 0 && (
                 <ReleaseGroup
-                  title={`Upcoming (${range === 'today' ? 'today' : range === 'week' ? 'this week' : range === '2w' ? 'next 2 weeks' : 'next 4 weeks'})`}
+                  title={`Upcoming (${range === 'today' ? 'today' : range === 'week' ? 'this week' : range === 'nextweek' ? 'next week' : range === '2w' ? 'next 2 weeks' : 'next 4 weeks'})`}
                   releases={upcoming}
                   view={view}
                   person={person}

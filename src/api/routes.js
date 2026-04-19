@@ -140,6 +140,12 @@ module.exports = function createRoutes(services, config) {
       const sunday = new Date(today.getTime() + daysToSunday * 24 * 60 * 60 * 1000);
       return sunday.toISOString().slice(0, 10);
     }
+    if (range === 'nextweek') {
+      const dayOfWeek = today.getDay();
+      const daysToSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+      const nextSunday = new Date(today.getTime() + (daysToSunday + 7) * 24 * 60 * 60 * 1000);
+      return nextSunday.toISOString().slice(0, 10);
+    }
     if (range === '2w') {
       const dayOfWeek = today.getDay();
       const daysToSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
