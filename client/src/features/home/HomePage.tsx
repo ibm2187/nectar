@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useHomeStore, type HomeView, type HomeRange } from '../../stores/homeStore'
 import { apiFetch } from '../../api/client'
-import type { Release } from '../../api/client'
+import type { Release, DeliveryForecast } from '../../api/client'
 import { Card, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
 import { cn } from '../../lib/utils'
@@ -31,6 +31,7 @@ interface HomeRelease extends Release {
   zohoTicketCount: number
   zohoTickets: Array<{ id: string; ticketNumber: string | null; subject: string; status: string; priority: string | null; departmentId: string | null; webUrl: string | null }>
   isOverdue: boolean
+  forecast?: DeliveryForecast | null
   oooRisk?: Array<{
     name: string
     role: 'dev' | 'qa'
@@ -1091,6 +1092,23 @@ function ReleasePanel({
         {/* Zoho badge */}
         <ZohoImpactBadge count={r.zohoTicketCount} />
 
+        {/* Delivery forecast */}
+        {r.forecast && r.forecast.total > 0 && r.state !== 'done' && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            <HomeForecastBadge risk={r.forecast.risk} />
+            {r.forecast.velocity.actual > 0 && r.forecast.velocity.required !== null && (
+              <span className="text-[10px] text-muted-foreground">
+                {r.forecast.velocity.actual}/{r.forecast.velocity.required}/day
+              </span>
+            )}
+            {r.forecast.projectedDate && (
+              <span className="text-[10px] text-muted-foreground">
+                Est: {r.forecast.projectedDate.slice(5)}
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Ticket count — right aligned */}
         <span className="ml-auto text-xs text-muted-foreground shrink-0">
           {person ? (
@@ -1655,5 +1673,23 @@ function OooReleaseRiskBanner({ releases }: { releases: HomeRelease[] }) {
         </div>
       </div>
     </div>
+  )
+}
+
+// ── Delivery forecast risk badge ──────────────────────────
+
+function HomeForecastBadge({ risk }: { risk: string }) {
+  const config: Record<string, { label: string; cls: string }> = {
+    low:      { label: 'LOW',  cls: 'bg-green-500/20 text-green-400 border-green-500/30' },
+    medium:   { label: 'MED',  cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+    high:     { label: 'HIGH', cls: 'bg-red-500/20 text-red-400 border-red-500/30' },
+    critical: { label: 'CRIT', cls: 'bg-red-500/30 text-red-300 border-red-500/50' },
+    unknown:  { label: '?',    cls: 'bg-muted text-muted-foreground border-border' },
+  }
+  const c = config[risk] || config.unknown
+  return (
+    <span className={cn('text-[10px] px-1.5 py-0.5 rounded border font-semibold', c.cls)}>
+      {c.label}
+    </span>
   )
 }
