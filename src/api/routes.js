@@ -50,6 +50,30 @@ module.exports = function createRoutes(services, config) {
   // which joins releases, PRs, and truth in a single query.
 
   /**
+   * Enrich releases with ticket data from the DB using a single SQL query.
+   * Replaces the deprecated release.tickets[] blob with live data.
+   */
+  function enrichReleasesWithTickets(releaseList) {
+    if (!ticketStore || releaseList.length === 0) return releaseList;
+
+    // Build a lookup: version → release indices (for multi-repo same-version)
+    const versions = [...new Set(releaseList.map(r => r.version))];
+    if (versions.length === 0) return releaseList;
+
+    // Single query: get all tickets for all versions at once
+    const ticketsByVersion = new Map();
+    for (const version of versions) {
+      const tickets = getTicketsForRelease({ version });
+      ticketsByVersion.set(version, tickets);
+    }
+
+    return releaseList.map(r => ({
+      ...r,
+      tickets: ticketsByVersion.get(r.version) || [],
+    }));
+  }
+
+  /**
    * Enrich a flat ticket list (from TicketStore) with release membership data.
    * Looks up each ticket's fixVersions/targetFixVersions against known releases
    * and adds a `releases[]` array (same shape as /tickets/home).
@@ -69,7 +93,7 @@ module.exports = function createRoutes(services, config) {
     const list = releases.list(filter);
     // Annotate with effective release status based on prod env deployments
     const environments = customerStore.listEnvironments();
-    res.json(annotateReleases(list, environments));
+    res.json(annotateReleases(enrichReleasesWithTickets(list), environments));
   });
 
   // Release calendar — all releases annotated with effective status
@@ -88,11 +112,11 @@ module.exports = function createRoutes(services, config) {
     });
     list.sort((a, b) => (a.jiraReleaseDate || 'zzzz').localeCompare(b.jiraReleaseDate || 'zzzz'));
     const environments = customerStore.listEnvironments();
-    res.json(annotateReleases(list, environments));
+    res.json(annotateReleases(enrichReleasesWithTickets(list), environments));
   });
 
   router.get('/releases/active', (req, res) => {
-    res.json(releases.active());
+    res.json(enrichReleasesWithTickets(releases.active()));
   });
 
   // Home dashboard — overdue + upcoming 2 weeks of releases with tickets,
@@ -308,7 +332,7 @@ module.exports = function createRoutes(services, config) {
   router.get('/releases/:version', (req, res) => {
     const release = releases.get(req.params.version);
     if (!release) return res.status(404).json({ error: 'Release not found' });
-    res.json(release);
+    res.json({ ...release, tickets: getTicketsForRelease(release) });
   });
 
   // Notify release channel — sends status update to Slack
@@ -377,7 +401,7 @@ module.exports = function createRoutes(services, config) {
 
     // Return the updated release
     const updated = releases.get(version);
-    res.json({ release: updated, refresh: results });
+    res.json({ release: { ...updated, tickets: getTicketsForRelease(updated) }, refresh: results });
   }));
 
   // Customer impact — Zoho tickets grouped by customer/department
@@ -446,7 +470,7 @@ module.exports = function createRoutes(services, config) {
       }
 
       if (!release) release = releases.get(req.params.version);
-      res.json(release);
+      res.json({ ...release, tickets: getTicketsForRelease(release) });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -486,7 +510,7 @@ module.exports = function createRoutes(services, config) {
   router.post('/releases/:version/cherry-pick', (req, res) => {
     try {
       const release = releases.addCherryPick(req.params.version, req.body, req.body.user);
-      res.json(release);
+      res.json({ ...release, tickets: getTicketsForRelease(release) });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -568,7 +592,7 @@ module.exports = function createRoutes(services, config) {
   router.post('/releases/:version/deploy', (req, res) => {
     try {
       const release = releases.addDeployment(req.params.version, req.body, req.body.user);
-      res.json(release);
+      res.json({ ...release, tickets: getTicketsForRelease(release) });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
