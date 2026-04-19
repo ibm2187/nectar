@@ -2200,18 +2200,9 @@ module.exports = function createRoutes(services, config) {
     }
 
     // ── Build response: modules with nested components ──────
-    const MODULE_ORDER = [
-      'Scheduling', 'Billing', 'Payroll', 'CRM', 'Client & Caregiver Profiles',
-      'ATS', 'Workflows & Tasks', 'Clinical', 'Compliance', 'Data Import & Onboarding',
-      'Reporting', 'Integrations', 'AI', 'Messaging', 'Uncategorized',
-    ];
-
     const moduleNames = Array.from(moduleGrid.keys()).sort((a, b) => {
-      const ai = MODULE_ORDER.indexOf(a);
-      const bi = MODULE_ORDER.indexOf(b);
-      if (ai >= 0 && bi >= 0) return ai - bi;
-      if (ai >= 0) return -1;
-      if (bi >= 0) return 1;
+      if (a === 'Uncategorized') return 1;
+      if (b === 'Uncategorized') return -1;
       return a.localeCompare(b);
     });
 

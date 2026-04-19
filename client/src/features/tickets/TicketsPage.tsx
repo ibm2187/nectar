@@ -72,11 +72,18 @@ interface TicketPr {
   prUrl: string
 }
 
+interface ScopeStats {
+  byGroup: Record<string, number>
+  byType: Record<string, number>
+  byStatus: Record<string, number>
+}
+
 interface FlatTicketsResponse {
   tickets: FlatTicket[]
   total: number
   hasMore: boolean
   since?: string
+  scopeStats?: ScopeStats
 }
 
 interface SyncStatus {
@@ -423,7 +430,7 @@ function ReleasesTicketsTab() {
 type FlatSortKey = 'key' | 'summary' | 'status' | 'module' | 'assignee' | 'component' | 'created' | 'priority' | 'type'
 
 // Client-side sort keys matching the Home page TicketsTable columns
-type HomeSortKey = 'key' | 'summary' | 'status' | 'priority' | 'risk' | 'customerPriority' | 'assignee' | 'qa' | 'deployed' | 'nextRelease' | 'nextDate' | 'releases'
+type HomeSortKey = 'key' | 'summary' | 'status' | 'priority' | 'risk' | 'customerPriority' | 'assignee' | 'qa' | 'deployed' | 'nextRelease' | 'nextDate' | 'releases' | 'prs'
 
 interface BuildUrlParams {
   offset: number; limit: number; sort: FlatSortKey; sortDir: 'asc' | 'desc'
@@ -533,17 +540,52 @@ function ServerTicketTable({
     nextRelease:      (t: FlatTicket) => getNextRelease(t)?.version || null,
     nextDate:         (t: FlatTicket) => getNextRelease(t)?.jiraReleaseDate || null,
     releases:         (t: FlatTicket) => (t.releases || []).length,
+    prs:              (t: FlatTicket) => (t.prs || []).length,
   }), [])
   const sorted = useSortableData<FlatTicket, HomeSortKey>(filteredTickets, clientSort, clientAccessors)
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1
 
+  const stats = data?.scopeStats
+
   return (
     <div className="space-y-3">
-      <div>
-        <h2 className="text-2xl font-bold">{title}</h2>
-        <p className="text-sm text-muted-foreground mt-1">{description}</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">{title}</h2>
+          <p className="text-sm text-muted-foreground mt-1">{description}</p>
+        </div>
+        {stats && data && (
+          <div className="flex gap-3 text-xs shrink-0">
+            <div className="text-center px-3 py-2 rounded-md bg-muted/50">
+              <div className="text-lg font-bold">{data.total}</div>
+              <div className="text-muted-foreground">Total</div>
+            </div>
+            <div className="text-center px-3 py-2 rounded-md bg-green-500/10">
+              <div className="text-lg font-bold text-green-400">{stats.byGroup.done || 0}</div>
+              <div className="text-green-400/70">Done</div>
+            </div>
+            <div className="text-center px-3 py-2 rounded-md bg-yellow-500/10">
+              <div className="text-lg font-bold text-yellow-400">{stats.byGroup['in-dev'] || 0}</div>
+              <div className="text-yellow-400/70">In Dev</div>
+            </div>
+            <div className="text-center px-3 py-2 rounded-md bg-blue-500/10">
+              <div className="text-lg font-bold text-blue-400">{stats.byGroup['ready-for-qa'] || 0}</div>
+              <div className="text-blue-400/70">Ready QA</div>
+            </div>
+            <div className="text-center px-3 py-2 rounded-md bg-purple-500/10">
+              <div className="text-lg font-bold text-purple-400">{stats.byGroup['in-qa'] || 0}</div>
+              <div className="text-purple-400/70">In QA</div>
+            </div>
+            {(stats.byGroup.blocked || 0) > 0 && (
+              <div className="text-center px-3 py-2 rounded-md bg-red-500/10">
+                <div className="text-lg font-bold text-red-400">{stats.byGroup.blocked}</div>
+                <div className="text-red-400/70">Blocked</div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Status group filter pills — matches Home page */}
@@ -686,6 +728,7 @@ function ServerTicketTable({
                       <SortableHeader label="Next Release" sortKey="nextRelease"      state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} />
                       <SortableHeader label="Date"         sortKey="nextDate"         state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} />
                       <SortableHeader label="Releases"     sortKey="releases"         state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} />
+                      <SortableHeader label="PRs"          sortKey="prs"              state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} className="hidden lg:table-cell" />
                     </tr>
                   </thead>
                   <tbody>
@@ -873,6 +916,31 @@ function FlatTicketRow({ ticket: t, onReleaseClick }: { ticket: FlatTicket; onRe
             />
           ))}
         </div>
+      </td>
+      <td className="px-3 py-2 align-top hidden lg:table-cell">
+        {t.prs && t.prs.length > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {t.prs.map(pr => (
+              <a
+                key={`${pr.repo}-${pr.prNumber}`}
+                href={pr.prUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={cn(
+                  'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono border transition-colors',
+                  pr.status === 'merged' ? 'bg-green-500/15 text-green-400 border-green-500/30 hover:bg-green-500/25'
+                    : pr.status === 'open' ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30 hover:bg-yellow-500/25'
+                    : 'bg-muted/30 text-muted-foreground border-muted hover:bg-muted/50',
+                )}
+                title={`#${pr.prNumber} → ${pr.baseBranch} (${pr.status})`}
+              >
+                #{pr.prNumber}
+              </a>
+            ))}
+          </div>
+        ) : (
+          <span className="text-xs text-muted-foreground italic">—</span>
+        )}
       </td>
     </tr>
   )

@@ -411,7 +411,47 @@ class TicketStore extends EventEmitter {
       ${where}
     `).get(...params).n;
 
-    return { tickets, total, hasMore, offset, limit };
+    // Status group breakdown across ALL matching tickets (not just this page)
+    const statusBreakdown = {};
+    const statusRows = this.db.prepare(`
+      SELECT jt.status, COUNT(DISTINCT jt.key) AS n FROM jira_tickets jt
+      JOIN pr_jira_keys pjk ON pjk.jiraKey = jt.key
+      JOIN github_prs gp ON gp.repo = pjk.repo AND gp.prNumber = pjk.prNumber
+      ${where}
+      GROUP BY jt.status ORDER BY n DESC
+    `).all(...params);
+    for (const r of statusRows) {
+      statusBreakdown[r.status || 'Unknown'] = r.n;
+    }
+
+    // Group into status categories
+    const byGroup = { done: 0, blocked: 0, 'ready-for-qa': 0, 'in-qa': 0, 'in-dev': 0 };
+    const DONE_SET = new Set(STATUS_GROUPS['done']);
+    const BLOCKED_SET = new Set(STATUS_GROUPS['blocked']);
+    const QA_READY_SET = new Set(STATUS_GROUPS['ready-for-qa']);
+    const IN_QA_SET = new Set(STATUS_GROUPS['in-qa']);
+    for (const [status, count] of Object.entries(statusBreakdown)) {
+      if (DONE_SET.has(status)) byGroup.done += count;
+      else if (BLOCKED_SET.has(status)) byGroup.blocked += count;
+      else if (QA_READY_SET.has(status)) byGroup['ready-for-qa'] += count;
+      else if (IN_QA_SET.has(status)) byGroup['in-qa'] += count;
+      else byGroup['in-dev'] += count;
+    }
+
+    // Type breakdown
+    const typeBreakdown = {};
+    const typeRows = this.db.prepare(`
+      SELECT jt.type, COUNT(DISTINCT jt.key) AS n FROM jira_tickets jt
+      JOIN pr_jira_keys pjk ON pjk.jiraKey = jt.key
+      JOIN github_prs gp ON gp.repo = pjk.repo AND gp.prNumber = pjk.prNumber
+      ${where}
+      GROUP BY jt.type ORDER BY n DESC
+    `).all(...params);
+    for (const r of typeRows) {
+      typeBreakdown[r.type || 'Unknown'] = r.n;
+    }
+
+    return { tickets, total, hasMore, offset, limit, scopeStats: { byGroup, byType: typeBreakdown, byStatus: statusBreakdown } };
   }
 
   // ── Module/Component grouping (roadmap) ───────────
