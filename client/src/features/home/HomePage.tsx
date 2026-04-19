@@ -136,7 +136,8 @@ export function HomePage() {
   const [repoFilter, setRepoFilter] = useState('')
   const [ticketSearch, setTicketSearch] = useState('')
 
-  // Fetch home data — releases-grouped uses /releases/home, tickets-grouped uses /tickets/home
+  // Fetch home data — ALL views use /releases/home as single source of truth.
+  // Tickets view derives its flat list client-side from the same releases data.
   useEffect(() => {
     setLoading(true)
     const params = new URLSearchParams()
@@ -144,33 +145,82 @@ export function HomePage() {
     if (person) params.set('person', person)
     params.set('range', range)
 
-    if (groupBy === 'tickets') {
-      Promise.all([
-        apiFetch<{ tickets: TicketRowData[] }>(`/tickets/home?${params}`),
-        apiFetch<Person[]>('/people'),
-      ])
-        .then(([data, ppl]) => {
-          setTickets(data.tickets || [])
-          setPeople(ppl)
-        })
-        .catch(() => {})
-        .finally(() => setLoading(false))
-    } else {
-      // Both 'releases' and 'people' use the same API — just grouped differently
-      Promise.all([
-        apiFetch<HomeRelease[]>(`/releases/home?${params}`),
-        apiFetch<Person[]>('/people'),
-      ])
-        .then(([rels, ppl]) => {
-          setReleases(rels)
-          setPeople(ppl)
-          setCollapsed(new Set())
-          setExpandedTickets(new Set())
-        })
-        .catch(() => {})
-        .finally(() => setLoading(false))
-    }
-  }, [view, person, groupBy, range])
+    Promise.all([
+      apiFetch<HomeRelease[]>(`/releases/home?${params}`),
+      apiFetch<Person[]>('/people'),
+    ])
+      .then(([rels, ppl]) => {
+        setReleases(rels)
+        setPeople(ppl)
+        setCollapsed(new Set())
+        setExpandedTickets(new Set())
+
+        // Derive flat ticket list from releases (deduped by key).
+        // Each ticket gets a `releases[]` array showing which releases it belongs to,
+        // matching the shape that TicketsTable / TicketRowData expects.
+        const today = new Date().toISOString().slice(0, 10)
+        const byKey = new Map<string, TicketRowData>()
+        for (const r of rels) {
+          for (const t of (r.tickets || [])) {
+            // Cast to any — the server enriches tickets with fields (priority, truth,
+            // assigneeOut, etc.) that aren't on the base Ticket type.
+            const ta = t as any
+            if (!byKey.has(t.key)) {
+              byKey.set(t.key, {
+                key: t.key,
+                summary: t.summary || '',
+                jiraStatus: t.jiraStatus || 'Unknown',
+                state: t.state || 'pending',
+                type: t.type || null,
+                assignee: t.assignee || null,
+                qaAssignee: t.qaAssignee || null,
+                zohoRef: t.zohoRef || null,
+                deployedEnvironments: t.deployedEnvironments || [],
+                fixVersions: t.fixVersions || [],
+                targetFixVersions: t.targetFixVersions || [],
+                priority: ta.priority || null,
+                riskLevel: ta.riskLevel || null,
+                customerPriority: ta.customerPriority || null,
+                truth: ta.truth || [],
+                releases: [],
+                // Carry through OOO annotations if present
+                ...(ta.assigneeOut ? { assigneeOut: ta.assigneeOut } : {}),
+                ...(ta.qaAssigneeOut ? { qaAssigneeOut: ta.qaAssigneeOut } : {}),
+              } as TicketRowData)
+            }
+            const existing = byKey.get(t.key)!
+            const fixSet = new Set(existing.fixVersions || [])
+            const targetSet = new Set(existing.targetFixVersions || [])
+            const inFixVersion = fixSet.has(r.version)
+            const inTarget = targetSet.has(r.version)
+            const isShipped = r.state === 'done'
+            const isOverdue = !!(r.jiraReleaseDate && r.jiraReleaseDate < today && !isShipped)
+            existing.releases.push({
+              repo: r.repo || '',
+              version: r.version,
+              state: r.state,
+              jiraReleaseDate: r.jiraReleaseDate || null,
+              isShipped,
+              isOverdue,
+              inTarget,
+              inFixVersion,
+              source: inTarget && inFixVersion ? 'both' : inTarget ? 'target' : 'fixVersion',
+            })
+          }
+        }
+        // Sort each ticket's releases: non-shipped first, overdue first, then by date
+        for (const t of byKey.values()) {
+          t.releases.sort((a, b) => {
+            if (a.isShipped !== b.isShipped) return a.isShipped ? 1 : -1
+            if (a.isOverdue !== b.isOverdue) return a.isOverdue ? -1 : 1
+            return (a.jiraReleaseDate || 'zzzz').localeCompare(b.jiraReleaseDate || 'zzzz')
+          })
+        }
+        setTickets(Array.from(byKey.values()))
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [view, person, range])
 
   const toggleCollapse = (id: string) => {
     setCollapsed(prev => {
@@ -625,15 +675,53 @@ function PeopleGroupView({
     return next
   })
 
+  // Release filter chips — multi-select with OR semantics (same as TicketsTable)
+  const [selectedReleases, setSelectedReleases] = useState<Set<string>>(new Set())
+  const toggleRelease = (version: string) => {
+    setSelectedReleases(prev => {
+      const next = new Set(prev)
+      if (next.has(version)) next.delete(version)
+      else next.add(version)
+      return next
+    })
+  }
+
+  // All non-shipped releases for the chip bar
+  const releaseChips = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    const seen = new Map<string, { version: string; jiraReleaseDate: string | null; isOverdue: boolean }>()
+    for (const r of releases) {
+      if (r.state === 'done') continue
+      if (!seen.has(r.version)) {
+        seen.set(r.version, {
+          version: r.version,
+          jiraReleaseDate: r.jiraReleaseDate || null,
+          isOverdue: !!(r.jiraReleaseDate && r.jiraReleaseDate < today),
+        })
+      }
+    }
+    return Array.from(seen.values()).sort((a, b) => {
+      const aDate = a.jiraReleaseDate || 'zzzz'
+      const bDate = b.jiraReleaseDate || 'zzzz'
+      return aDate.localeCompare(bDate)
+    })
+  }, [releases])
+
+  // Filter releases by selected chips
+  const filteredReleases = useMemo(() => {
+    if (selectedReleases.size === 0) return releases
+    return releases.filter(r => selectedReleases.has(r.version))
+  }, [releases, selectedReleases])
+
   // Determine which assignee field to group by based on role view
   const assigneeField = view === 'qa' ? 'qaAssignee' : 'assignee'
 
-  // Build person groups from releases
+  // Build person groups from filtered releases
   const groups = useMemo(() => {
     const map = new Map<string, PersonGroup>()
     const doneStatuses = new Set(STATUS_GROUPS.find(g => g.key === 'done')?.statuses || [])
 
-    for (const r of releases) {
+    for (const r of filteredReleases) {
       for (const t of (r.tickets || [])) {
         const name = (t as any)[assigneeField] || 'Not Assigned'
         if (!map.has(name)) map.set(name, { name, tickets: [], statusCounts: {} })
@@ -652,25 +740,70 @@ function PeopleGroupView({
       const bNotDone = b.tickets.filter(t => !doneStatuses.has(t.jiraStatus || '')).length
       return bNotDone - aNotDone
     })
-  }, [releases, assigneeField])
+  }, [filteredReleases, assigneeField])
 
-  if (groups.length === 0) {
+  if (groups.length === 0 && releaseChips.length === 0) {
     return <div className="text-sm text-muted-foreground py-8 text-center italic">No assignees found</div>
   }
 
   return (
-    <div className="space-y-2">
-      {groups.map(group => (
-        <PersonPanel
-          key={group.name}
-          group={group}
-          view={view}
-          navigate={navigate}
-          isCollapsed={collapsed.has(group.name)}
-          onToggle={() => toggle(group.name)}
-          onClickPr={onClickPr}
-        />
-      ))}
+    <div className="space-y-3">
+      {/* Release filter chips */}
+      {releaseChips.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+          {releaseChips.map(c => {
+            const isSelected = selectedReleases.has(c.version)
+            return (
+              <button
+                key={c.version}
+                type="button"
+                onClick={() => toggleRelease(c.version)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs transition-colors font-mono',
+                  isSelected
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : c.isOverdue
+                      ? 'bg-red-500/10 text-red-400 border-red-500/40 hover:bg-red-500/20'
+                      : 'bg-muted/30 border-muted hover:bg-accent/50'
+                )}
+                title={c.jiraReleaseDate ? `${c.version} — ${c.jiraReleaseDate}${c.isOverdue ? ' (OVERDUE)' : ''}` : c.version}
+              >
+                <span>{c.version}</span>
+                {c.jiraReleaseDate && (
+                  <span className="text-[10px] opacity-70">{c.jiraReleaseDate.slice(5)}</span>
+                )}
+              </button>
+            )
+          })}
+          {selectedReleases.size > 0 && (
+            <button
+              type="button"
+              onClick={() => setSelectedReleases(new Set())}
+              className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-accent/50"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+
+      {groups.length === 0 ? (
+        <div className="text-sm text-muted-foreground py-8 text-center italic">No assignees match the selected releases</div>
+      ) : (
+        <div className="space-y-2">
+          {groups.map(group => (
+            <PersonPanel
+              key={group.name}
+              group={group}
+              view={view}
+              navigate={navigate}
+              isCollapsed={collapsed.has(group.name)}
+              onToggle={() => toggle(group.name)}
+              onClickPr={onClickPr}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -1251,7 +1384,8 @@ function CustomerGroupedView({ releases }: { releases: HomeRelease[] }) {
 
 /**
  * Extract the "next release" — the earliest non-shipped release for a ticket.
- * Releases come pre-sorted from /api/tickets/home (overdue first, then upcoming, shipped last).
+ * Releases come pre-sorted (overdue first, then upcoming, shipped last) — derived
+ * client-side from /api/releases/home data.
  */
 // getNextRelease, priorityOrdinal, riskOrdinal — imported from ../../components/TicketRow
 
@@ -1412,7 +1546,7 @@ function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
 
 // HomeTicketRow — wraps TicketRow but injects a Next Release column.
 // Inlined here (not in shared TicketRow) because the column relies on
-// /api/tickets/home enrichment fields that the /tickets page doesn't carry.
+// release membership enrichment that the /tickets page doesn't carry.
 function HomeTicketRow({ ticket: t, onReleaseClick }: {
   ticket: TicketRowData
   onReleaseClick: (version: string) => void
