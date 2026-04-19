@@ -427,7 +427,7 @@ function ReleasesTicketsTab() {
 
 // ── Shared server-side paginated ticket table ─────────
 
-type FlatSortKey = 'key' | 'summary' | 'status' | 'module' | 'assignee' | 'component' | 'created' | 'priority' | 'type'
+type FlatSortKey = 'key' | 'summary' | 'status' | 'module' | 'assignee' | 'qaAssignee' | 'component' | 'created' | 'priority' | 'riskLevel' | 'customerPriority' | 'type'
 
 // Client-side sort keys matching the Home page TicketsTable columns
 type HomeSortKey = 'key' | 'summary' | 'status' | 'priority' | 'risk' | 'customerPriority' | 'assignee' | 'qa' | 'deployed' | 'nextRelease' | 'nextDate' | 'releases' | 'prs'
@@ -456,15 +456,45 @@ function ServerTicketTable({
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [offset, setOffset] = useState(0)
-  // Server-side sort stays fixed at 'created DESC'; client-side sort handles column ordering
-  const [sort] = useState<FlatSortKey>('created')
-  const [sortDir] = useState<'asc' | 'desc'>('desc')
+  const [sort, setSort] = useState<FlatSortKey>('created')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [moduleFilter, setModuleFilter] = useState('')
   const [personFilter, setPersonFilter] = useState('')
   const [statusGroup, setStatusGroup] = useState<StatusGroup>('all')
   const [filterOptions, setFilterOptions] = useState<FilterOptions | null>(null)
 
-  // Client-side sort state for the Home-style columns (applied after server fetch)
+  // Map Home-style sort keys to server sort keys.
+  // Columns NOT in this map (nextRelease, nextDate, releases, prs, deployed)
+  // can only sort the current page client-side.
+  const SERVER_SORT_MAP: Partial<Record<HomeSortKey, FlatSortKey>> = {
+    key: 'key',
+    summary: 'summary',
+    status: 'status',
+    priority: 'priority',
+    risk: 'riskLevel' as FlatSortKey,
+    customerPriority: 'customerPriority' as FlatSortKey,
+    assignee: 'assignee',
+    qa: 'qaAssignee' as FlatSortKey,
+  }
+
+  function onSort(col: HomeSortKey) {
+    const serverCol = SERVER_SORT_MAP[col]
+    if (serverCol) {
+      // Server-sortable column — re-fetch with new sort
+      if (sort === serverCol) {
+        setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+      } else {
+        setSort(serverCol)
+        setSortDir('desc')
+      }
+      setOffset(0)
+    }
+    // For non-server-sortable columns, we still track the sort state
+    // but it only sorts the current page (acknowledged limitation with paginated data)
+    onClientSort(col)
+  }
+
+  // Client-side sort for columns that can't sort server-side (applied after fetch)
   const [clientSort, onClientSort] = useSortState<HomeSortKey>(null, null)
 
   useEffect(() => {
@@ -716,19 +746,19 @@ function ServerTicketTable({
                   </colgroup>
                   <thead className="sticky top-0 bg-background z-10">
                     <tr className="border-b text-left">
-                      <SortableHeader label="Key"          sortKey="key"              state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} />
-                      <SortableHeader label="Summary"      sortKey="summary"          state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} />
-                      <SortableHeader label="Status"       sortKey="status"           state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} />
-                      <SortableHeader label="Priority"     sortKey="priority"         state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} />
-                      <SortableHeader label="Risk"         sortKey="risk"             state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} />
-                      <SortableHeader label="Cust Prio"    sortKey="customerPriority" state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} className="hidden md:table-cell" title="Primary Customer Priority" />
-                      <SortableHeader label="Assignee"     sortKey="assignee"         state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} />
-                      <SortableHeader label="QA"           sortKey="qa"               state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} className="hidden md:table-cell" />
-                      <SortableHeader label="Deployed"     sortKey="deployed"         state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} className="hidden md:table-cell" />
-                      <SortableHeader label="Next Release" sortKey="nextRelease"      state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} />
-                      <SortableHeader label="Date"         sortKey="nextDate"         state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} />
-                      <SortableHeader label="Releases"     sortKey="releases"         state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} />
-                      <SortableHeader label="PRs"          sortKey="prs"              state={clientSort} onSort={k => onClientSort(k as HomeSortKey)} className="hidden lg:table-cell" />
+                      <SortableHeader label="Key"          sortKey="key"              state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
+                      <SortableHeader label="Summary"      sortKey="summary"          state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
+                      <SortableHeader label="Status"       sortKey="status"           state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
+                      <SortableHeader label="Priority"     sortKey="priority"         state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
+                      <SortableHeader label="Risk"         sortKey="risk"             state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
+                      <SortableHeader label="Cust Prio"    sortKey="customerPriority" state={clientSort} onSort={k => onSort(k as HomeSortKey)} className="hidden md:table-cell" title="Primary Customer Priority" />
+                      <SortableHeader label="Assignee"     sortKey="assignee"         state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
+                      <SortableHeader label="QA"           sortKey="qa"               state={clientSort} onSort={k => onSort(k as HomeSortKey)} className="hidden md:table-cell" />
+                      <SortableHeader label="Deployed"     sortKey="deployed"         state={clientSort} onSort={k => onSort(k as HomeSortKey)} className="hidden md:table-cell" />
+                      <SortableHeader label="Next Release" sortKey="nextRelease"      state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
+                      <SortableHeader label="Date"         sortKey="nextDate"         state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
+                      <SortableHeader label="Releases"     sortKey="releases"         state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
+                      <SortableHeader label="PRs"          sortKey="prs"              state={clientSort} onSort={k => onSort(k as HomeSortKey)} className="hidden lg:table-cell" />
                     </tr>
                   </thead>
                   <tbody>

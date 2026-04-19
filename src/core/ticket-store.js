@@ -274,7 +274,7 @@ class TicketStore extends EventEmitter {
     const offset = opts.offset || 0;
 
     // Sortable columns (whitelist to prevent injection)
-    const SORT_COLS = { key: 'key', summary: 'summary', status: 'status', assignee: 'assignee', module: 'module', component: 'component', created: 'created', priority: 'priority', type: 'type' };
+    const SORT_COLS = { key: 'key', summary: 'summary', status: 'status', assignee: 'assignee', qaAssignee: 'qaAssignee', module: 'module', component: 'component', created: 'created', priority: 'priority', riskLevel: 'riskLevel', customerPriority: 'customerPriority', type: 'type' };
     const sortCol = SORT_COLS[opts.sort] || 'created';
     const sortDir = opts.sortDir === 'asc' ? 'ASC' : 'DESC';
 
@@ -355,7 +355,7 @@ class TicketStore extends EventEmitter {
     const limit = opts.limit || 100;
     const offset = opts.offset || 0;
 
-    const SORT_COLS = { key: 'jt.key', summary: 'jt.summary', status: 'jt.status', assignee: 'jt.assignee', module: 'jt.module', component: 'jt.component', created: 'jt.created', priority: 'jt.priority', type: 'jt.type' };
+    const SORT_COLS = { key: 'jt.key', summary: 'jt.summary', status: 'jt.status', assignee: 'jt.assignee', qaAssignee: 'jt.qaAssignee', module: 'jt.module', component: 'jt.component', created: 'jt.created', priority: 'jt.priority', riskLevel: 'jt.riskLevel', customerPriority: 'jt.customerPriority', type: 'jt.type' };
     const sortCol = SORT_COLS[opts.sort] || 'jt.created';
     const sortDir = opts.sortDir === 'asc' ? 'ASC' : 'DESC';
 
