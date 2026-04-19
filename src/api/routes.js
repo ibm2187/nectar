@@ -41,6 +41,93 @@ module.exports = function createRoutes(services, config) {
     return releases.getTickets(release);
   }
 
+  /**
+   * Enrich a ticket list response with PR data from PrStore.
+   * Adds a `prs` array to each ticket with { prNumber, repo, status, baseBranch, prUrl }.
+   */
+  function enrichWithPrs(result) {
+    if (!prStore || !result.tickets || result.tickets.length === 0) return result;
+    const keys = result.tickets.map(t => t.key);
+    const prMap = prStore.findByJiraKeys(keys);
+    result.tickets = result.tickets.map(t => ({
+      ...t,
+      prs: (prMap.get(t.key) || []).map(pr => ({
+        prNumber: pr.prNumber,
+        repo: pr.repo,
+        status: pr.status,
+        baseBranch: pr.baseBranch,
+        prUrl: pr.prUrl,
+      })),
+    }));
+    return result;
+  }
+
+  /**
+   * Enrich a flat ticket list (from TicketStore) with release membership data.
+   * Looks up each ticket's fixVersions/targetFixVersions against known releases
+   * and adds a `releases[]` array (same shape as /tickets/home).
+   * Also normalises the `status` field to `jiraStatus` for client consistency.
+   */
+  function enrichWithReleases(result) {
+    if (!result.tickets || result.tickets.length === 0) return result;
+    const allReleases = releases.list();
+    const today = new Date().toISOString().slice(0, 10);
+
+    result.tickets = result.tickets.map(t => {
+      const ticketReleases = [];
+      const ticketFix = Array.isArray(t.fixVersions) ? t.fixVersions : [];
+      const ticketTarget = Array.isArray(t.targetFixVersions) ? t.targetFixVersions : [];
+      const allVersions = new Set([...ticketFix, ...ticketTarget]);
+
+      if (allVersions.size > 0) {
+        for (const release of allReleases) {
+          const version = release.version;
+          if (!allVersions.has(version)) continue;
+
+          const inTarget = ticketTarget.includes(version);
+          const inFixVersion = ticketFix.includes(version);
+          if (!inTarget && !inFixVersion) continue;
+
+          // Avoid duplicate entries for the same release
+          if (ticketReleases.some(r => r.repo === release.repo && r.version === version)) continue;
+
+          const isShipped = release.state === 'done' || !!release.jiraReleased;
+          const isOverdue = !!release.jiraReleaseDate && release.jiraReleaseDate < today && !isShipped;
+
+          ticketReleases.push({
+            repo: release.repo,
+            version,
+            state: release.state,
+            jiraReleaseDate: release.jiraReleaseDate || null,
+            isImmediate: false,
+            isShipped,
+            isOverdue,
+            inTarget,
+            inFixVersion,
+            source: inTarget && inFixVersion ? 'both' : inTarget ? 'target' : 'fixVersion',
+          });
+        }
+      }
+
+      // Sort: shipped last, overdue first, then by date
+      ticketReleases.sort((a, b) => {
+        if (a.isShipped !== b.isShipped) return a.isShipped ? 1 : -1;
+        if (a.isOverdue !== b.isOverdue) return a.isOverdue ? -1 : 1;
+        const aDate = a.jiraReleaseDate || 'zzzz';
+        const bDate = b.jiraReleaseDate || 'zzzz';
+        return aDate.localeCompare(bDate);
+      });
+
+      return {
+        ...t,
+        jiraStatus: t.status || 'Unknown',
+        releases: ticketReleases,
+      };
+    });
+
+    return result;
+  }
+
   // NOTE: Auth is now handled by the unified auth middleware in web/server.js.
   // The old WEB_TOKEN-only middleware has been replaced by createAuthMiddleware
   // which supports API keys, WEB_TOKEN, and Google SSO JWT cookies.
@@ -1093,6 +1180,14 @@ module.exports = function createRoutes(services, config) {
     res.json(ticketStore.getQAScope({ limit, offset }));
   });
 
+  router.get('/tickets/cut-scope', (req, res) => {
+    if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
+    const { sort, sortDir, q, module, statusGroup } = req.query;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = parseInt(req.query.offset) || 0;
+    res.json(enrichWithReleases(enrichWithPrs(ticketStore.getCutScope({ sort, sortDir, search: q, module, statusGroup, limit, offset }))));
+  });
+
   router.get('/tickets/triage', (req, res) => {
     if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
     const since = req.query.since || new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
@@ -1116,14 +1211,33 @@ module.exports = function createRoutes(services, config) {
 
   router.get('/tickets/search', (req, res) => {
     if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
-    const { q, statusCategory, assignee, type } = req.query;
+    const { q, statusCategory, assignee, type, module, component, customer, project, product, sort, sortDir, statusGroup } = req.query;
     const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
+    const hasFixVersion = req.query.hasFixVersion === 'true' ? true : req.query.hasFixVersion === 'false' ? false : undefined;
+    const createdSince = req.query.createdSince || undefined;
+    const excludeStatuses = req.query.excludeStatuses ? req.query.excludeStatuses.split(',') : undefined;
+    const excludeStatusCategory = req.query.excludeStatusCategory || undefined;
     if (q) {
-      res.json(ticketStore.search(q, { limit, offset }));
+      res.json(enrichWithReleases(enrichWithPrs(ticketStore.search(q, { limit, offset }))));
     } else {
-      res.json(ticketStore.getByFilter({ statusCategory, assignee, type, limit, offset }));
+      res.json(enrichWithReleases(enrichWithPrs(ticketStore.getByFilter({ statusCategory, assignee, type, module, component, customer, project, product, hasFixVersion, createdSince, excludeStatuses, excludeStatusCategory, statusGroup, sort, sortDir, limit, offset }))));
     }
+  });
+
+  router.get('/tickets/filter-options', (req, res) => {
+    if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
+    res.json(ticketStore.getFilterOptions());
+  });
+
+  router.get('/tickets/by-module', (req, res) => {
+    if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
+    res.json({ modules: ticketStore.getModules() });
+  });
+
+  router.get('/tickets/by-module/:module/components', (req, res) => {
+    if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
+    res.json({ components: ticketStore.getComponentsForModule(req.params.module) });
   });
 
   // ── PR database (github_prs) ───────────────────────────
@@ -1853,18 +1967,9 @@ module.exports = function createRoutes(services, config) {
 
   router.get('/roadmap', (req, res) => {
     const customerFilter = req.query.customer || null;
+    const projectFilter = req.query.project || null;
+    const productFilter = req.query.product || null;
     const activeReleases = releases.active().filter(r => !r.jiraArchived);
-
-    // Ensure theme config is initialized
-    if (themeConfig.themes.length === 0) {
-      const components = new Set();
-      for (const release of activeReleases) {
-        for (const ticket of getTicketsForRelease(release)) {
-          if (ticket.component) components.add(ticket.component);
-        }
-      }
-      if (components.size > 0) themeConfig.autoGenerate(Array.from(components));
-    }
 
     // ── Build time buckets: monthly columns for 12 months forward ───
     const now = new Date();
@@ -1879,7 +1984,11 @@ module.exports = function createRoutes(services, config) {
       });
     }
 
-    // ── Helper: parse customer from release branch name ─────
+    function getMonthKey(dateStr) {
+      if (!dateStr) return null;
+      return dateStr.slice(0, 7);
+    }
+
     function deriveCustomers(release) {
       const v = (release.version || '').toLowerCase();
       const customers = [];
@@ -1892,125 +2001,147 @@ module.exports = function createRoutes(services, config) {
       return customers.length > 0 ? customers : ['All'];
     }
 
-    // ── Helper: get month key for a date string ─────────────
-    function getMonthKey(dateStr) {
-      if (!dateStr) return null;
-      return dateStr.slice(0, 7); // "2026-04" from "2026-04-22"
-    }
-
-    // ── Aggregate: theme → month → release cards ────────────
-    // Structure: { [themeName]: { [monthKey]: [releaseCard, ...] } }
-    const themeGrid = new Map();
+    // ── Aggregate: module → component → month → release cards ──
+    // Structure: { [module]: { components: { [comp]: { [month]: [card] } }, months: { [month]: [card] } } }
+    const moduleGrid = new Map();
     const allCustomers = new Set();
-    const unmappedComponents = new Set();
+    const allProjects = new Set();
 
     for (const release of activeReleases) {
       const monthKey = getMonthKey(release.jiraReleaseDate);
-      // Skip releases with no date — they go in "Unscheduled"
       const effectiveMonth = monthKey || 'unscheduled';
-
       const releaseCustomers = deriveCustomers(release);
       releaseCustomers.forEach(c => allCustomers.add(c));
 
-      // If customer filter is active, skip releases that don't match
-      if (customerFilter && !releaseCustomers.some(c =>
-        c.toLowerCase() === customerFilter.toLowerCase()
-      )) continue;
-
-      // Group tickets by theme
-      const ticketsByTheme = new Map();
       for (const ticket of getTicketsForRelease(release)) {
-        // Check customer filter at ticket level too
+        // Customer filter: include tickets for this customer + tickets with no customer tag
         const ticketCustomers = Array.isArray(ticket.customerTags) ? ticket.customerTags : [];
         if (customerFilter && ticketCustomers.length > 0) {
-          const matchesFilter = ticketCustomers.some(c =>
-            c.toLowerCase() === customerFilter.toLowerCase() || c.toLowerCase() === 'internal'
-          );
-          if (!matchesFilter) continue;
+          if (!ticketCustomers.some(c => c.toLowerCase() === customerFilter.toLowerCase())) continue;
         }
 
-        const themeName = themeConfig.resolveComponent(ticket.component);
-        if (themeName === themeConfig.unmappedLabel && ticket.component) {
-          unmappedComponents.add(ticket.component);
-        }
+        // Project filter
+        const ticketProjects = Array.isArray(ticket.projects) ? ticket.projects : [];
+        ticketProjects.forEach(p => allProjects.add(p));
+        if (projectFilter && !ticketProjects.some(p => p.toLowerCase() === projectFilter.toLowerCase())) continue;
 
-        if (!ticketsByTheme.has(themeName)) ticketsByTheme.set(themeName, []);
-        ticketsByTheme.get(themeName).push(ticket);
+        // Product filter
+        const ticketProduct = Array.isArray(ticket.product) ? ticket.product : [];
+        if (productFilter && !ticketProduct.some(p => p.toLowerCase() === productFilter.toLowerCase())) continue;
+
+        const mod = ticket.module || 'Uncategorized';
+        const comp = ticket.component || 'Other';
+
+        if (!moduleGrid.has(mod)) moduleGrid.set(mod, { components: new Map(), allTickets: [] });
+        const modEntry = moduleGrid.get(mod);
+        modEntry.allTickets.push({ ticket, release, effectiveMonth });
+
+        if (!modEntry.components.has(comp)) modEntry.components.set(comp, []);
+        modEntry.components.get(comp).push({ ticket, release, effectiveMonth });
+      }
+    }
+
+    // Get filter options from ticket store
+    const filterOptions = ticketStore ? ticketStore.getFilterOptions() : { modules: [], customers: [], projects: [], products: [] };
+    // Merge release-derived customers with ticket-level customers
+    for (const c of filterOptions.customers) allCustomers.add(c);
+    for (const p of filterOptions.projects) allProjects.add(p);
+
+    // ── Helper: summarize a group of tickets per release ────
+    function summarizeByRelease(entries) {
+      const byRelease = new Map();
+      for (const { ticket, release, effectiveMonth } of entries) {
+        const rKey = `${release.repo}:${release.version}`;
+        if (!byRelease.has(rKey)) {
+          byRelease.set(rKey, {
+            repo: release.repo,
+            version: release.version,
+            state: release.state,
+            jiraReleaseDate: release.jiraReleaseDate || null,
+            month: effectiveMonth,
+            customers: deriveCustomers(release),
+            tickets: [],
+          });
+        }
+        byRelease.get(rKey).tickets.push(ticket);
       }
 
-      // Create a release card for each theme that has tickets
-      for (const [themeName, tickets] of ticketsByTheme) {
-        if (!themeGrid.has(themeName)) themeGrid.set(themeName, new Map());
-        const themeMonths = themeGrid.get(themeName);
-        if (!themeMonths.has(effectiveMonth)) themeMonths.set(effectiveMonth, []);
-
-        const targetVersions = tickets.map(t => Array.isArray(t.targetFixVersions) ? t.targetFixVersions : []);
-        const fixVersions = tickets.map(t => Array.isArray(t.fixVersions) ? t.fixVersions : []);
-
-        const done = tickets.filter(t => {
-          const s = (t.state || '').toLowerCase();
-          return s === 'done' || s === 'cherry-picked' || s === 'ready-for-testing';
-        }).length;
-        const inProgress = tickets.filter(t => {
-          const s = (t.state || '').toLowerCase();
-          return s === 'in-progress';
-        }).length;
-        const missingPlan = tickets.filter(t => {
-          const tv = Array.isArray(t.targetFixVersions) ? t.targetFixVersions : [];
-          const fv = Array.isArray(t.fixVersions) ? t.fixVersions : [];
-          return tv.includes(release.version) && !fv.includes(release.version);
-        }).length;
-
-        themeMonths.get(effectiveMonth).push({
-          repo: release.repo,
-          version: release.version,
-          state: release.state,
-          jiraReleaseDate: release.jiraReleaseDate || null,
-          customers: releaseCustomers,
+      const cards = [];
+      for (const group of byRelease.values()) {
+        const { tickets, ...meta } = group;
+        const done = tickets.filter(t => ['done', 'cherry-picked', 'ready-for-testing'].includes((t.state || '').toLowerCase())).length;
+        const inProgress = tickets.filter(t => (t.state || '').toLowerCase() === 'in-progress').length;
+        cards.push({
+          ...meta,
           tickets: tickets.length,
           done,
           inProgress,
           pending: tickets.length - done - inProgress,
-          missingPlan,
           progress: tickets.length > 0 ? Math.round((done / tickets.length) * 100) : 0,
         });
       }
+      return cards;
     }
 
-    // ── Flatten into response shape ─────────────────────────
-    // Sort themes: configured themes first (by config order), then unmapped
-    const configuredOrder = themeConfig.themes.map(t => t.name);
-    const themeNames = Array.from(themeGrid.keys()).sort((a, b) => {
-      const ai = configuredOrder.indexOf(a);
-      const bi = configuredOrder.indexOf(b);
+    // ── Build response: modules with nested components ──────
+    const MODULE_ORDER = [
+      'Scheduling', 'Billing', 'Payroll', 'CRM', 'Client & Caregiver Profiles',
+      'ATS', 'Workflows & Tasks', 'Clinical', 'Compliance', 'Data Import & Onboarding',
+      'Reporting', 'Integrations', 'AI', 'Messaging', 'Uncategorized',
+    ];
+
+    const moduleNames = Array.from(moduleGrid.keys()).sort((a, b) => {
+      const ai = MODULE_ORDER.indexOf(a);
+      const bi = MODULE_ORDER.indexOf(b);
       if (ai >= 0 && bi >= 0) return ai - bi;
       if (ai >= 0) return -1;
       if (bi >= 0) return 1;
-      if (a === themeConfig.unmappedLabel) return 1;
-      if (b === themeConfig.unmappedLabel) return -1;
       return a.localeCompare(b);
     });
 
-    const themes = themeNames.map(name => {
-      const monthMap = themeGrid.get(name);
+    const modules = moduleNames.map(mod => {
+      const entry = moduleGrid.get(mod);
+      const releaseCards = summarizeByRelease(entry.allTickets);
+
+      // Group cards by month
       const monthEntries = {};
       let totalTickets = 0;
       let totalDone = 0;
-
-      for (const [monthKey, cards] of monthMap) {
-        monthEntries[monthKey] = cards.sort((a, b) =>
-          (a.jiraReleaseDate || '').localeCompare(b.jiraReleaseDate || '')
-        );
-        for (const card of cards) {
-          totalTickets += card.tickets;
-          totalDone += card.done;
-        }
+      for (const card of releaseCards) {
+        const m = card.month;
+        if (!monthEntries[m]) monthEntries[m] = [];
+        monthEntries[m].push(card);
+        totalTickets += card.tickets;
+        totalDone += card.done;
       }
 
+      // Build component breakdown
+      const components = Array.from(entry.components.entries())
+        .map(([compName, compEntries]) => {
+          const compCards = summarizeByRelease(compEntries);
+          const compMonths = {};
+          let compTotal = 0;
+          let compDone = 0;
+          for (const card of compCards) {
+            if (!compMonths[card.month]) compMonths[card.month] = [];
+            compMonths[card.month].push(card);
+            compTotal += card.tickets;
+            compDone += card.done;
+          }
+          return {
+            name: compName,
+            months: compMonths,
+            totalTickets: compTotal,
+            totalDone: compDone,
+            progress: compTotal > 0 ? Math.round((compDone / compTotal) * 100) : 0,
+          };
+        })
+        .sort((a, b) => b.totalTickets - a.totalTickets);
+
       return {
-        name,
-        icon: themeConfig.themes.find(t => t.name === name)?.icon || null,
+        name: mod,
         months: monthEntries,
+        components,
         totalTickets,
         totalDone,
         progress: totalTickets > 0 ? Math.round((totalDone / totalTickets) * 100) : 0,
@@ -2019,41 +2150,33 @@ module.exports = function createRoutes(services, config) {
 
     res.json({
       months,
-      themes,
+      modules,
       customers: Array.from(allCustomers).sort(),
-      unmappedComponents: Array.from(unmappedComponents).sort(),
+      projects: Array.from(allProjects).sort(),
+      products: filterOptions.products || [],
       stats: {
-        totalThemes: themes.length,
+        totalModules: modules.length,
         totalReleases: activeReleases.length,
-        totalTickets: themes.reduce((s, t) => s + t.totalTickets, 0),
+        totalTickets: modules.reduce((s, m) => s + m.totalTickets, 0),
       },
     });
   });
 
   // ── Roadmap drill-down: tickets for a theme × release ──
 
-  router.get('/roadmap/:theme/:version', (req, res) => {
-    const themeName = decodeURIComponent(req.params.theme);
+  router.get('/roadmap/:module/:version', (req, res) => {
+    const moduleName = decodeURIComponent(req.params.module);
     const version = decodeURIComponent(req.params.version);
+    const componentFilter = req.query.component || null;
 
     const release = releases.get(version) || releases.active().find(r => r.version === version);
     if (!release) return res.status(404).json({ error: 'Release not found' });
 
-    // Ensure theme config is initialized
-    if (themeConfig.themes.length === 0) {
-      const components = new Set();
-      for (const r of releases.active()) {
-        for (const t of getTicketsForRelease(r)) {
-          if (t.component) components.add(t.component);
-        }
-      }
-      if (components.size > 0) themeConfig.autoGenerate(Array.from(components));
-    }
-
     const tickets = [];
     for (const ticket of getTicketsForRelease(release)) {
-      const resolved = themeConfig.resolveComponent(ticket.component);
-      if (resolved !== themeName) continue;
+      const ticketModule = ticket.module || 'Uncategorized';
+      if (ticketModule !== moduleName) continue;
+      if (componentFilter && (ticket.component || 'Other') !== componentFilter) continue;
 
       const targetVersions = Array.isArray(ticket.targetFixVersions) ? ticket.targetFixVersions : [];
       const fixVersions = Array.isArray(ticket.fixVersions) ? ticket.fixVersions : [];
@@ -2063,12 +2186,16 @@ module.exports = function createRoutes(services, config) {
       tickets.push({
         key: ticket.key,
         summary: ticket.summary || '',
-        jiraStatus: ticket.jiraStatus || 'Unknown',
+        jiraStatus: ticket.jiraStatus || ticket.status || 'Unknown',
         state: ticket.state || 'pending',
         type: ticket.type || null,
         assignee: ticket.assignee || null,
+        module: ticket.module || null,
         component: ticket.component || null,
         customerTags: Array.isArray(ticket.customerTags) ? ticket.customerTags : [],
+        projects: Array.isArray(ticket.projects) ? ticket.projects : [],
+        product: Array.isArray(ticket.product) ? ticket.product : [],
+        labels: Array.isArray(ticket.labels) ? ticket.labels : [],
         inTarget,
         inFixVersion,
       });
@@ -2080,7 +2207,8 @@ module.exports = function createRoutes(services, config) {
     }).length;
 
     res.json({
-      theme: themeName,
+      module: moduleName,
+      component: componentFilter,
       version: release.version,
       repo: release.repo,
       state: release.state,

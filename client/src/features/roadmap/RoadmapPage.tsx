@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Link } from 'react-router-dom'
 import { apiFetch } from '../../api/client'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Badge } from '../../components/ui/badge'
+import { Card, CardContent } from '../../components/ui/card'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetBody } from '../../components/ui/sheet'
 import { JiraLink } from '../../components/JiraLink'
 import { NectarLoader, NectarSpinner } from '../../components/NectarLoader'
 import { cn } from '../../lib/utils'
+import { getStatusBadgeColor } from '../../lib/status-colors'
 
 // ── Types ──────────────────────────────────────────────
 
@@ -17,12 +18,29 @@ interface ReleaseCard {
   version: string
   state: string
   jiraReleaseDate: string | null
+  month: string
   customers: string[]
   tickets: number
   done: number
   inProgress: number
   pending: number
-  missingPlan: number
+  progress: number
+}
+
+interface ComponentEntry {
+  name: string
+  months: Record<string, ReleaseCard[]>
+  totalTickets: number
+  totalDone: number
+  progress: number
+}
+
+interface ModuleEntry {
+  name: string
+  months: Record<string, ReleaseCard[]>
+  components: ComponentEntry[]
+  totalTickets: number
+  totalDone: number
   progress: number
 }
 
@@ -33,45 +51,84 @@ interface MonthColumn {
   end: string
 }
 
-interface Theme {
-  name: string
-  icon: string | null
-  months: Record<string, ReleaseCard[]>
-  totalTickets: number
-  totalDone: number
-  progress: number
-}
-
 interface RoadmapResponse {
   months: MonthColumn[]
-  themes: Theme[]
+  modules: ModuleEntry[]
   customers: string[]
-  unmappedComponents: string[]
+  projects: string[]
+  products: string[]
   stats: {
-    totalThemes: number
+    totalModules: number
     totalReleases: number
     totalTickets: number
   }
 }
 
-// ── Page ───────────────────────────────────────────────
+interface DrillDownTicket {
+  key: string
+  summary: string
+  jiraStatus: string
+  state: string
+  type: string | null
+  assignee: string | null
+  module: string | null
+  component: string | null
+  customerTags: string[]
+  projects: string[]
+  product: string[]
+  labels: string[]
+  inTarget: boolean
+  inFixVersion: boolean
+}
+
+interface DrillDownResponse {
+  module: string
+  component: string | null
+  version: string
+  repo: string
+  state: string
+  jiraReleaseDate: string | null
+  tickets: DrillDownTicket[]
+  stats: { total: number; done: number; remaining: number }
+}
+
+// ── Module colors ─────────────────────────────────────
+
+const MODULE_COLORS: Record<string, { bg: string; border: string; text: string }> = {
+  'Scheduling':                  { bg: 'bg-blue-50 dark:bg-blue-950/30',      border: 'border-blue-300 dark:border-blue-700',      text: 'text-blue-700 dark:text-blue-300' },
+  'Billing':                     { bg: 'bg-green-50 dark:bg-green-950/30',    border: 'border-green-300 dark:border-green-700',    text: 'text-green-700 dark:text-green-300' },
+  'Payroll':                     { bg: 'bg-emerald-50 dark:bg-emerald-950/30', border: 'border-emerald-300 dark:border-emerald-700', text: 'text-emerald-700 dark:text-emerald-300' },
+  'CRM':                         { bg: 'bg-purple-50 dark:bg-purple-950/30',  border: 'border-purple-300 dark:border-purple-700',  text: 'text-purple-700 dark:text-purple-300' },
+  'Client & Caregiver Profiles': { bg: 'bg-violet-50 dark:bg-violet-950/30',  border: 'border-violet-300 dark:border-violet-700',  text: 'text-violet-700 dark:text-violet-300' },
+  'ATS':                         { bg: 'bg-pink-50 dark:bg-pink-950/30',      border: 'border-pink-300 dark:border-pink-700',      text: 'text-pink-700 dark:text-pink-300' },
+  'Workflows & Tasks':           { bg: 'bg-orange-50 dark:bg-orange-950/30',  border: 'border-orange-300 dark:border-orange-700',  text: 'text-orange-700 dark:text-orange-300' },
+  'Clinical':                    { bg: 'bg-red-50 dark:bg-red-950/30',        border: 'border-red-300 dark:border-red-700',        text: 'text-red-700 dark:text-red-300' },
+  'Compliance':                  { bg: 'bg-amber-50 dark:bg-amber-950/30',    border: 'border-amber-300 dark:border-amber-700',    text: 'text-amber-700 dark:text-amber-300' },
+  'Data Import & Onboarding':    { bg: 'bg-cyan-50 dark:bg-cyan-950/30',      border: 'border-cyan-300 dark:border-cyan-700',      text: 'text-cyan-700 dark:text-cyan-300' },
+  'Reporting':                   { bg: 'bg-indigo-50 dark:bg-indigo-950/30',  border: 'border-indigo-300 dark:border-indigo-700',  text: 'text-indigo-700 dark:text-indigo-300' },
+  'Integrations':                { bg: 'bg-teal-50 dark:bg-teal-950/30',      border: 'border-teal-300 dark:border-teal-700',      text: 'text-teal-700 dark:text-teal-300' },
+  'AI':                          { bg: 'bg-fuchsia-50 dark:bg-fuchsia-950/30', border: 'border-fuchsia-300 dark:border-fuchsia-700', text: 'text-fuchsia-700 dark:text-fuchsia-300' },
+  'Messaging':                   { bg: 'bg-sky-50 dark:bg-sky-950/30',        border: 'border-sky-300 dark:border-sky-700',        text: 'text-sky-700 dark:text-sky-300' },
+}
+
+function getModuleColor(mod: string) {
+  return MODULE_COLORS[mod] || { bg: 'bg-gray-50 dark:bg-gray-900/30', border: 'border-gray-300 dark:border-gray-700', text: 'text-gray-700 dark:text-gray-300' }
+}
+
+// ── Page ──────────────────────────────────────────────
 
 export function RoadmapPage() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   const search = searchParams.get('q') || ''
   const customerFilter = searchParams.get('customer') || ''
-  const defaultView = typeof window !== 'undefined' && window.innerWidth < 768 ? 'cards' : 'grid'
-  const viewMode = (searchParams.get('view') as 'grid' | 'cards') || defaultView
-  const defaultZoom = typeof window !== 'undefined' && window.innerWidth < 768 ? 'day' : 'month'
-  const zoom = (searchParams.get('zoom') as 'day' | 'week' | 'month' | 'quarter') || defaultZoom
-  const offsetParam = parseInt(searchParams.get('offset') || '0', 10)
+  const projectFilter = searchParams.get('project') || ''
 
   const [data, setData] = useState<RoadmapResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [collapsedThemes, setCollapsedThemes] = useState<Set<string>>(new Set())
-  const [drawer, setDrawer] = useState<{ theme: string; version: string; repo: string } | null>(null)
+  const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set())
+  const [drawer, setDrawer] = useState<{ module: string; version: string; component?: string } | null>(null)
 
   function updateParams(updates: Record<string, string | null>) {
     setSearchParams(prev => {
@@ -84,156 +141,60 @@ export function RoadmapPage() {
     }, { replace: true })
   }
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const params = customerFilter ? `?customer=${encodeURIComponent(customerFilter)}` : ''
-      const result = await apiFetch<RoadmapResponse>(`/roadmap${params}`)
+      const params = new URLSearchParams()
+      if (customerFilter) params.set('customer', customerFilter)
+      if (projectFilter) params.set('project', projectFilter)
+      const qs = params.toString()
+      const result = await apiFetch<RoadmapResponse>(`/roadmap${qs ? `?${qs}` : ''}`)
       setData(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load roadmap')
     }
     setLoading(false)
-  }
+  }, [customerFilter, projectFilter])
 
-  useEffect(() => { load() }, [customerFilter])
+  useEffect(() => { load() }, [load])
 
-  // ── Filter themes by search ───────────────────────────
-  const filteredThemes = useMemo(() => {
-    if (!data) return []
-    const q = search.toLowerCase().trim()
-    if (!q) return data.themes
-    return data.themes.filter(t => {
-      if (t.name.toLowerCase().includes(q)) return true
-      // Search inside release cards
-      for (const cards of Object.values(t.months)) {
-        if (cards.some(c => c.version.toLowerCase().includes(q))) return true
-      }
-      return false
-    })
-  }, [data, search])
-
-  // ── Navigation ─────────────────────────────────────────
-  const NAV_STEP: Record<string, number> = { day: 14, week: 4, month: 3, quarter: 3 }
-  const VISIBLE_COUNT: Record<string, number> = { day: 14, week: 8, month: 6, quarter: 4 }
-
-  function goBack() {
-    const next = Math.max(0, offsetParam - NAV_STEP[zoom])
-    updateParams({ offset: next === 0 ? null : String(next) })
-  }
-  function goForward() {
-    updateParams({ offset: String(offsetParam + NAV_STEP[zoom]) })
-  }
-  function goToday() {
-    updateParams({ offset: null })
-  }
-
-  // ── Generate day columns ──────────────────────────────
-  const dayColumns = useMemo((): MonthColumn[] => {
-    const now = new Date()
-    now.setHours(0, 0, 0, 0)
-    const days: MonthColumn[] = []
-    for (let i = 0; i < 60; i++) { // generate plenty, slice later
-      const d = new Date(now)
-      d.setDate(now.getDate() + i)
-      const iso = d.toISOString().slice(0, 10)
-      const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-      days.push({ key: `d-${iso}`, label, start: iso, end: iso })
-    }
-    return days
-  }, [])
-
-  // ── Generate week columns ──────────────────────────────
-  const weekColumns = useMemo((): MonthColumn[] => {
-    const now = new Date()
-    const day = now.getDay()
-    const monday = new Date(now)
-    monday.setDate(now.getDate() - ((day + 6) % 7))
-    monday.setHours(0, 0, 0, 0)
-
-    const weeks: MonthColumn[] = []
-    for (let i = 0; i < 52; i++) { // generate plenty, slice later
-      const start = new Date(monday)
-      start.setDate(monday.getDate() + i * 7)
-      const end = new Date(start)
-      end.setDate(start.getDate() + 6)
-
-      const startStr = start.toISOString().slice(0, 10)
-      const endStr = end.toISOString().slice(0, 10)
-      const label = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-      weeks.push({ key: `w-${startStr}`, label, start: startStr, end: endStr })
-    }
-    return weeks
-  }, [])
-
-  // ── Determine visible time columns ───────────────────
-  const visibleColumns = useMemo(() => {
-    if (!data) return []
-    const count = VISIBLE_COUNT[zoom]
-
-    if (zoom === 'day') return dayColumns.slice(offsetParam, offsetParam + count)
-    if (zoom === 'week') return weekColumns.slice(offsetParam, offsetParam + count)
-    if (zoom === 'quarter') {
-      const quarters: MonthColumn[] = []
-      for (let i = 0; i < data.months.length; i += 3) {
-        const batch = data.months.slice(i, i + 3)
-        if (batch.length === 0) continue
-        quarters.push({
-          key: batch.map(m => m.key).join(','),
-          label: `${batch[0].label.split(' ')[0]}–${batch[batch.length - 1].label}`,
-          start: batch[0].start,
-          end: batch[batch.length - 1].end,
-        })
-      }
-      return quarters.slice(offsetParam, offsetParam + count)
-    }
-    // Month view
-    return data.months.slice(offsetParam, offsetParam + count)
-  }, [data, zoom, weekColumns, dayColumns, offsetParam])
-
-  // ── Check if any theme has overdue or unscheduled cards ─
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
-
-  const { hasOverdue, hasUnscheduled } = useMemo(() => {
-    if (!filteredThemes.length) return { hasOverdue: false, hasUnscheduled: false }
-    let overdue = false
-    let unscheduled = false
-    for (const theme of filteredThemes) {
-      if (theme.months['unscheduled']?.length) unscheduled = true
-      for (const [, cards] of Object.entries(theme.months)) {
-        for (const card of cards) {
-          if (card.jiraReleaseDate && card.jiraReleaseDate < today && card.progress < 100) overdue = true
-        }
-      }
-      if (overdue && unscheduled) break
-    }
-    return { hasOverdue: overdue, hasUnscheduled: unscheduled }
-  }, [filteredThemes, today])
-
-  function toggleTheme(name: string) {
-    setCollapsedThemes(prev => {
+  function toggleModule(mod: string) {
+    setExpandedModules(prev => {
       const next = new Set(prev)
-      if (next.has(name)) next.delete(name)
-      else next.add(name)
+      if (next.has(mod)) next.delete(mod)
+      else next.add(mod)
       return next
     })
   }
 
-  // ── Render ────────────────────────────────────────────
+  // Filter modules by search
+  const filteredModules = useMemo(() => {
+    if (!data) return []
+    if (!search.trim()) return data.modules
+    const q = search.toLowerCase()
+    return data.modules.filter(m =>
+      m.name.toLowerCase().includes(q) ||
+      m.components.some(c => c.name.toLowerCase().includes(q))
+    )
+  }, [data, search])
 
-  if (loading) {
-    return <NectarLoader size="lg" message="Building roadmap..." className="mt-32" />
-  }
+  // Visible months (skip empty past months)
+  const visibleMonths = useMemo(() => {
+    if (!data) return []
+    return data.months
+  }, [data])
+
+  if (loading) return <NectarLoader size="lg" message="Loading roadmap..." className="mt-32" />
 
   if (error) {
     return (
-      <div className="w-full flex justify-center mt-32">
-        <div className="text-center">
-          <p className="text-sm text-destructive mb-2">{error}</p>
-          <Button variant="outline" size="sm" onClick={load}>Retry</Button>
-        </div>
-      </div>
+      <Card>
+        <CardContent className="p-6 text-center">
+          <p className="text-sm text-destructive">{error}</p>
+          <Button variant="outline" size="sm" onClick={load} className="mt-2">Retry</Button>
+        </CardContent>
+      </Card>
     )
   }
 
@@ -241,712 +202,378 @@ export function RoadmapPage() {
 
   return (
     <div className="w-full space-y-4">
-      {/* Header */}
+      {/* ── Header ──────────────────────────────────────── */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-2xl font-bold">Roadmap</h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            {data.stats.totalTickets} tickets across {filteredThemes.length} themes · {data.stats.totalReleases} active releases
+          <h1 className="text-2xl font-bold">Roadmap</h1>
+          <p className="text-sm text-muted-foreground">
+            {data.stats.totalTickets.toLocaleString()} tickets across {data.stats.totalModules} modules
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {/* View mode toggle: Grid | Cards */}
-          <div className="flex rounded-md border text-xs">
-            <button
-              type="button"
-              onClick={() => updateParams({ view: 'grid', offset: null })}
-              className={cn("px-3 py-1.5 rounded-l-md transition-colors", viewMode === 'grid' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
-            >
-              Grid
-            </button>
-            <button
-              type="button"
-              onClick={() => updateParams({ view: 'cards', offset: null })}
-              className={cn("px-3 py-1.5 rounded-r-md border-l transition-colors", viewMode === 'cards' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
-            >
-              Cards
-            </button>
-          </div>
-
-          {/* Navigation + Zoom (only shown in Grid view) */}
-          {viewMode === 'grid' && (
-            <>
-              <Button variant="ghost" size="sm" onClick={goBack} disabled={offsetParam <= 0} className="text-xs h-7 px-2">
-                &larr;
-              </Button>
-              {offsetParam > 0 && (
-                <Button variant="ghost" size="sm" onClick={goToday} className="text-xs h-7 px-2">
-                  Today
-                </Button>
-              )}
-              <Button variant="ghost" size="sm" onClick={goForward} className="text-xs h-7 px-2">
-                &rarr;
-              </Button>
-              {/* Zoom toggle */}
-              <div className="flex rounded-md border text-xs">
-                <button
-                  type="button"
-                  onClick={() => updateParams({ zoom: 'day', offset: null })}
-                  className={cn("px-3 py-1.5 rounded-l-md transition-colors", zoom === 'day' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
-                >
-                  Day
-                </button>
-                <button
-                  type="button"
-                  onClick={() => updateParams({ zoom: 'week', offset: null })}
-                  className={cn("px-3 py-1.5 border-l transition-colors", zoom === 'week' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
-                >
-                  Week
-                </button>
-                <button
-                  type="button"
-                  onClick={() => updateParams({ zoom: null, offset: null })}
-                  className={cn("px-3 py-1.5 border-l transition-colors", zoom === 'month' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
-                >
-                  Month
-                </button>
-                <button
-                  type="button"
-                  onClick={() => updateParams({ zoom: 'quarter', offset: null })}
-                  className={cn("px-3 py-1.5 rounded-r-md border-l transition-colors", zoom === 'quarter' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
-                >
-                  Quarter
-                </button>
-              </div>
-            </>
-          )}
-          <Button variant="outline" size="sm" onClick={load}>Refresh</Button>
-        </div>
+        <Button variant="outline" size="sm" onClick={load}>Refresh</Button>
       </div>
 
-      {/* Filters */}
-      <div className="flex items-center gap-2 flex-wrap">
+      {/* ── Filters ─────────────────────────────────────── */}
+      <div className="flex items-center gap-3 flex-wrap">
         <Input
-          placeholder="Search themes, releases..."
+          placeholder="Search modules, components..."
           value={search}
           onChange={e => updateParams({ q: e.target.value || null })}
           className="max-w-xs"
         />
-        <div className="flex flex-wrap gap-1">
-          <button
-            type="button"
-            onClick={() => updateParams({ customer: null })}
-            className={cn(
-              "px-2.5 py-1 rounded-md border text-xs transition-colors",
-              !customerFilter ? "bg-primary text-primary-foreground" : "bg-muted/30 hover:bg-accent/50"
-            )}
-          >
-            All
-          </button>
-          {data.customers.filter(c => c !== 'All').map(c => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => updateParams({ customer: customerFilter === c ? null : c })}
-              className={cn(
-                "px-2.5 py-1 rounded-md border text-xs transition-colors",
-                customerFilter === c ? "bg-primary text-primary-foreground" : "bg-muted/30 hover:bg-accent/50"
-              )}
-            >
-              {c}
-            </button>
-          ))}
-        </div>
-        {(search || customerFilter) && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => updateParams({ q: null, customer: null })}
-          >
-            Clear
+
+        <select
+          value={customerFilter}
+          onChange={e => updateParams({ customer: e.target.value || null })}
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+        >
+          <option value="">All Customers</option>
+          {data.customers.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+
+        <select
+          value={projectFilter}
+          onChange={e => updateParams({ project: e.target.value || null })}
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+        >
+          <option value="">All Projects</option>
+          {data.projects.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+
+        {(customerFilter || projectFilter) && (
+          <Button variant="ghost" size="sm" onClick={() => updateParams({ customer: null, project: null })}>
+            Clear filters
           </Button>
         )}
+
+        {customerFilter && (
+          <span className="text-xs text-muted-foreground">
+            Showing: {customerFilter} + untagged tickets
+          </span>
+        )}
       </div>
 
-      {/* Grid view */}
-      {viewMode === 'grid' && (
-        <div className="overflow-x-auto">
-          <div className="min-w-[800px]">
-            {/* Header row */}
-            <div className="flex border-b sticky top-0 bg-background z-10">
-              <div className="w-28 md:w-48 shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Theme
+      {/* ── Roadmap grid ────────────────────────────────── */}
+      <div className="overflow-x-auto border rounded-lg">
+        <table className="w-full border-collapse text-sm min-w-[900px]">
+          <thead className="sticky top-0 bg-muted/50 z-20">
+            <tr>
+              <th className="text-left px-4 py-3 w-72 text-xs font-semibold uppercase tracking-wider text-muted-foreground sticky left-0 bg-muted/50 z-30 border-r border-b">
+                Module / Component
+              </th>
+              {visibleMonths.map((m, i) => {
+                const isCurrentMonth = m.key === `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`
+                return (
+                  <th key={m.key} className={cn(
+                    "text-center px-2 py-3 text-xs font-semibold uppercase tracking-wider min-w-[140px] border-b",
+                    isCurrentMonth ? 'text-primary bg-primary/5' : 'text-muted-foreground',
+                    i > 0 && 'border-l',
+                  )}>
+                    {m.label}
+                  </th>
+                )
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {filteredModules.map(mod => (
+              <ModuleRows
+                key={mod.name}
+                module={mod}
+                months={visibleMonths}
+                expanded={expandedModules.has(mod.name)}
+                onToggle={() => toggleModule(mod.name)}
+                onCellClick={(version, component) => setDrawer({ module: mod.name, version, component })}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {filteredModules.length === 0 && (
+        <Card>
+          <CardContent className="p-12 text-center text-muted-foreground text-sm">
+            No modules match your search.
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Drill-down drawer ───────────────────────────── */}
+      <Sheet open={!!drawer} onOpenChange={() => setDrawer(null)}>
+        <SheetContent className="md:max-w-xl">
+          {drawer && (
+            <DrillDownDrawer
+              module={drawer.module}
+              version={drawer.version}
+              component={drawer.component}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
+    </div>
+  )
+}
+
+// ── Module rows (expandable) ──────────────────────────
+
+function ModuleRows({
+  module: mod,
+  months,
+  expanded,
+  onToggle,
+  onCellClick,
+}: {
+  module: ModuleEntry
+  months: MonthColumn[]
+  expanded: boolean
+  onToggle: () => void
+  onCellClick: (version: string, component?: string) => void
+}) {
+  const color = getModuleColor(mod.name)
+
+  return (
+    <>
+      {/* Module header row */}
+      <tr className={cn('cursor-pointer hover:brightness-95 transition-all', color.bg)}>
+        <td
+          className={cn('px-4 py-3 font-medium sticky left-0 z-10 border-r border-b', color.bg)}
+          onClick={onToggle}
+        >
+          <div className="flex items-center gap-2">
+            <span className={cn('text-xs transition-transform', expanded && 'rotate-90')}>▶</span>
+            <div className={cn('w-1.5 h-6 rounded-full', color.border.replace('border-', 'bg-'))} />
+            <span className={cn('font-semibold text-sm', color.text)}>{mod.name}</span>
+            <span className="text-xs text-muted-foreground font-normal">({mod.totalTickets})</span>
+            <div className="ml-auto flex items-center gap-2">
+              <ProgressBar progress={mod.progress} className="w-20" />
+              <span className="text-xs text-muted-foreground tabular-nums w-8 text-right">{mod.progress}%</span>
+            </div>
+          </div>
+        </td>
+        {months.map((m, i) => {
+          const cards = mod.months[m.key] || []
+          return (
+            <td key={m.key} className={cn('px-1.5 py-1.5 align-top border-b', i > 0 && 'border-l')}>
+              {cards.map((card, ci) => (
+                <ReleaseCardCell key={`${card.version}-${ci}`} card={card} color={color} onClick={() => onCellClick(card.version)} />
+              ))}
+            </td>
+          )
+        })}
+      </tr>
+
+      {/* Component rows (visible when expanded) */}
+      {expanded && mod.components.map(comp => (
+        <tr key={comp.name} className="hover:bg-accent/10 transition-colors">
+          <td className="px-4 py-1.5 sticky left-0 bg-background z-10 border-r border-b">
+            <div className="flex items-center gap-2 pl-7">
+              <span className="text-xs">{comp.name}</span>
+              <span className="text-xs text-muted-foreground opacity-50">({comp.totalTickets})</span>
+              <div className="ml-auto flex items-center gap-2">
+                <ProgressBar progress={comp.progress} className="w-12" />
+                <span className="text-[10px] text-muted-foreground tabular-nums w-7 text-right">{comp.progress}%</span>
               </div>
-              {hasOverdue && (
-                <div className="w-36 shrink-0 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-red-400/70 text-center border-l bg-red-500/[0.03]">
-                  Overdue
-                </div>
-              )}
-              {hasUnscheduled && (
-                <div className="w-36 shrink-0 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground/50 text-center border-l">
-                  Unscheduled
-                </div>
-              )}
-              {visibleColumns.map(m => (
-                <div
-                  key={m.key}
-                  className={cn(
-                    "flex-1 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center border-l",
-                    zoom === 'day' ? "min-w-[70px] md:min-w-[90px]" : zoom === 'week' ? "min-w-[90px] md:min-w-[110px]" : "min-w-[110px] md:min-w-[140px]"
-                  )}
+            </div>
+          </td>
+          {months.map((m, i) => {
+            const cards = comp.months[m.key] || []
+            return (
+              <td key={m.key} className={cn('px-1.5 py-0.5 align-top border-b', i > 0 && 'border-l')}>
+                {cards.map((card, ci) => (
+                  <ReleaseCardCell key={`${card.version}-${ci}`} card={card} color={color} mini onClick={() => onCellClick(card.version, comp.name)} />
+                ))}
+              </td>
+            )
+          })}
+        </tr>
+      ))}
+
+      {/* Show unscheduled if any */}
+      {(mod.months['unscheduled'] || []).length > 0 && expanded && (
+        <tr className="border-b bg-muted/20">
+          <td className="px-3 py-1 sticky left-0 bg-muted/20 z-10 pl-9 text-xs text-muted-foreground italic">
+            Unscheduled
+          </td>
+          <td colSpan={months.length} className="px-3 py-1">
+            <div className="flex gap-2 flex-wrap">
+              {(mod.months['unscheduled'] || []).map((card, i) => (
+                <button
+                  key={`${card.version}-${i}`}
+                  onClick={() => onCellClick(card.version)}
+                  className="text-xs px-2 py-0.5 rounded border bg-background hover:bg-accent/30 transition-colors"
                 >
-                  {m.label}
-                </div>
+                  {card.version} ({card.tickets})
+                </button>
               ))}
             </div>
-
-            {/* Theme rows */}
-            {filteredThemes.length === 0 ? (
-              <div className="text-center py-16 text-muted-foreground text-sm">
-                No themes match the current filters.
-              </div>
-            ) : (
-              filteredThemes.map(theme => (
-                <ThemeRow
-                  key={theme.name}
-                  theme={theme}
-                  months={visibleColumns}
-                  collapsed={collapsedThemes.has(theme.name)}
-                  onToggle={() => toggleTheme(theme.name)}
-                  isDayView={zoom === 'day'}
-                  isWeekView={zoom === 'day' || zoom === 'week'}
-                  onCardClick={(version, repo) => setDrawer({ theme: theme.name, version, repo })}
-                  showOverdue={hasOverdue}
-                  showUnscheduled={hasUnscheduled}
-                  today={today}
-                />
-              ))
-            )}
-          </div>
-        </div>
+          </td>
+        </tr>
       )}
-
-      {/* Card view */}
-      {viewMode === 'cards' && (
-        <RoadmapCardView
-          themes={filteredThemes}
-          collapsedThemes={collapsedThemes}
-          onToggleTheme={toggleTheme}
-          onCardClick={(theme, version, repo) => setDrawer({ theme, version, repo })}
-          today={today}
-        />
-      )}
-
-      {/* Unmapped components notice */}
-      {data.unmappedComponents.length > 0 && (
-        <div className="text-xs text-muted-foreground border-t pt-3 mt-4">
-          <span className="font-medium">Unmapped components:</span>{' '}
-          {data.unmappedComponents.join(', ')}
-          {' · '}
-          <Link to="/config" className="text-primary hover:underline">Configure themes</Link>
-        </div>
-      )}
-
-      {/* Theme × Release drawer */}
-      {drawer && (
-        <ThemeReleaseDrawer
-          theme={drawer.theme}
-          version={drawer.version}
-          repo={drawer.repo}
-          onClose={() => setDrawer(null)}
-        />
-      )}
-    </div>
+    </>
   )
 }
 
-// ── Theme row ──────────────────────────────────────────
+// ── Release card cell ─────────────────────────────────
 
-function ThemeRow({ theme, months, collapsed, onToggle, isDayView, isWeekView, onCardClick, showOverdue, showUnscheduled, today }: {
-  theme: Theme
-  months: MonthColumn[]
-  collapsed: boolean
-  onToggle: () => void
-  isDayView?: boolean
-  isWeekView?: boolean
-  onCardClick: (version: string, repo: string) => void
-  showOverdue: boolean
-  showUnscheduled: boolean
-  today: string
+function ReleaseCardCell({
+  card,
+  color,
+  mini,
+  onClick,
+}: {
+  card: ReleaseCard
+  color: ReturnType<typeof getModuleColor>
+  mini?: boolean
+  onClick: () => void
 }) {
-  // Collect ALL cards across month buckets for date-range matching
-  const allCards = useMemo(() => {
-    const cards: ReleaseCard[] = []
-    for (const [key, monthCards] of Object.entries(theme.months)) {
-      if (key === 'unscheduled') continue
-      cards.push(...monthCards)
-    }
-    return cards
-  }, [theme.months])
-
-  // Get cards that fall within a time column's date range
-  function getCardsForColumn(col: MonthColumn): ReleaseCard[] {
-    if (!theme.months) return []
-
-    if (isWeekView) {
-      return allCards.filter(card =>
-        card.jiraReleaseDate && card.jiraReleaseDate >= col.start && card.jiraReleaseDate <= col.end &&
-        (card.progress >= 100 || card.jiraReleaseDate >= today) // exclude overdue from time columns
-      )
-    }
-
-    // For month/quarter view: lookup by month key(s), exclude overdue
-    const keys = col.key.split(',')
-    const cards: ReleaseCard[] = []
-    for (const k of keys) {
-      for (const card of (theme.months[k] || [])) {
-        if (card.jiraReleaseDate && card.jiraReleaseDate < today && card.progress < 100) continue
-        cards.push(card)
-      }
-    }
-    return cards
-  }
-
-  // Overdue cards: have a release date in the past and are not complete
-  const overdueCards = useMemo(() =>
-    allCards.filter(c => c.jiraReleaseDate && c.jiraReleaseDate < today && c.progress < 100),
-    [allCards, today]
-  )
-
-  const unscheduledCards = theme.months['unscheduled'] || []
-
-  function renderCell(cards: ReleaseCard[]) {
-    return (
-      <>
-        {!collapsed && cards.map(card => (
-          <ReleaseCardView key={`${card.repo}:${card.version}`} card={card} onClick={() => onCardClick(card.version, card.repo)} />
-        ))}
-        {collapsed && cards.length > 0 && (
-          <div className="text-[10px] text-muted-foreground text-center py-1">
-            {cards.reduce((s, c) => s + c.tickets, 0)} tickets
-          </div>
-        )}
-      </>
-    )
-  }
-
-  return (
-    <div className="flex border-b hover:bg-accent/10 transition-colors">
-      {/* Theme label */}
-      <button
-        type="button"
-        onClick={onToggle}
-        className="w-28 md:w-48 shrink-0 px-3 py-3 text-left"
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">{collapsed ? '▸' : '▾'}</span>
-          <div>
-            <div className="text-sm font-medium leading-tight">
-              {theme.icon && <span className="mr-1">{theme.icon}</span>}
-              {theme.name}
-            </div>
-            <div className="text-[10px] text-muted-foreground mt-0.5">
-              {theme.totalTickets} tickets · {theme.progress}% done
-            </div>
-          </div>
-        </div>
-        <div className="mt-1.5 h-1 rounded-full bg-muted/30 overflow-hidden">
-          <div className="h-full rounded-full bg-green-500/60 transition-all" style={{ width: `${theme.progress}%` }} />
-        </div>
-      </button>
-
-      {/* Overdue cell */}
-      {showOverdue && (
-        <div className="w-36 shrink-0 px-1.5 py-2 border-l bg-red-500/[0.02]">
-          {renderCell(overdueCards)}
-        </div>
-      )}
-
-      {/* Unscheduled cell */}
-      {showUnscheduled && (
-        <div className="w-36 shrink-0 px-1.5 py-2 border-l">
-          {renderCell(unscheduledCards)}
-        </div>
-      )}
-
-      {/* Time cells */}
-      {months.map(m => {
-        const cards = getCardsForColumn(m)
-        return (
-          <div
-            key={m.key}
-            className={cn("flex-1 px-1.5 py-2 border-l", isDayView ? "min-w-[70px] md:min-w-[90px]" : isWeekView ? "min-w-[90px] md:min-w-[110px]" : "min-w-[110px] md:min-w-[140px]")}
-          >
-            {renderCell(cards)}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Release card ───────────────────────────────────────
-
-function ReleaseCardView({ card, onClick }: { card: ReleaseCard; onClick: () => void }) {
-  const statusColor = card.progress === 100
-    ? 'border-green-500/40 bg-green-500/5'
-    : card.missingPlan > 0
-    ? 'border-yellow-500/40 bg-yellow-500/5'
-    : card.progress > 0
-    ? 'border-blue-500/40 bg-blue-500/5'
-    : 'border-muted/50 bg-muted/5'
-
-  const statusGlyph = card.progress === 100 ? '✅' :
-    card.missingPlan > 0 ? '⚠' :
-    card.progress > 0 ? '🟡' : '🔵'
+  const isDone = card.progress === 100
+  const isOverdue = !isDone && card.jiraReleaseDate && new Date(card.jiraReleaseDate) < new Date()
 
   return (
     <button
-      type="button"
       onClick={onClick}
       className={cn(
-        "block w-full text-left rounded-md border p-2 mb-1.5 transition-all hover:scale-[1.02] hover:shadow-sm cursor-pointer",
-        statusColor
+        'block w-full text-left rounded-md border px-2.5 transition-all hover:shadow-md mb-1',
+        mini ? 'py-1' : 'py-1.5',
+        isDone && 'border-green-400 bg-green-50 dark:bg-green-950/30',
+        isOverdue && 'border-red-400 bg-red-50 dark:bg-red-950/30',
+        !isDone && !isOverdue && cn(color.border, 'bg-background hover:bg-accent/20'),
       )}
     >
-      <div className="flex items-baseline justify-between gap-1">
-        <span className="font-mono text-xs font-medium truncate">{card.version}</span>
-        <span className="text-[10px] shrink-0">{statusGlyph}</span>
-      </div>
-
-      {/* Progress bar */}
-      <div className="mt-1 h-1 rounded-full bg-muted/30 overflow-hidden">
-        <div
-          className="h-full rounded-full bg-green-500/60"
-          style={{ width: `${card.progress}%` }}
-        />
-      </div>
-
-      <div className="mt-1 text-[10px] text-muted-foreground leading-tight">
-        {card.done}/{card.tickets} done
-        {card.missingPlan > 0 && (
-          <span className="text-yellow-400 ml-1">· {card.missingPlan} missing</span>
-        )}
-      </div>
-
-      {/* Customer tags */}
-      {card.customers.length > 0 && card.customers[0] !== 'All' && (
-        <div className="flex flex-wrap gap-0.5 mt-1">
-          {card.customers.map(c => (
-            <span
-              key={c}
-              className="px-1 py-px rounded text-[9px] bg-muted/30 text-muted-foreground"
-            >
-              {c}
-            </span>
-          ))}
-        </div>
-      )}
-    </button>
-  )
-}
-
-// ── Theme × Release Drawer ────────────────────────────
-
-interface DrawerTicket {
-  key: string
-  summary: string
-  jiraStatus: string
-  state: string
-  type: string | null
-  assignee: string | null
-  inTarget: boolean
-  inFixVersion: boolean
-}
-
-interface ThemeReleaseDetail {
-  theme: string
-  version: string
-  repo: string
-  state: string
-  jiraReleaseDate: string | null
-  tickets: DrawerTicket[]
-  stats: { total: number; done: number; remaining: number }
-}
-
-// ── Roadmap Card View ─────────────────────────────────
-
-function RoadmapCardView({ themes, collapsedThemes, onToggleTheme, onCardClick, today }: {
-  themes: Theme[]
-  collapsedThemes: Set<string>
-  onToggleTheme: (name: string) => void
-  onCardClick: (theme: string, version: string, repo: string) => void
-  today: string
-}) {
-  // For each theme, collect all release cards across all time periods, sorted by date
-  const themeCards = useMemo(() =>
-    themes.map(theme => {
-      const cards: ReleaseCard[] = []
-      for (const [, monthCards] of Object.entries(theme.months)) {
-        cards.push(...monthCards)
-      }
-      // Sort: overdue first (by date desc), then upcoming by date asc, unscheduled last
-      cards.sort((a, b) => {
-        const aDate = a.jiraReleaseDate || '9999-99-99'
-        const bDate = b.jiraReleaseDate || '9999-99-99'
-        const aOverdue = a.jiraReleaseDate && a.jiraReleaseDate < today && a.progress < 100
-        const bOverdue = b.jiraReleaseDate && b.jiraReleaseDate < today && b.progress < 100
-        // Overdue items first
-        if (aOverdue && !bOverdue) return -1
-        if (!aOverdue && bOverdue) return 1
-        // Then by date ascending
-        return aDate.localeCompare(bDate)
-      })
-      return { theme, cards }
-    }),
-    [themes, today]
-  )
-
-  if (themes.length === 0) {
-    return (
-      <div className="text-center py-16 text-muted-foreground text-sm">
-        No themes match the current filters.
-      </div>
-    )
-  }
-
-  return (
-    <div className="space-y-4">
-      {themeCards.map(({ theme, cards }) => {
-        const collapsed = collapsedThemes.has(theme.name)
-        return (
-          <div key={theme.name} className="border rounded-lg overflow-hidden">
-            {/* Theme header */}
-            <button
-              type="button"
-              onClick={() => onToggleTheme(theme.name)}
-              className="w-full flex items-center gap-3 px-4 py-3 bg-muted/20 hover:bg-muted/40 transition-colors text-left"
-            >
-              <span className="text-xs text-muted-foreground">{collapsed ? '▸' : '▾'}</span>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm font-medium">
-                    {theme.icon && <span className="mr-1">{theme.icon}</span>}
-                    {theme.name}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {theme.totalTickets} tickets · {theme.progress}% done
-                  </span>
-                </div>
-                <div className="mt-1.5 h-1 rounded-full bg-muted/30 overflow-hidden max-w-xs">
-                  <div className="h-full rounded-full bg-green-500/60 transition-all" style={{ width: `${theme.progress}%` }} />
-                </div>
-              </div>
-              <span className="text-xs text-muted-foreground shrink-0">{cards.length} releases</span>
-            </button>
-
-            {/* Release cards */}
-            {!collapsed && (
-              <div className="p-3 space-y-2">
-                {cards.length === 0 ? (
-                  <div className="text-xs text-muted-foreground italic text-center py-4">No releases</div>
-                ) : (
-                  cards.map(card => {
-                    const isOverdue = card.jiraReleaseDate && card.jiraReleaseDate < today && card.progress < 100
-                    return (
-                      <div
-                        key={`${card.repo}:${card.version}`}
-                        className={cn("rounded-lg", isOverdue && "ring-1 ring-red-500/30")}
-                      >
-                        {isOverdue && (
-                          <div className="text-[10px] text-red-400 font-medium px-2 pt-1">OVERDUE</div>
-                        )}
-                        <CardViewReleaseCard
-                          card={card}
-                          onClick={() => onCardClick(theme.name, card.version, card.repo)}
-                        />
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-/** Full-width release card for the Card view — reuses the same data as ReleaseCardView but in a wider layout */
-function CardViewReleaseCard({ card, onClick }: { card: ReleaseCard; onClick: () => void }) {
-  const statusColor = card.progress === 100
-    ? 'border-green-500/40 bg-green-500/5'
-    : card.missingPlan > 0
-    ? 'border-yellow-500/40 bg-yellow-500/5'
-    : card.progress > 0
-    ? 'border-blue-500/40 bg-blue-500/5'
-    : 'border-muted/50 bg-muted/5'
-
-  const statusGlyph = card.progress === 100 ? '✅' :
-    card.missingPlan > 0 ? '⚠' :
-    card.progress > 0 ? '🟡' : '🔵'
-
-  const dateStr = card.jiraReleaseDate
-    ? new Date(card.jiraReleaseDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-    : 'Unscheduled'
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "block w-full text-left rounded-md border p-3 transition-all hover:scale-[1.01] hover:shadow-sm cursor-pointer",
-        statusColor
-      )}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="font-mono text-sm font-medium truncate">{card.version}</span>
-          <span className="text-xs shrink-0">{statusGlyph}</span>
-        </div>
-        <span className="text-xs text-muted-foreground shrink-0">{dateStr}</span>
-      </div>
-
-      {/* Progress bar */}
-      <div className="mt-2 h-1.5 rounded-full bg-muted/30 overflow-hidden">
-        <div
-          className="h-full rounded-full bg-green-500/60"
-          style={{ width: `${card.progress}%` }}
-        />
-      </div>
-
-      <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span>
-          {card.done}/{card.tickets} done
-          {card.missingPlan > 0 && (
-            <span className="text-yellow-400 ml-1"> · {card.missingPlan} missing</span>
+      <div className="flex items-center gap-1.5">
+        <span className={cn('font-mono font-medium', mini ? 'text-[10px]' : 'text-xs')}>
+          {card.version}
+        </span>
+        <span className={cn('ml-auto tabular-nums', mini ? 'text-[10px] text-muted-foreground' : 'text-xs font-medium')}>
+          {isDone ? (
+            <span className="text-green-600">Done</span>
+          ) : (
+            <span>{card.done}<span className="text-muted-foreground">/{card.tickets}</span></span>
           )}
         </span>
-        {card.progress > 0 && card.progress < 100 && (
-          <span>{card.progress}%</span>
-        )}
       </div>
-
-      {/* Customer tags */}
-      {card.customers.length > 0 && card.customers[0] !== 'All' && (
-        <div className="flex flex-wrap gap-1 mt-2">
-          {card.customers.map(c => (
-            <span
-              key={c}
-              className="px-1.5 py-0.5 rounded text-[10px] bg-muted/30 text-muted-foreground"
-            >
-              {c}
-            </span>
-          ))}
-        </div>
+      {!mini && (
+        <>
+          <ProgressBar progress={card.progress} className="mt-1" small />
+          {card.inProgress > 0 && (
+            <div className="text-[10px] text-muted-foreground mt-0.5">
+              {card.inProgress} in progress, {card.pending} pending
+            </div>
+          )}
+        </>
       )}
     </button>
   )
 }
 
-// ── Theme × Release Drawer ────────────────────────────
+// ── Progress bar ──────────────────────────────────────
 
-function ThemeReleaseDrawer({ theme, version, repo, onClose }: {
-  theme: string
-  version: string
-  repo: string
-  onClose: () => void
-}) {
-  const [data, setData] = useState<ThemeReleaseDetail | null>(null)
+function ProgressBar({ progress, className, small }: { progress: number; className?: string; small?: boolean }) {
+  return (
+    <div className={cn('rounded-full bg-muted overflow-hidden', small ? 'h-1' : 'h-1.5', className)}>
+      <div
+        className={cn(
+          'h-full rounded-full transition-all',
+          progress === 100 ? 'bg-green-500' : progress > 50 ? 'bg-yellow-500' : 'bg-blue-500',
+        )}
+        style={{ width: `${Math.min(progress, 100)}%` }}
+      />
+    </div>
+  )
+}
+
+// ── Drill-down drawer ─────────────────────────────────
+
+function DrillDownDrawer({ module, version, component }: { module: string; version: string; component?: string }) {
+  const [data, setData] = useState<DrillDownResponse | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    apiFetch<ThemeReleaseDetail>(`/roadmap/${encodeURIComponent(theme)}/${encodeURIComponent(version)}`)
+    const params = component ? `?component=${encodeURIComponent(component)}` : ''
+    apiFetch<DrillDownResponse>(`/roadmap/${encodeURIComponent(module)}/${encodeURIComponent(version)}${params}`)
       .then(setData)
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [theme, version])
+  }, [module, version, component])
 
-  const releaseKey = repo && repo !== 'webplatform'
-    ? `${repo}:${version}`
-    : version
+  if (loading) return <NectarSpinner className="mt-12" />
+  if (!data) return null
 
-  const stateColor = (state: string) => {
-    const s = state.toLowerCase()
-    if (s === 'done' || s === 'cherry-picked' || s === 'ready-for-testing') return 'text-green-400'
-    if (s === 'in-progress') return 'text-blue-400'
-    return 'text-muted-foreground'
-  }
+  const color = getModuleColor(module)
 
   return (
-    <Sheet open onOpenChange={() => onClose()}>
-      <SheetContent>
-        <SheetHeader>
-          <SheetTitle>{theme}</SheetTitle>
-          <div className="flex items-center gap-2 mt-1">
-            <span className="font-mono text-sm text-muted-foreground">{version}</span>
-            {data?.state && (
-              <Badge variant="outline" className={`state-${data.state} text-xs`}>{data.state}</Badge>
-            )}
-            {data?.jiraReleaseDate && (
-              <span className="text-xs text-muted-foreground">{data.jiraReleaseDate}</span>
-            )}
+    <>
+      <SheetHeader>
+        <SheetTitle>
+          <span className={color.text}>{module}</span>
+          {component && <span className="text-muted-foreground font-normal"> / {component}</span>}
+          <span className="text-muted-foreground font-normal"> — {version}</span>
+        </SheetTitle>
+      </SheetHeader>
+      <SheetBody>
+        <div className="space-y-3">
+          {/* Stats */}
+          <div className="flex gap-4 text-sm">
+            <div>
+              <span className="text-muted-foreground">Total: </span>
+              <span className="font-medium">{data.stats.total}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Done: </span>
+              <span className="font-medium text-green-600">{data.stats.done}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Remaining: </span>
+              <span className="font-medium">{data.stats.remaining}</span>
+            </div>
           </div>
-          {data && (
-            <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
-              <span><span className="text-green-400 font-medium">{data.stats.done}</span> done</span>
-              <span><span className="text-foreground font-medium">{data.stats.remaining}</span> remaining</span>
-              <span>{data.stats.total} total</span>
-            </div>
-          )}
-        </SheetHeader>
-        <SheetBody>
-          {loading ? (
-            <div className="flex justify-center py-12">
-              <NectarSpinner />
-            </div>
-          ) : data && data.tickets.length > 0 ? (
-            <div className="space-y-1">
-              {data.tickets.map(t => (
-                <div
-                  key={t.key}
-                  className={cn(
-                    "flex items-start gap-3 py-2 px-2 rounded-md hover:bg-accent/30 transition-colors border-b border-border/30 last:border-0",
-                    t.inTarget && !t.inFixVersion && "bg-yellow-500/[0.03]"
-                  )}
-                >
-                  <div className="shrink-0 pt-0.5">
-                    <JiraLink jiraKey={t.key} className="text-xs" />
-                    {t.inTarget && !t.inFixVersion && (
-                      <div className="text-[9px] text-yellow-400 mt-0.5">planned</div>
-                    )}
-                  </div>
+
+          <ProgressBar progress={data.stats.total > 0 ? Math.round((data.stats.done / data.stats.total) * 100) : 0} />
+
+          {/* Ticket list */}
+          <div className="space-y-1">
+            {data.tickets.map(t => {
+              const statusColor = getStatusBadgeColor(t.jiraStatus)
+              return (
+                <div key={t.key} className="flex items-start gap-2 py-1.5 border-b last:border-0">
+                  <JiraLink jiraKey={t.key} className="text-xs shrink-0 w-20" />
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm leading-tight line-clamp-2">{t.summary}</div>
-                    <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-                      {t.type && <span>{t.type}</span>}
-                      {t.assignee && <span>{t.type ? '·' : ''} {t.assignee}</span>}
+                    <p className="text-sm line-clamp-1">{t.summary}</p>
+                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                      {statusColor && (
+                        <span className={cn("text-xs px-1.5 py-0 rounded-full", statusColor)}>
+                          {t.jiraStatus}
+                        </span>
+                      )}
+                      {t.component && !component && (
+                        <span className="text-xs text-muted-foreground">{t.component}</span>
+                      )}
+                      {t.assignee && (
+                        <span className="text-xs text-muted-foreground">{t.assignee}</span>
+                      )}
+                      {t.customerTags.length > 0 && (
+                        <span className="text-xs text-muted-foreground">
+                          {t.customerTags.join(', ')}
+                        </span>
+                      )}
+                      {!t.inFixVersion && t.inTarget && (
+                        <Badge variant="outline" className="text-xs px-1 py-0 text-amber-600 border-amber-300">
+                          planned only
+                        </Badge>
+                      )}
                     </div>
                   </div>
-                  <div className="shrink-0">
-                    <span className={cn("text-xs", stateColor(t.state))}>{t.jiraStatus}</span>
-                  </div>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground italic py-8 text-center">No tickets</p>
-          )}
-
-          {/* Link to full release */}
-          <div className="mt-6 pt-4 border-t">
-            <Link
-              to={`/releases/${encodeURIComponent(releaseKey)}`}
-              state={{ from: 'roadmap' }}
-              className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
-              onClick={onClose}
-            >
-              Open full release {version}
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M5 12h14"/>
-                <path d="m12 5 7 7-7 7"/>
-              </svg>
-            </Link>
+              )
+            })}
           </div>
-        </SheetBody>
-      </SheetContent>
-    </Sheet>
+
+          {data.tickets.length === 0 && (
+            <p className="text-sm text-muted-foreground text-center py-8">No tickets in this release.</p>
+          )}
+        </div>
+      </SheetBody>
+    </>
   )
 }

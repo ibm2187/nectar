@@ -328,13 +328,16 @@ describe('API Routes', () => {
   });
 
   describe('GET /api/roadmap', () => {
-    it('returns roadmap structure', async () => {
+    it('returns roadmap structure with modules', async () => {
       const { app } = createTestApp();
       const res = await request(app, 'GET', '/api/roadmap');
       expect(res.status).toBe(200);
       expect(res.body.months).toBeDefined();
-      expect(res.body.themes).toBeDefined();
+      expect(res.body.modules).toBeDefined();
       expect(res.body.customers).toBeDefined();
+      expect(res.body.projects).toBeDefined();
+      expect(res.body.products).toBeDefined();
+      expect(res.body.stats).toBeDefined();
     });
   });
 

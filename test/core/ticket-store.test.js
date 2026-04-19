@@ -513,4 +513,259 @@ describe('TicketStore', () => {
       expect(got.fixVersions).toEqual([]);
     });
   });
+
+  // ── Product taxonomy fields ─────────────────────────
+
+  describe('module/product/projects fields', () => {
+    it('stores and retrieves module field', () => {
+      store.upsert(makeTicket({ module: 'Billing' }));
+      const got = store.get('DEV-1001');
+      expect(got.module).toBe('Billing');
+    });
+
+    it('stores and retrieves product as JSON array', () => {
+      store.upsert(makeTicket({ product: ['Web Platform', 'Mobile (iOS)'] }));
+      const got = store.get('DEV-1001');
+      expect(got.product).toEqual(['Web Platform', 'Mobile (iOS)']);
+    });
+
+    it('stores and retrieves projects as JSON array', () => {
+      store.upsert(makeTicket({ projects: ['RCM V2', 'Lumen Phase 2'] }));
+      const got = store.get('DEV-1001');
+      expect(got.projects).toEqual(['RCM V2', 'Lumen Phase 2']);
+    });
+
+    it('defaults to empty arrays when not set', () => {
+      store.upsert(makeTicket());
+      const got = store.get('DEV-1001');
+      expect(got.product).toEqual([]);
+      expect(got.projects).toEqual([]);
+      expect(got.module).toBeNull();
+    });
+
+    it('updates module on upsert', () => {
+      store.upsert(makeTicket({ module: 'Billing' }));
+      store.upsert(makeTicket({ module: 'Scheduling' }));
+      expect(store.get('DEV-1001').module).toBe('Scheduling');
+    });
+
+    it('preserves all taxonomy fields in batch upsert', () => {
+      store.upsertBatch([
+        makeTicket({ key: 'DEV-1', module: 'Billing', product: ['Web Platform'], projects: ['RCM V2'] }),
+        makeTicket({ key: 'DEV-2', module: 'AI', product: ['Web Platform', 'Mobile (iOS)'], projects: [] }),
+      ]);
+      expect(store.get('DEV-1').module).toBe('Billing');
+      expect(store.get('DEV-1').projects).toEqual(['RCM V2']);
+      expect(store.get('DEV-2').module).toBe('AI');
+      expect(store.get('DEV-2').product).toEqual(['Web Platform', 'Mobile (iOS)']);
+    });
+  });
+
+  // ── Module/component grouping queries ───────────────
+
+  describe('getModules', () => {
+    it('returns distinct modules with counts', () => {
+      store.upsertBatch([
+        makeTicket({ key: 'DEV-1', module: 'Billing' }),
+        makeTicket({ key: 'DEV-2', module: 'Billing' }),
+        makeTicket({ key: 'DEV-3', module: 'Scheduling' }),
+        makeTicket({ key: 'DEV-4', module: null }),
+      ]);
+      const mods = store.getModules();
+      expect(mods).toEqual([
+        { module: 'Billing', count: 2 },
+        { module: 'Scheduling', count: 1 },
+      ]);
+    });
+  });
+
+  describe('getComponentsForModule', () => {
+    it('returns components within a module', () => {
+      store.upsertBatch([
+        makeTicket({ key: 'DEV-1', module: 'Billing', component: 'RCM - Invoicing' }),
+        makeTicket({ key: 'DEV-2', module: 'Billing', component: 'RCM - Invoicing' }),
+        makeTicket({ key: 'DEV-3', module: 'Billing', component: 'RCM - Payments' }),
+        makeTicket({ key: 'DEV-4', module: 'Scheduling', component: 'Visit Editing' }),
+      ]);
+      const comps = store.getComponentsForModule('Billing');
+      expect(comps).toEqual([
+        { component: 'RCM - Invoicing', count: 2 },
+        { component: 'RCM - Payments', count: 1 },
+      ]);
+    });
+
+    it('returns empty for unknown module', () => {
+      expect(store.getComponentsForModule('Nonexistent')).toEqual([]);
+    });
+  });
+
+  // ── Filter queries with new fields ──────────────────
+
+  describe('getByFilter with taxonomy fields', () => {
+    beforeEach(() => {
+      store.upsertBatch([
+        makeTicket({ key: 'DEV-1', module: 'Billing', component: 'RCM - Invoicing', customerTags: ['CK'], product: ['Web Platform'], projects: ['RCM V2'] }),
+        makeTicket({ key: 'DEV-2', module: 'Billing', component: 'RCM - Payments', customerTags: [], product: ['Web Platform'], projects: [] }),
+        makeTicket({ key: 'DEV-3', module: 'Scheduling', component: 'Visit Editing', customerTags: ['Bayada'], product: ['Web Platform'], projects: [] }),
+        makeTicket({ key: 'DEV-4', module: 'AI', component: 'AI CoPilot', customerTags: [], product: ['Web Platform', 'Mobile (iOS)'], projects: ['Lumen Phase 2'] }),
+      ]);
+    });
+
+    it('filters by module', () => {
+      const result = store.getByFilter({ module: 'Billing' });
+      expect(result.total).toBe(2);
+      expect(result.tickets.map(t => t.key).sort()).toEqual(['DEV-1', 'DEV-2']);
+    });
+
+    it('filters by component', () => {
+      const result = store.getByFilter({ component: 'RCM - Invoicing' });
+      expect(result.total).toBe(1);
+      expect(result.tickets[0].key).toBe('DEV-1');
+    });
+
+    it('filters by customer — includes untagged tickets', () => {
+      const result = store.getByFilter({ customer: 'CK' });
+      // Should include DEV-1 (tagged CK) + DEV-2 and DEV-4 (no customer = all customers)
+      expect(result.total).toBe(3);
+      const keys = result.tickets.map(t => t.key).sort();
+      expect(keys).toEqual(['DEV-1', 'DEV-2', 'DEV-4']);
+    });
+
+    it('filters by project', () => {
+      const result = store.getByFilter({ project: 'RCM V2' });
+      expect(result.total).toBe(1);
+      expect(result.tickets[0].key).toBe('DEV-1');
+    });
+
+    it('filters by product', () => {
+      const result = store.getByFilter({ product: 'Mobile (iOS)' });
+      expect(result.total).toBe(1);
+      expect(result.tickets[0].key).toBe('DEV-4');
+    });
+
+    it('combines module and customer filters', () => {
+      const result = store.getByFilter({ module: 'Billing', customer: 'CK' });
+      // DEV-1 (Billing + CK) and DEV-2 (Billing + no customer)
+      expect(result.total).toBe(2);
+    });
+  });
+
+  // ── Filter options ──────────────────────────────────
+
+  describe('getFilterOptions', () => {
+    it('returns distinct values for all filter fields', () => {
+      store.upsertBatch([
+        makeTicket({ key: 'DEV-1', module: 'Billing', customerTags: ['CK', 'Bayada'], product: ['Web Platform'], projects: ['RCM V2'] }),
+        makeTicket({ key: 'DEV-2', module: 'Scheduling', customerTags: ['Lumen'], product: ['Mobile (iOS)'], projects: ['Lumen Phase 2'] }),
+        makeTicket({ key: 'DEV-3', module: 'Billing', customerTags: [], product: ['Web Platform'], projects: [] }),
+      ]);
+      const opts = store.getFilterOptions();
+      expect(opts.modules.sort()).toEqual(['Billing', 'Scheduling']);
+      expect(opts.customers.sort()).toEqual(['Bayada', 'CK', 'Lumen']);
+      expect(opts.projects.sort()).toEqual(['Lumen Phase 2', 'RCM V2']);
+      expect(opts.products.sort()).toEqual(['Mobile (iOS)', 'Web Platform']);
+    });
+  });
+
+  // ── Stats with module breakdown ─────────────────────
+
+  describe('getStats with module', () => {
+    it('includes byModule breakdown', () => {
+      store.upsertBatch([
+        makeTicket({ key: 'DEV-1', module: 'Billing' }),
+        makeTicket({ key: 'DEV-2', module: 'Billing' }),
+        makeTicket({ key: 'DEV-3', module: 'AI' }),
+      ]);
+      const stats = store.getStats();
+      expect(stats.byModule).toEqual({ Billing: 2, AI: 1 });
+    });
+  });
+
+  // ── Cut Scope (merged to main, no fixVersion) ──────
+
+  describe('getCutScope', () => {
+    function seedPr(db, { repo = 'webplatform', prNumber, jiraKey, status = 'merged', baseBranch = 'main' }) {
+      db.prepare(`
+        INSERT OR REPLACE INTO github_prs (repo, prNumber, status, baseBranch, syncedAt)
+        VALUES (?, ?, ?, ?, datetime('now'))
+      `).run(repo, prNumber, status, baseBranch);
+      db.prepare(`
+        INSERT OR IGNORE INTO pr_jira_keys (repo, prNumber, jiraKey) VALUES (?, ?, ?)
+      `).run(repo, prNumber, jiraKey);
+    }
+
+    it('returns tickets with merged PRs to main and no fixVersion', () => {
+      store.upsert(makeTicket({ key: 'DEV-1', fixVersions: [], status: 'Ready For Testing' }));
+      store.upsert(makeTicket({ key: 'DEV-2', fixVersions: ['4.2.1'], status: 'Done' }));
+      store.upsert(makeTicket({ key: 'DEV-3', fixVersions: [], status: 'In Review' }));
+
+      seedPr(db, { prNumber: 100, jiraKey: 'DEV-1', status: 'merged', baseBranch: 'main' });
+      seedPr(db, { prNumber: 101, jiraKey: 'DEV-2', status: 'merged', baseBranch: 'main' });
+      seedPr(db, { prNumber: 102, jiraKey: 'DEV-3', status: 'open', baseBranch: 'main' }); // not merged
+
+      const result = store.getCutScope();
+      expect(result.total).toBe(1); // Only DEV-1: merged + no fixVersion
+      expect(result.tickets[0].key).toBe('DEV-1');
+    });
+
+    it('includes PRs merged to master as well as main', () => {
+      store.upsert(makeTicket({ key: 'DEV-1', fixVersions: [] }));
+      store.upsert(makeTicket({ key: 'DEV-2', fixVersions: [] }));
+
+      seedPr(db, { prNumber: 100, jiraKey: 'DEV-1', baseBranch: 'main' });
+      seedPr(db, { prNumber: 101, jiraKey: 'DEV-2', baseBranch: 'master' });
+
+      const result = store.getCutScope();
+      expect(result.total).toBe(2);
+    });
+
+    it('excludes PRs merged to release branches', () => {
+      store.upsert(makeTicket({ key: 'DEV-1', fixVersions: [] }));
+
+      seedPr(db, { prNumber: 100, jiraKey: 'DEV-1', baseBranch: 'releases/4.2.0' });
+
+      const result = store.getCutScope();
+      expect(result.total).toBe(0);
+    });
+
+    it('filters by module', () => {
+      store.upsert(makeTicket({ key: 'DEV-1', fixVersions: [], module: 'Billing' }));
+      store.upsert(makeTicket({ key: 'DEV-2', fixVersions: [], module: 'Scheduling' }));
+
+      seedPr(db, { prNumber: 100, jiraKey: 'DEV-1', baseBranch: 'main' });
+      seedPr(db, { prNumber: 101, jiraKey: 'DEV-2', baseBranch: 'main' });
+
+      const result = store.getCutScope({ module: 'Billing' });
+      expect(result.total).toBe(1);
+      expect(result.tickets[0].key).toBe('DEV-1');
+    });
+
+    it('filters by search', () => {
+      store.upsert(makeTicket({ key: 'DEV-1', fixVersions: [], summary: 'Fix login bug' }));
+      store.upsert(makeTicket({ key: 'DEV-2', fixVersions: [], summary: 'Add payment flow' }));
+
+      seedPr(db, { prNumber: 100, jiraKey: 'DEV-1', baseBranch: 'main' });
+      seedPr(db, { prNumber: 101, jiraKey: 'DEV-2', baseBranch: 'main' });
+
+      const result = store.getCutScope({ search: 'login' });
+      expect(result.total).toBe(1);
+      expect(result.tickets[0].key).toBe('DEV-1');
+    });
+
+    it('paginates correctly', () => {
+      for (let i = 1; i <= 5; i++) {
+        store.upsert(makeTicket({ key: `DEV-${i}`, fixVersions: [], created: `2026-04-${String(i).padStart(2, '0')}T10:00:00Z` }));
+        seedPr(db, { prNumber: 100 + i, jiraKey: `DEV-${i}`, baseBranch: 'main' });
+      }
+
+      const page1 = store.getCutScope({ limit: 2, sort: 'created', sortDir: 'desc' });
+      expect(page1.tickets).toHaveLength(2);
+      expect(page1.total).toBe(5);
+      expect(page1.hasMore).toBe(true);
+
+      const page2 = store.getCutScope({ limit: 2, offset: 2, sort: 'created', sortDir: 'desc' });
+      expect(page2.tickets).toHaveLength(2);
+      expect(page2.hasMore).toBe(true);
+    });
+  });
 });

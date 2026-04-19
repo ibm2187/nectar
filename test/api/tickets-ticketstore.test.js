@@ -339,4 +339,172 @@ describe('Routes with TicketStore', () => {
       expect(release.tickets).toHaveLength(0);
     });
   });
+
+  // ── Taxonomy field endpoints ─────────────────────────
+
+  describe('GET /api/tickets/filter-options', () => {
+    it('returns distinct values for filter dropdowns', async () => {
+      seedTicket(services.ticketStore, { key: 'DEV-100', module: 'Billing', customerTags: ['CK'], product: ['Web Platform'], projects: ['RCM V2'] });
+      seedTicket(services.ticketStore, { key: 'DEV-101', module: 'Scheduling', customerTags: ['Lumen'], product: ['Mobile (iOS)'], projects: [] });
+
+      const res = await request(app, 'GET', '/api/tickets/filter-options');
+      expect(res.status).toBe(200);
+      expect(res.body.modules.sort()).toEqual(['Billing', 'Scheduling']);
+      expect(res.body.customers.sort()).toEqual(['CK', 'Lumen']);
+      expect(res.body.products.sort()).toEqual(['Mobile (iOS)', 'Web Platform']);
+      expect(res.body.projects).toEqual(['RCM V2']);
+    });
+  });
+
+  describe('GET /api/tickets/by-module', () => {
+    it('returns modules with counts', async () => {
+      seedTicket(services.ticketStore, { key: 'DEV-100', module: 'Billing' });
+      seedTicket(services.ticketStore, { key: 'DEV-101', module: 'Billing' });
+      seedTicket(services.ticketStore, { key: 'DEV-102', module: 'AI' });
+
+      const res = await request(app, 'GET', '/api/tickets/by-module');
+      expect(res.status).toBe(200);
+      expect(res.body.modules).toEqual([
+        { module: 'Billing', count: 2 },
+        { module: 'AI', count: 1 },
+      ]);
+    });
+  });
+
+  describe('GET /api/tickets/by-module/:module/components', () => {
+    it('returns components for a module', async () => {
+      seedTicket(services.ticketStore, { key: 'DEV-100', module: 'Billing', component: 'RCM - Invoicing' });
+      seedTicket(services.ticketStore, { key: 'DEV-101', module: 'Billing', component: 'RCM - Invoicing' });
+      seedTicket(services.ticketStore, { key: 'DEV-102', module: 'Billing', component: 'RCM - Payments' });
+
+      const res = await request(app, 'GET', '/api/tickets/by-module/Billing/components');
+      expect(res.status).toBe(200);
+      expect(res.body.components).toEqual([
+        { component: 'RCM - Invoicing', count: 2 },
+        { component: 'RCM - Payments', count: 1 },
+      ]);
+    });
+  });
+
+  describe('GET /api/tickets/search with taxonomy filters', () => {
+    beforeEach(() => {
+      seedTicket(services.ticketStore, { key: 'DEV-100', module: 'Billing', component: 'RCM - Invoicing', customerTags: ['CK'], product: ['Web Platform'] });
+      seedTicket(services.ticketStore, { key: 'DEV-101', module: 'Billing', component: 'RCM - Payments', customerTags: [], product: ['Web Platform'] });
+      seedTicket(services.ticketStore, { key: 'DEV-102', module: 'Scheduling', component: 'Visit Editing', customerTags: ['Bayada'], product: ['Web Platform'] });
+    });
+
+    it('filters by module', async () => {
+      const res = await request(app, 'GET', '/api/tickets/search?module=Billing');
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(2);
+    });
+
+    it('filters by component', async () => {
+      const res = await request(app, 'GET', '/api/tickets/search?component=RCM%20-%20Invoicing');
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(1);
+    });
+
+    it('filters by customer (includes untagged)', async () => {
+      const res = await request(app, 'GET', '/api/tickets/search?customer=CK');
+      expect(res.status).toBe(200);
+      // DEV-100 (CK) + DEV-101 (no customer = included)
+      expect(res.body.total).toBe(2);
+    });
+  });
+
+  // ── Roadmap with modules ─────────────────────────────
+
+  describe('GET /api/roadmap with modules', () => {
+    it('returns modules instead of themes', async () => {
+      seedRelease(services, { version: '4.2.1', jiraReleaseDate: inFiveDays });
+      seedTicket(services.ticketStore, { key: 'DEV-100', module: 'Billing', component: 'RCM - Invoicing', fixVersions: ['4.2.1'] });
+      seedTicket(services.ticketStore, { key: 'DEV-101', module: 'Billing', component: 'RCM - Payments', fixVersions: ['4.2.1'] });
+      seedTicket(services.ticketStore, { key: 'DEV-102', module: 'Scheduling', component: 'Visit Editing', fixVersions: ['4.2.1'] });
+
+      const res = await request(app, 'GET', '/api/roadmap');
+      expect(res.status).toBe(200);
+      expect(res.body.modules).toBeDefined();
+      expect(res.body.modules.length).toBeGreaterThanOrEqual(2);
+
+      const billing = res.body.modules.find(m => m.name === 'Billing');
+      expect(billing).toBeDefined();
+      expect(billing.totalTickets).toBe(2);
+      expect(billing.components).toHaveLength(2);
+      expect(billing.components.map(c => c.name).sort()).toEqual(['RCM - Invoicing', 'RCM - Payments']);
+
+      const scheduling = res.body.modules.find(m => m.name === 'Scheduling');
+      expect(scheduling).toBeDefined();
+      expect(scheduling.totalTickets).toBe(1);
+    });
+
+    it('filters by customer — includes untagged tickets', async () => {
+      seedRelease(services, { version: '4.2.1', jiraReleaseDate: inFiveDays });
+      seedTicket(services.ticketStore, { key: 'DEV-100', module: 'Billing', fixVersions: ['4.2.1'], customerTags: ['CK'] });
+      seedTicket(services.ticketStore, { key: 'DEV-101', module: 'Billing', fixVersions: ['4.2.1'], customerTags: [] });
+      seedTicket(services.ticketStore, { key: 'DEV-102', module: 'Billing', fixVersions: ['4.2.1'], customerTags: ['Bayada'] });
+
+      const res = await request(app, 'GET', '/api/roadmap?customer=CK');
+      expect(res.status).toBe(200);
+      const billing = res.body.modules.find(m => m.name === 'Billing');
+      // DEV-100 (CK) + DEV-101 (no customer) included; DEV-102 (Bayada only) excluded
+      expect(billing.totalTickets).toBe(2);
+    });
+
+    it('filters by project', async () => {
+      seedRelease(services, { version: '4.2.1', jiraReleaseDate: inFiveDays });
+      seedTicket(services.ticketStore, { key: 'DEV-100', module: 'Billing', fixVersions: ['4.2.1'], projects: ['RCM V2'] });
+      seedTicket(services.ticketStore, { key: 'DEV-101', module: 'Billing', fixVersions: ['4.2.1'], projects: [] });
+
+      const res = await request(app, 'GET', '/api/roadmap?project=RCM%20V2');
+      expect(res.status).toBe(200);
+      const billing = res.body.modules.find(m => m.name === 'Billing');
+      expect(billing.totalTickets).toBe(1);
+    });
+  });
+
+  describe('GET /api/roadmap/:module/:version', () => {
+    it('returns tickets for a module and release', async () => {
+      seedRelease(services, { version: '4.2.1', jiraReleaseDate: inFiveDays });
+      seedTicket(services.ticketStore, { key: 'DEV-100', module: 'Billing', component: 'RCM - Invoicing', fixVersions: ['4.2.1'] });
+      seedTicket(services.ticketStore, { key: 'DEV-101', module: 'Scheduling', component: 'Visit Editing', fixVersions: ['4.2.1'] });
+
+      const res = await request(app, 'GET', '/api/roadmap/Billing/4.2.1');
+      expect(res.status).toBe(200);
+      expect(res.body.module).toBe('Billing');
+      expect(res.body.tickets).toHaveLength(1);
+      expect(res.body.tickets[0].key).toBe('DEV-100');
+      expect(res.body.tickets[0].module).toBe('Billing');
+      expect(res.body.tickets[0].component).toBe('RCM - Invoicing');
+    });
+
+    it('filters by component within module', async () => {
+      seedRelease(services, { version: '4.2.1', jiraReleaseDate: inFiveDays });
+      seedTicket(services.ticketStore, { key: 'DEV-100', module: 'Billing', component: 'RCM - Invoicing', fixVersions: ['4.2.1'] });
+      seedTicket(services.ticketStore, { key: 'DEV-101', module: 'Billing', component: 'RCM - Payments', fixVersions: ['4.2.1'] });
+
+      const res = await request(app, 'GET', '/api/roadmap/Billing/4.2.1?component=RCM%20-%20Invoicing');
+      expect(res.status).toBe(200);
+      expect(res.body.tickets).toHaveLength(1);
+      expect(res.body.tickets[0].key).toBe('DEV-100');
+      expect(res.body.component).toBe('RCM - Invoicing');
+    });
+
+    it('includes taxonomy fields in ticket response', async () => {
+      seedRelease(services, { version: '4.2.1', jiraReleaseDate: inFiveDays });
+      seedTicket(services.ticketStore, {
+        key: 'DEV-100', module: 'Billing', component: 'RCM - Invoicing',
+        fixVersions: ['4.2.1'], customerTags: ['CK'], product: ['Web Platform'],
+        projects: ['RCM V2'], labels: ['rcm-v2', 'top30'],
+      });
+
+      const res = await request(app, 'GET', '/api/roadmap/Billing/4.2.1');
+      expect(res.status).toBe(200);
+      const ticket = res.body.tickets[0];
+      expect(ticket.customerTags).toEqual(['CK']);
+      expect(ticket.product).toEqual(['Web Platform']);
+      expect(ticket.projects).toEqual(['RCM V2']);
+      expect(ticket.labels).toEqual(['rcm-v2', 'top30']);
+    });
+  });
 });

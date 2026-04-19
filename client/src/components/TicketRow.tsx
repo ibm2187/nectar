@@ -143,6 +143,118 @@ export function ReleaseBadge({ release, onClick }: {
   )
 }
 
+// ── PriorityBadge ────────────────────────────────────
+
+export function PriorityBadge({ value }: { value: string | null | undefined }) {
+  if (!value) return <span className="text-xs text-muted-foreground italic">—</span>
+  const v = value.toLowerCase()
+  const style =
+    v === 'urgent' || v === 'highest'
+      ? 'bg-red-500/15 text-red-400 border-red-500/40'
+      : v === 'high'
+        ? 'bg-orange-500/15 text-orange-400 border-orange-500/40'
+        : v === 'medium'
+          ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/40'
+          : v === 'low' || v === 'lowest'
+            ? 'bg-muted/30 text-muted-foreground border-muted'
+            : 'bg-blue-500/10 text-blue-400 border-blue-500/30' // "Internal Only" etc.
+  return (
+    <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border whitespace-nowrap', style)} title={value}>
+      {value}
+    </span>
+  )
+}
+
+// ── RiskBadge ────────────────────────────────────────
+
+export function RiskBadge({ value }: { value: string | null | undefined }) {
+  if (!value) return <span className="text-xs text-muted-foreground italic">—</span>
+  // "1 - Low Risk" / "2 - Medium Risk" / "3 - High Risk"
+  const m = value.match(/^(\d+)/)
+  const level = m ? parseInt(m[1], 10) : null
+  const label = value.replace(/^\d+\s*-\s*/, '') // strip leading "1 - "
+  const style =
+    level === 3
+      ? 'bg-red-500/15 text-red-400 border-red-500/40'
+      : level === 2
+        ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/40'
+        : level === 1
+          ? 'bg-green-500/10 text-green-400 border-green-500/30'
+          : 'bg-muted/30 text-muted-foreground border-muted'
+  return (
+    <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border whitespace-nowrap', style)} title={value}>
+      {label}
+    </span>
+  )
+}
+
+// ── Next-release helpers ─────────────────────────────
+
+/** Return the first non-shipped release for a ticket (the "next" one). */
+export function getNextRelease(ticket: TicketRowData): TicketRowData['releases'][number] | null {
+  for (const r of (ticket.releases || [])) {
+    if (!r.isShipped) return r
+  }
+  return null
+}
+
+// Numeric ordering for JIRA priority/customer-priority enums.
+// Lower number = more urgent, so ascending sort puts urgent first.
+const PRIORITY_ORDER: Record<string, number> = {
+  'urgent': 0, 'highest': 1, 'high': 2, 'medium': 3, 'low': 4, 'lowest': 5,
+  'internal only': 6,
+}
+export function priorityOrdinal(value: string | null | undefined): number | null {
+  if (!value) return null
+  return PRIORITY_ORDER[value.toLowerCase()] ?? 99
+}
+
+// Risk Level field comes through as "1 - Low Risk", "2 - Medium Risk", "3 - High Risk".
+// Higher number = riskier, so DESC puts high risk first.
+export function riskOrdinal(value: string | null | undefined): number | null {
+  if (!value) return null
+  const m = value.match(/^(\d+)/)
+  return m ? parseInt(m[1], 10) : null
+}
+
+// ── NextReleaseVersionCell ───────────────────────────
+
+export function NextReleaseVersionCell({ next, onClick }: {
+  next: TicketRowData['releases'][number] | null
+  onClick: (version: string) => void
+}) {
+  if (!next) return <span className="text-xs text-muted-foreground italic">—</span>
+  const isOverdue = next.isOverdue
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(next.version)}
+      className={cn(
+        'inline-flex items-center px-2 py-0.5 rounded text-xs font-mono border cursor-pointer transition-colors',
+        isOverdue
+          ? 'bg-red-500/10 text-red-400 border-red-500/40 hover:bg-red-500/20'
+          : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/40 hover:bg-yellow-500/20'
+      )}
+      title={`${next.version}${next.jiraReleaseDate ? ' — ' + next.jiraReleaseDate : ''}${isOverdue ? ' (OVERDUE)' : ''} · click to filter`}
+    >
+      {next.version}
+    </button>
+  )
+}
+
+// ── NextReleaseDateCell ──────────────────────────────
+
+export function NextReleaseDateCell({ next }: { next: TicketRowData['releases'][number] | null }) {
+  if (!next || !next.jiraReleaseDate) {
+    return <span className="text-xs text-muted-foreground italic">—</span>
+  }
+  return (
+    <span className={cn('text-xs whitespace-nowrap', next.isOverdue && 'text-red-400 font-medium')}>
+      {next.jiraReleaseDate}
+    </span>
+  )
+}
+
 // ── TicketDeployedCell ────────────────────────────────
 
 export function TicketDeployedCell({ envs, jiraStatus }: { envs: string[]; jiraStatus: string }) {
