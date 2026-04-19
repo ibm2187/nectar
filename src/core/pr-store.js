@@ -56,11 +56,13 @@ class PrStore extends EventEmitter {
   // ── Core CRUD ─────────────────────────────────────
 
   upsert(pr, jiraKeys = []) {
-    this._upsertPr.run(prToRow(pr));
-    this._deleteJiraKeys.run(pr.repo, pr.prNumber);
-    for (const key of jiraKeys) {
-      this._insertJiraKey.run(pr.repo, pr.prNumber, key);
-    }
+    this.db.transaction(() => {
+      this._upsertPr.run(prToRow(pr));
+      this._deleteJiraKeys.run(pr.repo, pr.prNumber);
+      for (const key of jiraKeys) {
+        this._insertJiraKey.run(pr.repo, pr.prNumber, key);
+      }
+    })();
   }
 
   upsertBatch(prsWithKeys) {

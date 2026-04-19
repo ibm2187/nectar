@@ -539,6 +539,34 @@ function applyMigrations(db) {
         CREATE INDEX IF NOT EXISTS idx_tt_health ON ticket_truth(healthCategory);
       `);
     },
+    // v8: Normalize prefixed version names in fixVersions/targetFixVersions.
+    // JIRA stores "iOS 2026.4.0" but releases use "2026.4.0". normalizeIssue
+    // now strips prefixes at write time; this cleans up existing data.
+    (db) => {
+      const prefixes = [
+        { pattern: '"iOS ', prefix: 'iOS ' },
+        { pattern: '"Android ', prefix: 'Android ' },
+      ];
+      let cleaned = 0;
+      for (const { pattern, prefix } of prefixes) {
+        const rows = db.prepare(`
+          SELECT key, fixVersions, targetFixVersions FROM jira_tickets
+          WHERE fixVersions LIKE ? OR targetFixVersions LIKE ?
+        `).all(`%${pattern}%`, `%${pattern}%`);
+        for (const row of rows) {
+          let fix = JSON.parse(row.fixVersions || '[]');
+          let target = JSON.parse(row.targetFixVersions || '[]');
+          fix = fix.map(v => v.startsWith(prefix) ? v.substring(prefix.length).trim() : v);
+          target = target.map(v => v.startsWith(prefix) ? v.substring(prefix.length).trim() : v);
+          db.prepare('UPDATE jira_tickets SET fixVersions = ?, targetFixVersions = ? WHERE key = ?')
+            .run(JSON.stringify(fix), JSON.stringify(target), row.key);
+          cleaned++;
+        }
+      }
+      if (cleaned > 0) log.info(`DB migration v8: normalized ${cleaned} tickets with prefixed version names`);
+      // Force full re-sync so all tickets get re-normalized
+      db.prepare("UPDATE jira_sync_meta SET lastTicketSyncTime = NULL WHERE id = 1").run();
+    },
   ];
 
   let ranMigration = false;

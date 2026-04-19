@@ -159,26 +159,19 @@ class TicketStore extends EventEmitter {
    * Returns tickets with release membership info (source: 'both'|'target'|'fixVersion').
    */
   getForVersion(version) {
-    // Match both clean version ("2026.4.0") and prefixed forms ("iOS 2026.4.0", "Android 2026.4.0")
-    // JIRA stores the prefixed form in fixVersions; releases store the clean form.
+    // Version names are normalized at write time (prefixes like "iOS " stripped)
+    // so a simple exact-element LIKE match works.
     const pattern = `%"${version}"%`;
-    const prefixedPatterns = [
-      `%"iOS ${version}"%`,
-      `%"Android ${version}"%`,
-    ];
     const rows = this.db.prepare(`
       SELECT * FROM jira_tickets
       WHERE fixVersions LIKE ? OR targetFixVersions LIKE ?
-         OR fixVersions LIKE ? OR targetFixVersions LIKE ?
-         OR fixVersions LIKE ? OR targetFixVersions LIKE ?
       ORDER BY key ASC
-    `).all(pattern, pattern, prefixedPatterns[0], prefixedPatterns[0], prefixedPatterns[1], prefixedPatterns[1]);
+    `).all(pattern, pattern);
 
     return rows.map(row => {
       const ticket = ticketFromRow(row);
-      // Check membership with both clean and prefixed version names
-      const inFix = ticket.fixVersions.some(v => v === version || v === `iOS ${version}` || v === `Android ${version}`);
-      const inTarget = ticket.targetFixVersions.some(v => v === version || v === `iOS ${version}` || v === `Android ${version}`);
+      const inFix = ticket.fixVersions.includes(version);
+      const inTarget = ticket.targetFixVersions.includes(version);
       ticket._releaseSource = inFix && inTarget ? 'both' : inTarget ? 'target' : 'fixVersion';
       return ticket;
     });
@@ -201,15 +194,11 @@ class TicketStore extends EventEmitter {
    */
   getKeysForVersion(version) {
     const pattern = `%"${version}"%`;
-    const iosPattern = `%"iOS ${version}"%`;
-    const androidPattern = `%"Android ${version}"%`;
     return this.db.prepare(`
       SELECT key FROM jira_tickets
       WHERE fixVersions LIKE ? OR targetFixVersions LIKE ?
-         OR fixVersions LIKE ? OR targetFixVersions LIKE ?
-         OR fixVersions LIKE ? OR targetFixVersions LIKE ?
       ORDER BY key ASC
-    `).all(pattern, pattern, iosPattern, iosPattern, androidPattern, androidPattern).map(r => r.key);
+    `).all(pattern, pattern).map(r => r.key);
   }
 
   // ── Search ────────────────────────────────────────
@@ -664,52 +653,7 @@ class TicketStore extends EventEmitter {
     `).all(module);
   }
 
-  /**
-   * Get tickets grouped by module for releases in a time range.
-   * Optionally filter by customer (includes tickets with no customer set).
-   * Optionally filter by project.
-   */
-  getByModuleForVersions(versions, opts = {}) {
-    if (!versions.length) return {};
 
-    const placeholders = versions.map(() => '?').join(',');
-    const likeConditions = versions.map(v => `fixVersions LIKE '%"${v}"%' OR targetFixVersions LIKE '%"${v}"%'`).join(' OR ');
-
-    let where = `WHERE (${likeConditions})`;
-    const params = [];
-
-    if (opts.customer) {
-      // Include tickets for this customer + tickets with no customer set
-      where += ` AND (customerTags LIKE ? OR customerTags = '[]')`;
-      params.push(`%"${opts.customer}"%`);
-    }
-
-    if (opts.project) {
-      where += ` AND projects LIKE ?`;
-      params.push(`%"${opts.project}"%`);
-    }
-
-    if (opts.product) {
-      where += ` AND product LIKE ?`;
-      params.push(`%"${opts.product}"%`);
-    }
-
-    const rows = this.db.prepare(`
-      SELECT * FROM jira_tickets ${where}
-      ORDER BY module ASC, component ASC, key ASC
-    `).all(...params);
-
-    // Group by module
-    const byModule = {};
-    for (const row of rows) {
-      const ticket = ticketFromRow(row);
-      const mod = ticket.module || 'Uncategorized';
-      if (!byModule[mod]) byModule[mod] = [];
-      byModule[mod].push(ticket);
-    }
-
-    return byModule;
-  }
 
   /**
    * Get all distinct values for filter dropdowns.

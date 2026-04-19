@@ -286,8 +286,8 @@ class JiraClient {
       type: fields.issuetype ? fields.issuetype.name : 'Unknown',
       assignee: fields.assignee ? fields.assignee.displayName : null,
       priority: fields.priority ? fields.priority.name : null,
-      fixVersions: (fields.fixVersions || []).map(v => v.name),
-      targetFixVersions: JiraClient.extractVersionNames(fields[TARGET_FIX_VERSION_FIELD]),
+      fixVersions: (fields.fixVersions || []).map(v => JiraClient.cleanVersionName(v.name)),
+      targetFixVersions: JiraClient.extractVersionNames(fields[TARGET_FIX_VERSION_FIELD]).map(v => JiraClient.cleanVersionName(v)),
       labels: fields.labels || [],
       component: JiraClient.extractFieldString(fields[COMPONENT_FIELD]),
       module: JiraClient.extractFieldString(fields[MODULE_FIELD]),
@@ -308,6 +308,18 @@ class JiraClient {
       created: fields.created || null,
       state: JiraClient.mapStatus(fields.status ? fields.status.name : 'Unknown'),
     };
+  }
+
+  /**
+   * Strip repo prefixes from JIRA version names so they match release.version.
+   * "iOS 2026.4.0" → "2026.4.0", "Android 2026.4.0" → "2026.4.0", "4.2.0" → "4.2.0"
+   */
+  static cleanVersionName(name) {
+    if (!name) return name;
+    const lower = name.toLowerCase();
+    if (lower.startsWith('ios ')) return name.substring(4).trim();
+    if (lower.startsWith('android ')) return name.substring(8).trim();
+    return name;
   }
 
   /**
