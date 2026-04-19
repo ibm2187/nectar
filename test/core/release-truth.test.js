@@ -484,17 +484,15 @@ describe('ReleaseTruth', () => {
   });
 
   describe('rogue detection', () => {
-    it('detects JIRA keys in commits but not in fixVersion', async () => {
+    it('does not detect rogues in base truth (deferred to impact view)', async () => {
       setupRelease({
         tickets: [makeTicket({ key: 'DEV-100', jiraStatus: 'Done' })],
       });
 
-      // Simulate branch exists with commits
       mockRepoManager.commitsWithJiraKeys.mockResolvedValue([
         { sha: 'abc', message: 'DEV-100 fix bug' },
       ]);
 
-      // Post-cut commits include DEV-100 and DEV-999 (rogue)
       mockRepoManager.mergeBase.mockResolvedValue('base123');
       mockRepoManager.log.mockResolvedValue([
         { sha: 'abc', message: 'DEV-100 fix bug' },
@@ -503,10 +501,9 @@ describe('ReleaseTruth', () => {
 
       const result = await truth.compute('webplatform', '4.2.0');
 
-      expect(result.rogues).toHaveLength(1);
-      expect(result.rogues[0].key).toBe('DEV-999');
-      expect(result.rogues[0].commitSha).toBe('def');
-      expect(result.rollup.rogue).toBe(1);
+      // Rogues are not detected in base truth — only in computeImpact
+      expect(result.rogues).toHaveLength(0);
+      expect(result.rollup.rogue).toBe(0);
     });
 
     it('does not flag JIRA keys that are in fixVersion as rogues', async () => {

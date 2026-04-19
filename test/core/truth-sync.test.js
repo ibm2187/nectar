@@ -228,15 +228,10 @@ describe('TruthSync', () => {
   // ── Rogue detection ──────────────────────────────────
 
   describe('rogue detection', () => {
-    it('detects rogues: post-cut JIRA keys not in fixVersion', async () => {
-      // TESTING: Rogue detection via post-cut commits
-      //
-      // SETUP:
-      // - Ticket DEV-100 is in fixVersion (planned)
-      // - Post-cut commit also mentions DEV-999 which is NOT in fixVersion
-      //
-      // EXPECTED RESULT:
-      // - DEV-999 appears in ticket_truth with health='rogue', healthCategory='attention'
+    it('does NOT detect rogues in base truth (only in impact view)', async () => {
+      // Rogue detection is deferred to computeImpact() where we know the
+      // prod version and can compute a proper delta. Base truth should not
+      // flag post-cut keys as rogues.
       setupRelease({
         tickets: [makeTicket({ key: 'DEV-100', status: 'Done', jiraStatus: 'Done' })],
         commits: [{ sha: 'aaa', message: 'DEV-100 fix' }],
@@ -248,11 +243,9 @@ describe('TruthSync', () => {
 
       await truthSync.computeRelease('webplatform', '4.2.0');
 
+      // DEV-999 should NOT appear in truth — rogues are impact-only
       const rogueTruth = ticketStore.getTruthForTicket('DEV-999');
-      expect(rogueTruth).toHaveLength(1);
-      expect(rogueTruth[0].health).toBe('rogue');
-      expect(rogueTruth[0].healthCategory).toBe('attention');
-      expect(rogueTruth[0].onBranch).toBe(true);
+      expect(rogueTruth).toHaveLength(0);
     });
 
     it('does not flag planned tickets as rogues', async () => {
@@ -389,14 +382,7 @@ describe('TruthSync', () => {
       expect(rollup.attention).toBe(1); // DEV-500
     });
 
-    it('counts rogues in the rollup', async () => {
-      // TESTING: Rogue count in rollup
-      //
-      // SETUP:
-      // - One planned ticket, one rogue post-cut commit
-      //
-      // EXPECTED RESULT:
-      // - rollup.rogue = 1
+    it('rogues are zero in base truth (only computed in impact view)', async () => {
       setupRelease({
         tickets: [makeTicket({ key: 'DEV-100', status: 'Done', jiraStatus: 'Done' })],
         commits: [{ sha: 'aaa', message: 'DEV-100 fix' }],
@@ -409,7 +395,7 @@ describe('TruthSync', () => {
       await truthSync.computeRelease('webplatform', '4.2.0');
 
       const rollup = ticketStore.getTruthRollup('webplatform', '4.2.0');
-      expect(rollup.rogue).toBe(1);
+      expect(rollup.rogue).toBe(0);
     });
   });
 

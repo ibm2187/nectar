@@ -328,15 +328,12 @@ class ReleaseTruth {
     const branchHasCommits = branchExists && gitCommits.length > 0;
     const verified = jiraTickets.map(t => this._verifyTicket(t, gitKeys, prByKey, branchHasCommits, version));
 
-    // ── 5. Find rogue keys ────────────────────────────────
-    // Rogues = JIRA keys cherry-picked POST-CUT but not in JIRA fixVersion.
-    // We use pickedKeys (post-cut only) so we don't flag everything inherited from master.
+    // ── 5. Rogue detection skipped in base truth ──────────
+    // Rogues only make sense in the impact view (computeImpact) where we
+    // know the prod version and can compute a proper delta. Without that
+    // context, post-cut keys from parent/sibling releases cause massive
+    // false positives.
     const rogueKeys = [];
-    for (const key of pickedKeys) {
-      if (!jiraKeys.has(key)) {
-        rogueKeys.push(key);
-      }
-    }
 
     // Enrich rogues with JIRA ticket data so they render like real tickets
     const rogues = [];

@@ -297,6 +297,16 @@ module.exports = function createRoutes(services, config) {
         }
       }
 
+      // Compute delivery forecast for this release
+      let forecast = null;
+      if (ticketStore) {
+        try {
+          forecast = ticketStore.getDeliveryForecast(release.version);
+        } catch {
+          // Non-critical — don't block the response
+        }
+      }
+
       return {
         ...release,
         tickets,
@@ -307,6 +317,7 @@ module.exports = function createRoutes(services, config) {
         pipeline: release.pipeline || null,
         isOverdue: release.jiraReleaseDate && release.jiraReleaseDate < today,
         oooRisk,
+        forecast,
       };
     });
 
@@ -1197,6 +1208,16 @@ module.exports = function createRoutes(services, config) {
     );
     res.json(impact);
   }));
+
+  // ── Delivery Forecast ───────────────────────────────────
+
+  // GET /api/releases/:repo/:version/forecast — delivery risk forecast
+  router.get('/releases/:repo/:version/forecast', (req, res) => {
+    if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
+    const { version } = req.params;
+    const forecast = ticketStore.getDeliveryForecast(version);
+    res.json(forecast);
+  });
 
   // ── JIRA Sync ──────────────────────────────────────────
 

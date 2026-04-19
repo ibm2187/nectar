@@ -97,6 +97,70 @@ function dayLabel(iso: string, now: Date): string {
   return dateStr
 }
 
+// ── Delivery forecast risk badge (client-side, from ticket data) ──
+
+/**
+ * Compute a lightweight client-side delivery risk estimate from release ticket data.
+ * This avoids an extra API call; the full forecast is available on the detail page.
+ */
+function computeClientForecast(release: Release, now: Date) {
+  const tickets = release.tickets || []
+  const total = tickets.length
+  if (total === 0) return null
+
+  const doneCount = tickets.filter(t =>
+    t.state === 'done' || t.state === 'closed' || t.state === 'cherry-picked' || t.state === 'ready-for-testing'
+  ).length
+  const remaining = total - doneCount
+
+  if (remaining === 0) return { risk: 'low' as const, remaining: 0, projectedLabel: null }
+
+  if (!release.jiraReleaseDate) return null
+
+  const releaseDate = parseLocalDate(release.jiraReleaseDate)
+  const deadline = new Date(releaseDate)
+  deadline.setDate(deadline.getDate() - 2) // 2-day buffer
+  const todayMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const daysLeft = Math.round((deadline.getTime() - todayMs) / (1000 * 60 * 60 * 24))
+
+  if (daysLeft <= 0 && remaining > 0) {
+    return { risk: 'critical' as const, remaining, projectedLabel: null }
+  }
+
+  // Simple heuristic: ratio of remaining to days left
+  const ratio = remaining / Math.max(daysLeft, 1)
+  // < 0.3 tickets/day needed = low, < 1 = medium, >= 1 = high
+  const risk = ratio <= 0.3 ? 'low' as const : ratio <= 1 ? 'medium' as const : 'high' as const
+
+  // Project completion as a rough date
+  const completionRatio = doneCount / total
+  if (completionRatio > 0) {
+    // Estimate: how many days has the release been active? Use created or cut date.
+    const createdAt = release.cutAt || release.createdAt
+    const createdMs = new Date(createdAt).getTime()
+    const elapsedDays = Math.max(1, Math.round((Date.now() - createdMs) / (1000 * 60 * 60 * 24)))
+    const velocity = doneCount / elapsedDays
+    if (velocity > 0) {
+      const daysNeeded = remaining / velocity
+      const projected = new Date(now)
+      projected.setDate(projected.getDate() + Math.ceil(daysNeeded))
+      const projectedLabel = projected.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      return { risk, remaining, projectedLabel }
+    }
+  }
+
+  return { risk, remaining, projectedLabel: null }
+}
+
+type ForecastRisk = 'low' | 'medium' | 'high' | 'critical'
+
+const FORECAST_RISK_STYLE: Record<ForecastRisk, { label: string; cls: string }> = {
+  low:      { label: 'LOW',      cls: 'bg-green-500/20 text-green-400' },
+  medium:   { label: 'MED',      cls: 'bg-yellow-500/20 text-yellow-400' },
+  high:     { label: 'HIGH',     cls: 'bg-red-500/20 text-red-400' },
+  critical: { label: 'CRIT',     cls: 'bg-red-500/30 text-red-300' },
+}
+
 // ── Navigation constants ──────────────────────────────
 
 const CALENDAR_NAV_STEP: Record<ZoomLevel, number> = { day: 14, week: 4, month: 3 }
@@ -678,6 +742,9 @@ function CalendarReleaseCard({ release, onClick }: { release: Release; onClick: 
     ? { label: 'LOW', cls: 'bg-green-500/20 text-green-400' }
     : null
 
+  // Delivery forecast (client-side approximation)
+  const clientForecast = useMemo(() => computeClientForecast(release, new Date()), [release])
+
   return (
     <button
       type="button"
@@ -700,6 +767,14 @@ function CalendarReleaseCard({ release, onClick }: { release: Release; onClick: 
       </div>
       <div className="flex items-center gap-1 mt-1 flex-wrap">
         <Badge variant="outline" className={cn("text-[9px] px-1 py-0", style.text)}>{style.label}</Badge>
+        {clientForecast && status !== 'shipped' && (
+          <span className={cn("text-[9px] px-1 rounded font-semibold", FORECAST_RISK_STYLE[clientForecast.risk]?.cls)}>
+            {FORECAST_RISK_STYLE[clientForecast.risk]?.label}
+          </span>
+        )}
+        {clientForecast?.projectedLabel && status !== 'shipped' && (
+          <span className="text-[9px] text-muted-foreground">Est: {clientForecast.projectedLabel}</span>
+        )}
         {release.targetCustomers != null && (
           <CustomerPills customerIds={release.targetCustomers} />
         )}
@@ -948,6 +1023,9 @@ function AgendaReleaseRow({ release, now, onClick }: {
     ? { label: 'LOW', cls: 'bg-green-500/20 text-green-400 border-green-500/30' }
     : null
 
+  // Delivery forecast (client-side approximation)
+  const clientForecast = useMemo(() => computeClientForecast(release, now), [release, now])
+
   return (
     <button
       type="button"
@@ -973,6 +1051,14 @@ function AgendaReleaseRow({ release, now, onClick }: {
               <span className={cn("text-[10px] px-1.5 py-0.5 rounded border font-semibold", riskBadge.cls)}>
                 {riskBadge.label}
               </span>
+            )}
+            {clientForecast && status !== 'shipped' && (
+              <span className={cn("text-[10px] px-1.5 py-0.5 rounded font-semibold", FORECAST_RISK_STYLE[clientForecast.risk]?.cls)}>
+                {FORECAST_RISK_STYLE[clientForecast.risk]?.label}
+              </span>
+            )}
+            {clientForecast?.projectedLabel && status !== 'shipped' && (
+              <span className="text-[10px] text-muted-foreground">Est: {clientForecast.projectedLabel}</span>
             )}
             {totalCount > 0 && (
               <span className="text-[10px] text-muted-foreground font-mono">

@@ -3,7 +3,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useWsStore } from '../../stores/wsStore'
 import { useAuthStore } from '../../stores/authStore'
 import { apiFetch } from '../../api/client'
-import type { AuditEntry, ValidationReport, DatadogImpactResponse, ReleaseComment } from '../../api/client'
+import type { AuditEntry, ValidationReport, DatadogImpactResponse, ReleaseComment, DeliveryForecast } from '../../api/client'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Card, CardContent } from '../../components/ui/card'
@@ -89,6 +89,7 @@ export function ReleaseDetail() {
   const [notesTaskLoading, setNotesTaskLoading] = useState(false)
   const [notesTaskError, setNotesTaskError] = useState<string | null>(null)
   const [impactData, setImpactData] = useState<DatadogImpactResponse | null>(null)
+  const [forecast, setForecast] = useState<DeliveryForecast | null>(null)
   const [comments, setComments] = useState<ReleaseComment[]>([])
   const [commentText, setCommentText] = useState('')
   const [commentPosting, setCommentPosting] = useState(false)
@@ -148,6 +149,14 @@ export function ReleaseDetail() {
       .then(setImpactData)
       .catch(() => {})
   }, [version])
+
+  // Fetch delivery forecast for this version
+  useEffect(() => {
+    if (!version || !release?.repo) return
+    apiFetch<DeliveryForecast>(`/releases/${release.repo}/${version}/forecast`)
+      .then(setForecast)
+      .catch(() => {})
+  }, [version, release?.repo])
 
   // Check for existing release-notes task for this release
   const refreshNotesTask = useCallback(() => {
@@ -476,6 +485,121 @@ export function ReleaseDetail() {
         </div>
       </div>
 
+      {/* Delivery Forecast */}
+      {forecast && forecast.total > 0 && (
+        <Card className="mb-4">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-3 mb-3">
+              <span className="text-sm font-semibold">Delivery Forecast</span>
+              <ForecastRiskBadge risk={forecast.risk} />
+            </div>
+
+            {/* Progress bar */}
+            <div className="h-2 rounded-full bg-muted/30 overflow-hidden mb-2">
+              <div
+                className="h-full bg-green-500/70 transition-all"
+                style={{ width: `${forecast.total > 0 ? (forecast.done / forecast.total) * 100 : 0}%` }}
+              />
+            </div>
+
+            {/* Key metrics */}
+            <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap mb-2">
+              <span>
+                <span className="text-foreground font-medium">{forecast.remaining}</span> remaining of {forecast.total}
+              </span>
+              {forecast.daysLeft !== null && (
+                <>
+                  <span className="text-muted-foreground/50">|</span>
+                  <span>
+                    <span className={cn("font-medium", forecast.daysLeft <= 0 ? 'text-red-400' : forecast.daysLeft <= 3 ? 'text-yellow-400' : 'text-foreground')}>
+                      {forecast.daysLeft}
+                    </span> days left
+                  </span>
+                </>
+              )}
+              {forecast.velocity.required !== null && (
+                <>
+                  <span className="text-muted-foreground/50">|</span>
+                  <span>need <span className="text-foreground font-medium">{forecast.velocity.required}</span>/day</span>
+                </>
+              )}
+            </div>
+
+            {/* Velocity comparison */}
+            <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap mb-2">
+              <span>
+                Team: <span className="text-foreground font-medium">{forecast.velocity.actual}</span>/day
+                <span className="text-muted-foreground/50 ml-1">({forecast.velocity.completedInWindow} in {forecast.velocity.window}d)</span>
+              </span>
+              {forecast.velocity.required !== null && (
+                <>
+                  <span className="text-muted-foreground/50">|</span>
+                  <span>
+                    Required: <span className="text-foreground font-medium">{forecast.velocity.required}</span>/day
+                  </span>
+                </>
+              )}
+            </div>
+
+            {/* Risk message */}
+            <div className="text-xs text-muted-foreground mb-2">
+              {forecast.riskMessage}
+            </div>
+
+            {/* Projected date */}
+            {forecast.projectedDate && (
+              <div className="text-xs text-muted-foreground">
+                Projected completion: <span className={cn(
+                  "font-medium",
+                  forecast.releaseDate && forecast.projectedDate > forecast.releaseDate ? 'text-red-400' : 'text-green-400'
+                )}>{forecast.projectedDate}</span>
+                {forecast.releaseDate && (
+                  <span className="ml-1">
+                    (target: {forecast.releaseDate})
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Status breakdown */}
+            {forecast.remaining > 0 && (
+              <div className="flex items-center gap-3 mt-3 text-[10px] text-muted-foreground flex-wrap">
+                {forecast.breakdown.notStarted > 0 && (
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-muted-foreground/30" />{forecast.breakdown.notStarted} not started
+                  </span>
+                )}
+                {forecast.breakdown.inDev > 0 && (
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-blue-500/70" />{forecast.breakdown.inDev} in dev
+                  </span>
+                )}
+                {forecast.breakdown.blocked > 0 && (
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-red-500/70" />{forecast.breakdown.blocked} blocked
+                  </span>
+                )}
+                {forecast.breakdown.readyForQa > 0 && (
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-purple-500/70" />{forecast.breakdown.readyForQa} ready for QA
+                  </span>
+                )}
+                {forecast.breakdown.inQa > 0 && (
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-yellow-500/70" />{forecast.breakdown.inQa} in QA
+                  </span>
+                )}
+                {forecast.breakdown.awaitingCp > 0 && (
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-cyan-500/70" />{forecast.breakdown.awaitingCp} awaiting CP
+                  </span>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Validation report (collapsible, only shown when triggered) */}
       {validation && (
         <Card className="mb-4">
@@ -663,6 +787,22 @@ export function ReleaseDetail() {
       />
 
     </div>
+  )
+}
+
+function ForecastRiskBadge({ risk }: { risk: string }) {
+  const config: Record<string, { label: string; cls: string }> = {
+    low:      { label: 'LOW',      cls: 'bg-green-500/20 text-green-400 border-green-500/30' },
+    medium:   { label: 'MEDIUM',   cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+    high:     { label: 'HIGH',     cls: 'bg-red-500/20 text-red-400 border-red-500/30' },
+    critical: { label: 'CRITICAL', cls: 'bg-red-500/30 text-red-300 border-red-500/50' },
+    unknown:  { label: 'UNKNOWN',  cls: 'bg-muted text-muted-foreground border-border' },
+  }
+  const c = config[risk] || config.unknown
+  return (
+    <span className={cn("text-[10px] px-1.5 py-0.5 rounded border font-semibold", c.cls)}>
+      {c.label}
+    </span>
   )
 }
 

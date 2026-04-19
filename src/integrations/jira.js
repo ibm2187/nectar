@@ -39,6 +39,7 @@ const NECTAR_FIELDS = [
   'summary', 'status', 'issuetype', 'assignee', 'reporter', 'fixVersions', 'labels',
   'priority',           // Built-in priority (Urgent/High/Medium/Low/Lowest)
   'created',            // Issue creation date (for triage views)
+  'updated',            // Last update timestamp (for velocity/burndown)
   'customfield_10594',  // Target FixVersion
   'customfield_10463',  // Component / area
   'customfield_11056',  // Customer tag

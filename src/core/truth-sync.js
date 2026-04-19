@@ -210,25 +210,10 @@ class TruthSync {
       });
     }
 
-    // Detect rogues: post-cut JIRA keys NOT in the release's fixVersion
-    for (const key of pickedKeys) {
-      if (!jiraKeys.has(key)) {
-        truthRows.push({
-          jiraKey: key,
-          repo,
-          version,
-          health: 'rogue',
-          healthCategory: 'attention',
-          healthMessage: 'Cherry-picked to branch but not in JIRA fixVersion',
-          onBranch: true,
-          prNumber: null,
-          prUrl: null,
-          stage: null,
-          inTarget: false,
-          inFixVersion: false,
-        });
-      }
-    }
+    // NOTE: Rogue detection is NOT done here. Rogues only make sense in the
+    // context of a deployment impact diff (prod version → target version).
+    // Without knowing the prod version, we can't distinguish inherited commits
+    // from actual rogues. See ReleaseTruth.computeImpact() for rogue detection.
 
     // Clear old truth and write new results
     this.ticketStore.clearTruthForRelease(repo, version);
