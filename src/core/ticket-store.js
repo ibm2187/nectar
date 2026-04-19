@@ -493,6 +493,136 @@ class TicketStore extends EventEmitter {
     return { tickets, total, hasMore, offset, limit, scopeStats: { byGroup, byType: typeBreakdown, byStatus: statusBreakdown } };
   }
 
+  // ── Release-scoped queries (Home page) ────────────
+
+  /**
+   * Get tickets that belong to immediate releases (overdue, upcoming, unscheduled).
+   * Everything done in SQL — no JS iteration over releases.
+   *
+   * @param {object} opts
+   * @param {string} opts.today - ISO date string
+   * @param {string} opts.horizon - ISO date string (e.g., 14 days from now)
+   * @param {string} [opts.view] - 'dev'|'qa'|'pm' for person filter
+   * @param {string} [opts.person] - person name to filter by
+   * @param {number} [opts.limit]
+   * @param {number} [opts.offset]
+   * @param {string} [opts.sort]
+   * @param {string} [opts.sortDir]
+   */
+  getForImmediateReleases(opts = {}) {
+    const today = opts.today || new Date().toISOString().slice(0, 10);
+    const horizon = opts.horizon || new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+    const limit = opts.limit || 100;
+    const offset = opts.offset || 0;
+
+    // Build WHERE conditions for ticket-level filters
+    const ticketConditions = [];
+    const ticketParams = [];
+
+    if (opts.person && opts.view) {
+      const pLower = opts.person.toLowerCase();
+      if (opts.view === 'dev') {
+        ticketConditions.push('LOWER(jt.assignee) = ?');
+        ticketParams.push(pLower);
+      } else if (opts.view === 'qa') {
+        ticketConditions.push('LOWER(jt.qaAssignee) = ?');
+        ticketParams.push(pLower);
+      } else if (opts.view === 'pm') {
+        ticketConditions.push('(LOWER(jt.assignee) = ? OR LOWER(jt.qaAssignee) = ?)');
+        ticketParams.push(pLower, pLower);
+      }
+    }
+
+    const ticketWhere = ticketConditions.length > 0 ? 'AND ' + ticketConditions.join(' AND ') : '';
+
+    const SORT_COLS = { key: 'jt.key', summary: 'jt.summary', status: 'jt.status', assignee: 'jt.assignee', priority: 'jt.priority', created: 'jt.created', type: 'jt.type' };
+    const sortCol = SORT_COLS[opts.sort] || 'jt.created';
+    const sortDir = opts.sortDir === 'asc' ? 'ASC' : 'DESC';
+
+    // CTE: find tickets in immediate releases via json_each join
+    const sql = `
+      WITH immediate_versions AS (
+        SELECT version FROM releases
+        WHERE state != 'done' AND (jiraArchived IS NULL OR jiraArchived = 0)
+        AND (jiraReleaseDate IS NULL OR jiraReleaseDate < ? OR jiraReleaseDate <= ?)
+      ),
+      immediate_tickets AS (
+        SELECT DISTINCT jt.key FROM jira_tickets jt, json_each(jt.fixVersions) fv
+        WHERE fv.value IN (SELECT version FROM immediate_versions)
+        UNION
+        SELECT DISTINCT jt.key FROM jira_tickets jt, json_each(jt.targetFixVersions) tv
+        WHERE tv.value IN (SELECT version FROM immediate_versions)
+      )
+      SELECT jt.* ${TicketStore.ENRICH_COLUMNS}
+      FROM jira_tickets jt
+      JOIN immediate_tickets it ON it.key = jt.key
+      WHERE 1=1 ${ticketWhere}
+      ORDER BY ${sortCol} ${sortDir}
+      LIMIT ? OFFSET ?
+    `;
+
+    const rows = this.db.prepare(sql).all(today, horizon, ...ticketParams, limit + 1, offset);
+    const hasMore = rows.length > limit;
+
+    // Get immediate version set for marking isImmediate on releases
+    const immediateVersions = new Set(
+      this.db.prepare(`
+        SELECT version FROM releases
+        WHERE state != 'done' AND (jiraArchived IS NULL OR jiraArchived = 0)
+        AND (jiraReleaseDate IS NULL OR jiraReleaseDate < ? OR jiraReleaseDate <= ?)
+      `).all(today, horizon).map(r => r.version)
+    );
+
+    const tickets = rows.slice(0, limit).map(row => {
+      const ticket = enrichedTicketFromRow(row);
+      // Mark which releases are "immediate" (in the current horizon)
+      for (const r of ticket.releases) {
+        r.isImmediate = immediateVersions.has(r.version);
+      }
+      return ticket;
+    });
+
+    // Default sort: most urgent release date first (overdue → upcoming → unscheduled)
+    if (!opts.sort) {
+      tickets.sort((a, b) => {
+        const aNext = (a.releases || []).find(r => !r.isShipped);
+        const bNext = (b.releases || []).find(r => !r.isShipped);
+        const aDate = aNext?.jiraReleaseDate || 'zzzz';
+        const bDate = bNext?.jiraReleaseDate || 'zzzz';
+        return aDate.localeCompare(bDate);
+      });
+    }
+
+    const countSql = `
+      WITH immediate_versions AS (
+        SELECT version FROM releases
+        WHERE state != 'done' AND (jiraArchived IS NULL OR jiraArchived = 0)
+        AND (jiraReleaseDate IS NULL OR jiraReleaseDate < ? OR jiraReleaseDate <= ?)
+      ),
+      immediate_tickets AS (
+        SELECT DISTINCT jt.key FROM jira_tickets jt, json_each(jt.fixVersions) fv
+        WHERE fv.value IN (SELECT version FROM immediate_versions)
+        UNION
+        SELECT DISTINCT jt.key FROM jira_tickets jt, json_each(jt.targetFixVersions) tv
+        WHERE tv.value IN (SELECT version FROM immediate_versions)
+      )
+      SELECT COUNT(*) AS n FROM jira_tickets jt
+      JOIN immediate_tickets it ON it.key = jt.key
+      WHERE 1=1 ${ticketWhere}
+    `;
+    const total = this.db.prepare(countSql).get(today, horizon, ...ticketParams).n;
+
+    // Release columns for filter chips
+    const releaseColumns = this.db.prepare(`
+      SELECT repo, version, state, jiraReleaseDate FROM releases
+      WHERE state != 'done' AND (jiraArchived IS NULL OR jiraArchived = 0)
+      AND (jiraReleaseDate IS NULL OR jiraReleaseDate < ? OR jiraReleaseDate <= ?)
+      ORDER BY COALESCE(jiraReleaseDate, 'zzzz') ASC
+    `).all(today, horizon);
+
+    return { tickets, total, hasMore, offset, limit, releases: releaseColumns };
+  }
+
   // ── Module/Component grouping (roadmap) ───────────
 
   /**

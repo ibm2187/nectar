@@ -289,177 +289,20 @@ module.exports = function createRoutes(services, config) {
 
   /**
    * GET /api/tickets/home — flat list of tickets in immediate releases,
-   * with each ticket enriched with ALL releases it belongs to (including
-   * past shipped ones).
+   * with full enrichment (releases, PRs, truth) done in SQL.
    *
-   * Same filter semantics as /releases/home: ?view=dev|qa|pm&person=...
-   * The qualifying ticket set is restricted to immediate releases (overdue
-   * + upcoming 2 weeks + unscheduled active), but the per-ticket release
-   * list is unfiltered — so you see every release a ticket is in.
+   * Supports: ?view=dev|qa|pm&person=...&limit=50&offset=0&sort=created&sortDir=desc
    */
   router.get('/tickets/home', (req, res) => {
-    const { view, person } = req.query;
+    if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
+    const { view, person, sort, sortDir } = req.query;
+    const limit = parseInt(req.query.limit) || 100;
+    const offset = parseInt(req.query.offset) || 0;
     const today = new Date().toISOString().slice(0, 10);
     const horizon = computeHorizon(req.query);
 
-    const allReleases = releases.list();
-
-    // Step 1: identify "immediate" releases (same logic as /releases/home)
-    const immediateReleases = allReleases.filter(r => {
-      if (r.state === 'done' || r.jiraArchived) return false;
-      if (!r.jiraReleaseDate) return true;        // unscheduled active
-      if (r.jiraReleaseDate < today) return true;  // overdue
-      if (r.jiraReleaseDate <= horizon) return true; // upcoming
-      return false;
-    });
-
-    // Step 2: collect tickets from immediate releases (deduped by key)
-    // Apply person/role filter at this stage so we only enrich relevant tickets
-    const personLower = person ? person.toLowerCase() : null;
-    const ticketsByKey = new Map();
-
-    for (const release of immediateReleases) {
-      const buildByJiraKey = release.buildByJiraKey || {};
-
-      for (const ticket of getTicketsForRelease(release)) {
-
-        // Person/role filter (same as /releases/home)
-        if (personLower && view) {
-          const matchesDev = ticket.assignee && ticket.assignee.toLowerCase() === personLower;
-          const matchesQa = ticket.qaAssignee && ticket.qaAssignee.toLowerCase() === personLower;
-          const matches =
-            (view === 'dev' && matchesDev) ||
-            (view === 'qa' && matchesQa) ||
-            (view === 'pm' && (matchesDev || matchesQa));
-          if (!matches) continue;
-        }
-
-        if (ticketsByKey.has(ticket.key)) continue; // dedupe across releases
-
-        ticketsByKey.set(ticket.key, {
-          key: ticket.key,
-          summary: ticket.summary || '',
-          jiraStatus: ticket.jiraStatus || 'Unknown',
-          state: ticket.state || 'pending',
-          type: ticket.type || null,
-          assignee: ticket.assignee || null,
-          qaAssignee: ticket.qaAssignee || null,
-          component: ticket.component || null,
-          customerTags: Array.isArray(ticket.customerTags) ? ticket.customerTags : [],
-          deployedEnvironments: Array.isArray(ticket.deployedEnvironments) ? ticket.deployedEnvironments : [],
-          priority: ticket.priority || null,
-          riskLevel: ticket.riskLevel || null,
-          customerPriority: ticket.customerPriority || null,
-          zohoRef: ticket.zohoRef || null,
-          fixVersions: Array.isArray(ticket.fixVersions) ? ticket.fixVersions : [],
-          targetFixVersions: Array.isArray(ticket.targetFixVersions) ? ticket.targetFixVersions : [],
-          prs: [],  // enriched below after dedup
-          build: buildByJiraKey[ticket.key] || null,
-          releases: [],
-        });
-      }
-    }
-
-    // Build immediate-releases column list (used for filter chips)
-    const releaseColumns = immediateReleases.map(r => ({
-      repo: r.repo,
-      version: r.version,
-      state: r.state,
-      jiraReleaseDate: r.jiraReleaseDate || null,
-    })).sort((a, b) => (a.jiraReleaseDate || 'zzzz').localeCompare(b.jiraReleaseDate || 'zzzz'));
-
-    // Enrich tickets with PR data from PrStore
-    if (prStore && ticketsByKey.size > 0) {
-      const prLookup = prStore.findByJiraKeys([...ticketsByKey.keys()]);
-      for (const [key, prs] of prLookup) {
-        const t = ticketsByKey.get(key);
-        if (t) t.prs = prs;
-      }
-    }
-
-    if (ticketsByKey.size === 0) {
-      return res.json({ releases: releaseColumns, tickets: [] });
-    }
-
-    // Step 3: cross-reference each ticket against ALL releases (not just immediate)
-    // to enrich the per-ticket release list
-    for (const release of allReleases) {
-      const releaseVersion = release.version;
-      const isImmediate = immediateReleases.some(r => r.version === releaseVersion && r.repo === release.repo);
-      const isShipped = release.state === 'done' || !!release.jiraReleased;
-      const isOverdue = !!release.jiraReleaseDate && release.jiraReleaseDate < today && !isShipped;
-
-      for (const ticket of getTicketsForRelease(release)) {
-        const enriched = ticketsByKey.get(ticket.key);
-        if (!enriched) continue;
-
-        const targetVersions = Array.isArray(ticket.targetFixVersions) ? ticket.targetFixVersions : [];
-        const fixVersions = Array.isArray(ticket.fixVersions) ? ticket.fixVersions : [];
-        const inTarget = targetVersions.includes(releaseVersion);
-        const inFixVersion = fixVersions.includes(releaseVersion);
-        if (!inTarget && !inFixVersion) continue;
-
-        // Avoid duplicate release entries for the same ticket
-        if (enriched.releases.some(r => r.repo === release.repo && r.version === releaseVersion)) continue;
-
-        enriched.releases.push({
-          repo: release.repo,
-          version: releaseVersion,
-          state: release.state,
-          jiraReleaseDate: release.jiraReleaseDate || null,
-          isImmediate,
-          isShipped,
-          isOverdue,
-          inTarget,
-          inFixVersion,
-          source: inTarget && inFixVersion ? 'both' : inTarget ? 'target' : 'fixVersion',
-        });
-      }
-    }
-
-    // Sort each ticket's releases: overdue first, then upcoming, then future, then shipped
-    for (const t of ticketsByKey.values()) {
-      t.releases.sort((a, b) => {
-        // Shipped releases go to the end
-        if (a.isShipped !== b.isShipped) return a.isShipped ? 1 : -1;
-        // Then overdue first
-        if (a.isOverdue !== b.isOverdue) return a.isOverdue ? -1 : 1;
-        // Then by date
-        const aDate = a.jiraReleaseDate || 'zzzz';
-        const bDate = b.jiraReleaseDate || 'zzzz';
-        return aDate.localeCompare(bDate);
-      });
-    }
-
-    const tickets = Array.from(ticketsByKey.values());
-
-    // Sort tickets by their most urgent release date (overdue first), then by status severity
-    const STATUS_PRIORITY = {
-      'Blocked': 0, 'Testing Failed': 1, 'Re-verify Bug': 2,
-      'In Progress': 3, 'Development In Progress': 3, 'In Review': 4,
-      'Waiting for Cherry Pick': 5, 'Ready For Testing': 6, 'Cherry Picked': 7,
-      'In Testing': 8, 'Testing in Branch': 9,
-    };
-    tickets.sort((a, b) => {
-      const aFirst = a.releases.find(r => !r.isShipped);
-      const bFirst = b.releases.find(r => !r.isShipped);
-      const aDate = aFirst?.jiraReleaseDate || 'zzzz';
-      const bDate = bFirst?.jiraReleaseDate || 'zzzz';
-      if (aDate !== bDate) return aDate.localeCompare(bDate);
-      const aPri = STATUS_PRIORITY[a.jiraStatus] ?? 99;
-      const bPri = STATUS_PRIORITY[b.jiraStatus] ?? 99;
-      return aPri - bPri;
-    });
-
-    // Batch-enrich with truth (single query)
-    if (ticketStore && tickets.length > 0) {
-      const truthMap = ticketStore.getTruthForTickets(tickets.map(t => t.key));
-      for (const t of tickets) {
-        t.truth = truthMap.get(t.key) || [];
-      }
-    }
-
-    res.json({ releases: releaseColumns, tickets });
+    const result = ticketStore.getForImmediateReleases({ today, horizon, view, person, sort, sortDir, limit, offset });
+    res.json(result);
   });
 
   router.get('/releases/:version', (req, res) => {

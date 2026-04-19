@@ -95,7 +95,6 @@ function createReleaseWithDate(services, { version, repo = 'webplatform', jiraRe
   const key = `${repo}:${version}`;
   const release = services.releases.get(version, repo);
   if (jiraReleaseDate) {
-    // jiraReleaseDate is set by the JIRA sync, not by update(); mutate directly for tests
     release.jiraReleaseDate = jiraReleaseDate;
   }
   if (state && state !== 'planning') {
@@ -105,6 +104,8 @@ function createReleaseWithDate(services, { version, repo = 'webplatform', jiraRe
       services.releases.transition(key, path[i]);
     }
   }
+  // Persist to DB so SQL queries can read the release date
+  services.releases.persist(release);
   return release;
 }
 
