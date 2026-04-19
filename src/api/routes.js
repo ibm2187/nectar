@@ -45,22 +45,9 @@ module.exports = function createRoutes(services, config) {
    * Enrich a ticket list response with PR data from PrStore.
    * Adds a `prs` array to each ticket with { prNumber, repo, status, baseBranch, prUrl }.
    */
-  function enrichWithPrs(result) {
-    if (!prStore || !result.tickets || result.tickets.length === 0) return result;
-    const keys = result.tickets.map(t => t.key);
-    const prMap = prStore.findByJiraKeys(keys);
-    result.tickets = result.tickets.map(t => ({
-      ...t,
-      prs: (prMap.get(t.key) || []).map(pr => ({
-        prNumber: pr.prNumber,
-        repo: pr.repo,
-        status: pr.status,
-        baseBranch: pr.baseBranch,
-        prUrl: pr.prUrl,
-      })),
-    }));
-    return result;
-  }
+  // NOTE: enrichWithPrs, enrichWithReleases, enrichWithTruth are no longer used.
+  // Ticket queries now use SQL-level enrichment via TicketStore.ENRICH_COLUMNS
+  // which joins releases, PRs, and truth in a single query.
 
   /**
    * Enrich a flat ticket list (from TicketStore) with release membership data.
@@ -68,82 +55,6 @@ module.exports = function createRoutes(services, config) {
    * and adds a `releases[]` array (same shape as /tickets/home).
    * Also normalises the `status` field to `jiraStatus` for client consistency.
    */
-  function enrichWithReleases(result) {
-    if (!result.tickets || result.tickets.length === 0) return result;
-    const allReleases = releases.list();
-    const today = new Date().toISOString().slice(0, 10);
-
-    result.tickets = result.tickets.map(t => {
-      const ticketReleases = [];
-      const ticketFix = Array.isArray(t.fixVersions) ? t.fixVersions : [];
-      const ticketTarget = Array.isArray(t.targetFixVersions) ? t.targetFixVersions : [];
-      const allVersions = new Set([...ticketFix, ...ticketTarget]);
-
-      if (allVersions.size > 0) {
-        for (const release of allReleases) {
-          const version = release.version;
-          if (!allVersions.has(version)) continue;
-
-          const inTarget = ticketTarget.includes(version);
-          const inFixVersion = ticketFix.includes(version);
-          if (!inTarget && !inFixVersion) continue;
-
-          // Avoid duplicate entries for the same release
-          if (ticketReleases.some(r => r.repo === release.repo && r.version === version)) continue;
-
-          const isShipped = release.state === 'done' || !!release.jiraReleased;
-          const isOverdue = !!release.jiraReleaseDate && release.jiraReleaseDate < today && !isShipped;
-
-          ticketReleases.push({
-            repo: release.repo,
-            version,
-            state: release.state,
-            jiraReleaseDate: release.jiraReleaseDate || null,
-            isImmediate: false,
-            isShipped,
-            isOverdue,
-            inTarget,
-            inFixVersion,
-            source: inTarget && inFixVersion ? 'both' : inTarget ? 'target' : 'fixVersion',
-          });
-        }
-      }
-
-      // Sort: shipped last, overdue first, then by date
-      ticketReleases.sort((a, b) => {
-        if (a.isShipped !== b.isShipped) return a.isShipped ? 1 : -1;
-        if (a.isOverdue !== b.isOverdue) return a.isOverdue ? -1 : 1;
-        const aDate = a.jiraReleaseDate || 'zzzz';
-        const bDate = b.jiraReleaseDate || 'zzzz';
-        return aDate.localeCompare(bDate);
-      });
-
-      return {
-        ...t,
-        jiraStatus: t.status || 'Unknown',
-        releases: ticketReleases,
-      };
-    });
-
-    return result;
-  }
-
-  /**
-   * Enrich a ticket list response with persisted truth data from ticket_truth.
-   * Adds a `truth[]` array to each ticket with per-release health verdicts.
-   * Uses a batch query to avoid N+1 lookups.
-   */
-  function enrichWithTruth(result) {
-    if (!ticketStore || !result.tickets || result.tickets.length === 0) return result;
-    const keys = result.tickets.map(t => t.key);
-    const truthMap = ticketStore.getTruthForTickets(keys);
-    result.tickets = result.tickets.map(t => ({
-      ...t,
-      truth: truthMap.get(t.key) || [],
-    }));
-    return result;
-  }
-
   // NOTE: Auth is now handled by the unified auth middleware in web/server.js.
   // The old WEB_TOKEN-only middleware has been replaced by createAuthMiddleware
   // which supports API keys, WEB_TOKEN, and Google SSO JWT cookies.
