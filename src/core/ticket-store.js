@@ -731,6 +731,38 @@ class TicketStore extends EventEmitter {
   }
 
   /**
+   * Get truth for multiple tickets at once (batch query).
+   * Returns Map<jiraKey, truthRow[]> — avoids N+1 queries when enriching ticket lists.
+   * @param {string[]} jiraKeys
+   * @returns {Map<string, Array<object>>}
+   */
+  getTruthForTickets(jiraKeys) {
+    const result = new Map();
+    if (!jiraKeys || jiraKeys.length === 0) return result;
+
+    // SQLite has a limit on the number of variables in a query (typically 999).
+    // Process in chunks of 500 to stay well under the limit.
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < jiraKeys.length; i += CHUNK_SIZE) {
+      const chunk = jiraKeys.slice(i, i + CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = this.db.prepare(
+        `SELECT * FROM ticket_truth WHERE jiraKey IN (${placeholders}) ORDER BY jiraKey ASC, version ASC`
+      ).all(...chunk);
+
+      for (const row of rows) {
+        const truth = truthFromRow(row);
+        if (!result.has(truth.jiraKey)) {
+          result.set(truth.jiraKey, []);
+        }
+        result.get(truth.jiraKey).push(truth);
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Get truth for a specific ticket across all releases.
    * @param {string} jiraKey
    * @returns {Array<object>}

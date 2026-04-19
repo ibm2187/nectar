@@ -128,6 +128,22 @@ module.exports = function createRoutes(services, config) {
     return result;
   }
 
+  /**
+   * Enrich a ticket list response with persisted truth data from ticket_truth.
+   * Adds a `truth[]` array to each ticket with per-release health verdicts.
+   * Uses a batch query to avoid N+1 lookups.
+   */
+  function enrichWithTruth(result) {
+    if (!ticketStore || !result.tickets || result.tickets.length === 0) return result;
+    const keys = result.tickets.map(t => t.key);
+    const truthMap = ticketStore.getTruthForTickets(keys);
+    result.tickets = result.tickets.map(t => ({
+      ...t,
+      truth: truthMap.get(t.key) || [],
+    }));
+    return result;
+  }
+
   // NOTE: Auth is now handled by the unified auth middleware in web/server.js.
   // The old WEB_TOKEN-only middleware has been replaced by createAuthMiddleware
   // which supports API keys, WEB_TOKEN, and Google SSO JWT cookies.
@@ -243,10 +259,21 @@ module.exports = function createRoutes(services, config) {
       return availability.getPersonOutInRange(name, today, releaseDate);
     };
 
+    // Pre-fetch truth for all ticket keys across all releases (one batch query).
+    let allTicketKeys = [];
+    for (const release of annotated) {
+      for (const t of getTicketsForRelease(release)) {
+        allTicketKeys.push(t.key);
+      }
+    }
+    // Dedupe for the batch query
+    const uniqueKeys = [...new Set(allTicketKeys)];
+    const truthMap = ticketStore ? ticketStore.getTruthForTickets(uniqueKeys) : new Map();
+
     let result = annotated.map(release => {
       let tickets = getTicketsForRelease(release);
 
-      // Enrich tickets with PR data + build status + OOO annotations
+      // Enrich tickets with PR data + build status + OOO annotations + truth
       const ticketKeys = tickets.map(t => t.key);
       const prLookup = prStore ? prStore.findByJiraKeys(ticketKeys) : new Map();
       const buildByJiraKey = release.buildByJiraKey || {};
@@ -258,6 +285,7 @@ module.exports = function createRoutes(services, config) {
           ...t,
           prs: prLookup.get(t.key) || [],
           build: buildByJiraKey[t.key] || null,
+          truth: truthMap.get(t.key) || [],
         };
         if (availability) {
           const assigneeOut = t.assignee ? availability.getPersonOut(t.assignee) : null;
@@ -512,7 +540,7 @@ module.exports = function createRoutes(services, config) {
       return aPri - bPri;
     });
 
-    res.json({ releases: releaseColumns, tickets });
+    res.json(enrichWithTruth({ releases: releaseColumns, tickets }));
   });
 
   router.get('/releases/:version', (req, res) => {
@@ -1185,7 +1213,7 @@ module.exports = function createRoutes(services, config) {
     const { sort, sortDir, q, module, statusGroup, person } = req.query;
     const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
-    res.json(enrichWithReleases(enrichWithPrs(ticketStore.getCutScope({ sort, sortDir, search: q, module, statusGroup, person, limit, offset }))));
+    res.json(enrichWithTruth(enrichWithReleases(enrichWithPrs(ticketStore.getCutScope({ sort, sortDir, search: q, module, statusGroup, person, limit, offset })))));
   });
 
   router.get('/tickets/triage', (req, res) => {
@@ -1219,9 +1247,9 @@ module.exports = function createRoutes(services, config) {
     const excludeStatuses = req.query.excludeStatuses ? req.query.excludeStatuses.split(',') : undefined;
     const excludeStatusCategory = req.query.excludeStatusCategory || undefined;
     if (q) {
-      res.json(enrichWithReleases(enrichWithPrs(ticketStore.search(q, { limit, offset }))));
+      res.json(enrichWithTruth(enrichWithReleases(enrichWithPrs(ticketStore.search(q, { limit, offset })))));
     } else {
-      res.json(enrichWithReleases(enrichWithPrs(ticketStore.getByFilter({ statusCategory, assignee, type, module, component, customer, project, product, person, hasFixVersion, createdSince, excludeStatuses, excludeStatusCategory, statusGroup, sort, sortDir, limit, offset }))));
+      res.json(enrichWithTruth(enrichWithReleases(enrichWithPrs(ticketStore.getByFilter({ statusCategory, assignee, type, module, component, customer, project, product, person, hasFixVersion, createdSince, excludeStatuses, excludeStatusCategory, statusGroup, sort, sortDir, limit, offset })))));
     }
   });
 
@@ -1346,6 +1374,23 @@ module.exports = function createRoutes(services, config) {
         return res.json({ status: 'computing' });
     }
   }));
+
+  // Persisted (cached) truth from ticket_truth table — instant, no computation needed.
+  // Falls back to the persisted truth computed by TruthSync in the background.
+  router.get('/releases/:repo/:version/truth/cached', (req, res) => {
+    if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
+    const { repo, version } = req.params;
+    const verified = ticketStore.getTruthForRelease(repo, version);
+    const rollup = ticketStore.getTruthRollup(repo, version);
+    if (verified.length === 0) {
+      return res.json({ status: 'none', message: 'No persisted truth — trigger a Refresh to compute.' });
+    }
+    return res.json({
+      status: 'ready',
+      result: { repo, version, verified, rollup },
+      source: 'persisted',
+    });
+  });
 
   // Deployment impact — diff between target release and current prod version
   router.get('/releases/:repo/:version/impact', asyncHandler(async (req, res) => {

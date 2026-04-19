@@ -7,7 +7,7 @@ import { Input } from '../../components/ui/input'
 import { NectarLoader } from '../../components/NectarLoader'
 import { cn, exportToCsv } from '../../lib/utils'
 import { SavedViews } from '../../components/SavedViews'
-import { TicketRow, TicketDeployedCell, ReleaseBadge, PriorityBadge, RiskBadge, getNextRelease, priorityOrdinal, riskOrdinal, NextReleaseVersionCell, NextReleaseDateCell, type ReleaseMembership, type TicketRowData } from '../../components/TicketRow'
+import { TicketRow, TicketDeployedCell, ReleaseBadge, PriorityBadge, RiskBadge, HealthBadge, getNextRelease, priorityOrdinal, riskOrdinal, NextReleaseVersionCell, NextReleaseDateCell, type ReleaseMembership, type TicketRowData, type TruthEntry } from '../../components/TicketRow'
 import { SortableHeader, useSortableData, useSortState, nextSortState, type SortState, type SortDir as SortableSortDir } from '../../components/SortableHeader'
 import { JiraLink } from '../../components/JiraLink'
 import { OutIcon } from '../../components/PersonBadge'
@@ -62,6 +62,7 @@ interface FlatTicket extends TicketRowData {
   customerTags?: string[]
   created?: string | null
   prs?: TicketPr[]
+  truth?: TruthEntry[]
 }
 
 interface TicketPr {
@@ -430,7 +431,7 @@ function ReleasesTicketsTab() {
 type FlatSortKey = 'key' | 'summary' | 'status' | 'module' | 'assignee' | 'qaAssignee' | 'component' | 'created' | 'priority' | 'riskLevel' | 'customerPriority' | 'type'
 
 // Client-side sort keys matching the Home page TicketsTable columns
-type HomeSortKey = 'key' | 'summary' | 'status' | 'priority' | 'risk' | 'customerPriority' | 'assignee' | 'qa' | 'deployed' | 'nextRelease' | 'nextDate' | 'releases' | 'prs'
+type HomeSortKey = 'key' | 'summary' | 'status' | 'health' | 'priority' | 'risk' | 'customerPriority' | 'assignee' | 'qa' | 'deployed' | 'nextRelease' | 'nextDate' | 'releases' | 'prs'
 
 interface BuildUrlParams {
   offset: number; limit: number; sort: FlatSortKey; sortDir: 'asc' | 'desc'
@@ -557,10 +558,16 @@ function ServerTicketTable({
   }, [data, selectedReleases])
 
   // Client-side sort using Home-style accessors
+  const HEALTH_SORT_PRIORITY: Record<string, number> = { attention: 0, 'in-dev': 1, 'awaiting-cp': 2, 'in-qa': 3, done: 4 }
+  const worstHealthOrdinal = (t: FlatTicket): number => {
+    if (!t.truth || t.truth.length === 0) return 99
+    return t.truth.reduce((w, e) => Math.min(w, HEALTH_SORT_PRIORITY[e.healthCategory] ?? 5), 99)
+  }
   const clientAccessors = useMemo(() => ({
     key:              (t: FlatTicket) => t.key,
     summary:          (t: FlatTicket) => t.summary,
     status:           (t: FlatTicket) => t.jiraStatus,
+    health:           (t: FlatTicket) => worstHealthOrdinal(t),
     priority:         (t: FlatTicket) => priorityOrdinal(t.priority),
     risk:             (t: FlatTicket) => riskOrdinal(t.riskLevel),
     customerPriority: (t: FlatTicket) => priorityOrdinal(t.customerPriority),
@@ -734,6 +741,7 @@ function ServerTicketTable({
                     <col className="w-28" />
                     <col />{/* summary */}
                     <col className="w-40" />
+                    <col className="w-20" />{/* health */}
                     <col className="w-20" />{/* priority */}
                     <col className="w-24" />{/* risk */}
                     <col className="w-28" />{/* customer priority */}
@@ -749,6 +757,7 @@ function ServerTicketTable({
                       <SortableHeader label="Key"          sortKey="key"              state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
                       <SortableHeader label="Summary"      sortKey="summary"          state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
                       <SortableHeader label="Status"       sortKey="status"           state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
+                      <SortableHeader label="Health"       sortKey="health"           state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
                       <SortableHeader label="Priority"     sortKey="priority"         state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
                       <SortableHeader label="Risk"         sortKey="risk"             state={clientSort} onSort={k => onSort(k as HomeSortKey)} />
                       <SortableHeader label="Cust Prio"    sortKey="customerPriority" state={clientSort} onSort={k => onSort(k as HomeSortKey)} className="hidden md:table-cell" title="Primary Customer Priority" />
@@ -912,6 +921,7 @@ function FlatTicketRow({ ticket: t, onReleaseClick }: { ticket: FlatTicket; onRe
       <td className="px-3 py-2 align-top">
         <span className="text-xs">{t.jiraStatus}</span>
       </td>
+      <td className="px-3 py-2 align-top"><HealthBadge truth={t.truth} /></td>
       <td className="px-3 py-2 align-top"><PriorityBadge value={t.priority} /></td>
       <td className="px-3 py-2 align-top"><RiskBadge value={t.riskLevel} /></td>
       <td className="px-3 py-2 align-top hidden md:table-cell"><PriorityBadge value={t.customerPriority} /></td>

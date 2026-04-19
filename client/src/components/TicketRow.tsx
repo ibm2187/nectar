@@ -5,6 +5,23 @@ import type { ZohoRef } from '../api/client'
 
 // ── Shared types ──────────────────────────────────────
 
+/** Per-release truth verdict for a ticket (from ticket_truth table). */
+export interface TruthEntry {
+  jiraKey?: string
+  repo?: string
+  version: string
+  health: string
+  healthCategory: string
+  healthMessage: string
+  onBranch: boolean
+  prNumber?: number | null
+  prUrl?: string | null
+  stage?: string | null
+  inTarget?: boolean
+  inFixVersion?: boolean
+  computedAt?: string | null
+}
+
 export type ReleaseSource = 'both' | 'target' | 'fixVersion'
 
 export interface ReleaseMembership {
@@ -40,6 +57,8 @@ export interface TicketRowData {
   riskLevel?: string | null
   /** "Primary Customer Priority" custom field — URGENT/High/Medium/Low/Internal Only */
   customerPriority?: string | null
+  /** Per-release truth verdicts (from persisted ticket_truth table). */
+  truth?: TruthEntry[]
 }
 
 // ── TicketRow ─────────────────────────────────────────
@@ -251,6 +270,70 @@ export function NextReleaseDateCell({ next }: { next: TicketRowData['releases'][
   return (
     <span className={cn('text-xs whitespace-nowrap', next.isOverdue && 'text-red-400 font-medium')}>
       {next.jiraReleaseDate}
+    </span>
+  )
+}
+
+// ── HealthBadge ─────────────────────────────────────
+
+const HEALTH_CATEGORY_PRIORITY: Record<string, number> = {
+  attention: 0,
+  'in-dev': 1,
+  'awaiting-cp': 2,
+  'in-qa': 3,
+  done: 4,
+}
+
+const HEALTH_CATEGORY_COLORS: Record<string, string> = {
+  'done':        'bg-green-500/15 text-green-400 border-green-500/30',
+  'in-qa':       'bg-purple-500/15 text-purple-400 border-purple-500/30',
+  'awaiting-cp': 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  'in-dev':      'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
+  'attention':   'bg-red-500/15 text-red-400 border-red-500/30',
+}
+
+const HEALTH_DISPLAY: Record<string, string> = {
+  'healthy':        'Healthy',
+  'no-code':        'No Code',
+  'in-qa':          'In QA',
+  'pr-pending':     'PR Open',
+  'status-stale':   'Stale',
+  'awaiting-cp':    'Awaiting CP',
+  'in-dev':         'In Dev',
+  'pre-dev':        'Pre-Dev',
+  'not-on-branch':  'Missing',
+  'failed-qa':      'Failed QA',
+  'blocked':        'Blocked',
+  'rogue':          'Rogue',
+  'needs-review':   'Review',
+  'unknown':        'Unknown',
+}
+
+/** Shows the worst health across all truth entries for a ticket. */
+export function HealthBadge({ truth }: { truth?: TruthEntry[] }) {
+  if (!truth || truth.length === 0) {
+    return <span className="text-xs text-muted-foreground italic">—</span>
+  }
+
+  // Find the worst health across all releases
+  const worst = truth.reduce((w, t) => {
+    const wp = HEALTH_CATEGORY_PRIORITY[w.healthCategory] ?? 5
+    const tp = HEALTH_CATEGORY_PRIORITY[t.healthCategory] ?? 5
+    return tp < wp ? t : w
+  })
+
+  const colorClass = HEALTH_CATEGORY_COLORS[worst.healthCategory] || HEALTH_CATEGORY_COLORS.attention
+  const label = HEALTH_DISPLAY[worst.health] || worst.health
+
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border whitespace-nowrap',
+        colorClass,
+      )}
+      title={worst.healthMessage || `${worst.health} (${worst.healthCategory})`}
+    >
+      {label}
     </span>
   )
 }

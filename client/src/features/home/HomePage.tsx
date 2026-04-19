@@ -11,7 +11,7 @@ import { JiraLink } from '../../components/JiraLink'
 import { ZohoImpactBadge } from '../releases/CustomerImpact'
 import { PipelineBadge } from '../releases/PipelineView'
 import { PrDetailPanel, type PrInfo } from '../../components/PrDetailPanel'
-import { ReleaseBadge, TicketDeployedCell as SharedDeployedCell, PriorityBadge, RiskBadge, getNextRelease, priorityOrdinal, riskOrdinal, NextReleaseVersionCell, NextReleaseDateCell, type TicketRowData } from '../../components/TicketRow'
+import { ReleaseBadge, TicketDeployedCell as SharedDeployedCell, PriorityBadge, RiskBadge, HealthBadge, getNextRelease, priorityOrdinal, riskOrdinal, NextReleaseVersionCell, NextReleaseDateCell, type TicketRowData } from '../../components/TicketRow'
 import { SortableHeader, useSortableData, useSortState } from '../../components/SortableHeader'
 import { CustomerPills } from '../../components/CustomerPill'
 import { CurrentlyOutBanner } from '../../components/CurrentlyOutBanner'
@@ -1255,7 +1255,7 @@ function CustomerGroupedView({ releases }: { releases: HomeRelease[] }) {
 // getNextRelease, priorityOrdinal, riskOrdinal — imported from ../../components/TicketRow
 
 function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
-  type TicketSortKey = 'key' | 'summary' | 'status' | 'priority' | 'risk' | 'customerPriority' | 'assignee' | 'qa' | 'deployed' | 'nextRelease' | 'nextDate' | 'releases'
+  type TicketSortKey = 'key' | 'summary' | 'status' | 'health' | 'priority' | 'risk' | 'customerPriority' | 'assignee' | 'qa' | 'deployed' | 'nextRelease' | 'nextDate' | 'releases'
   // Default: earliest release date first
   const [sortState, onSort] = useSortState<TicketSortKey>('nextDate', 'asc')
 
@@ -1297,10 +1297,16 @@ function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
     return tickets.filter(t => (t.releases || []).some(r => selectedReleases.has(r.version)))
   }, [tickets, selectedReleases])
 
+  const HEALTH_SORT_PRIORITY: Record<string, number> = { attention: 0, 'in-dev': 1, 'awaiting-cp': 2, 'in-qa': 3, done: 4 }
+  const worstHealthOrdinal = (t: TicketRowData): number => {
+    if (!t.truth || t.truth.length === 0) return 99
+    return t.truth.reduce((w, e) => Math.min(w, HEALTH_SORT_PRIORITY[e.healthCategory] ?? 5), 99)
+  }
   const accessors = useMemo(() => ({
     key:              (t: TicketRowData) => t.key,
     summary:          (t: TicketRowData) => t.summary,
     status:           (t: TicketRowData) => t.jiraStatus,
+    health:           (t: TicketRowData) => worstHealthOrdinal(t),
     priority:         (t: TicketRowData) => priorityOrdinal(t.priority),
     risk:             (t: TicketRowData) => riskOrdinal(t.riskLevel),
     customerPriority: (t: TicketRowData) => priorityOrdinal(t.customerPriority),
@@ -1362,6 +1368,7 @@ function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
                 <col className="w-28" />
                 <col />{/* summary */}
                 <col className="w-40" />
+                <col className="w-20" />{/* health */}
                 <col className="w-20" />{/* priority */}
                 <col className="w-24" />{/* risk */}
                 <col className="w-28" />{/* customer priority */}
@@ -1377,6 +1384,7 @@ function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
                   <SortableHeader label="Key"          sortKey="key"              state={sortState} onSort={k => onSort(k as TicketSortKey)} />
                   <SortableHeader label="Summary"      sortKey="summary"          state={sortState} onSort={k => onSort(k as TicketSortKey)} />
                   <SortableHeader label="Status"       sortKey="status"           state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Health"       sortKey="health"           state={sortState} onSort={k => onSort(k as TicketSortKey)} />
                   <SortableHeader label="Priority"     sortKey="priority"         state={sortState} onSort={k => onSort(k as TicketSortKey)} />
                   <SortableHeader label="Risk"         sortKey="risk"             state={sortState} onSort={k => onSort(k as TicketSortKey)} />
                   <SortableHeader label="Cust Prio"    sortKey="customerPriority" state={sortState} onSort={k => onSort(k as TicketSortKey)} className="hidden md:table-cell" title="Primary Customer Priority" />
@@ -1421,6 +1429,7 @@ function HomeTicketRow({ ticket: t, onReleaseClick }: {
       <td className="px-3 py-2 align-top">
         <span className="text-xs">{t.jiraStatus}</span>
       </td>
+      <td className="px-3 py-2 align-top"><HealthBadge truth={t.truth} /></td>
       <td className="px-3 py-2 align-top"><PriorityBadge value={t.priority} /></td>
       <td className="px-3 py-2 align-top"><RiskBadge value={t.riskLevel} /></td>
       <td className="px-3 py-2 align-top hidden md:table-cell"><PriorityBadge value={t.customerPriority} /></td>
