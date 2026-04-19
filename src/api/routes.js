@@ -540,7 +540,15 @@ module.exports = function createRoutes(services, config) {
       return aPri - bPri;
     });
 
-    res.json(enrichWithTruth({ releases: releaseColumns, tickets }));
+    // Batch-enrich with truth (single query)
+    if (ticketStore && tickets.length > 0) {
+      const truthMap = ticketStore.getTruthForTickets(tickets.map(t => t.key));
+      for (const t of tickets) {
+        t.truth = truthMap.get(t.key) || [];
+      }
+    }
+
+    res.json({ releases: releaseColumns, tickets });
   });
 
   router.get('/releases/:version', (req, res) => {
@@ -1213,7 +1221,7 @@ module.exports = function createRoutes(services, config) {
     const { sort, sortDir, q, module, statusGroup, person } = req.query;
     const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
-    res.json(enrichWithTruth(enrichWithReleases(enrichWithPrs(ticketStore.getCutScope({ sort, sortDir, search: q, module, statusGroup, person, limit, offset })))));
+    res.json(ticketStore.getCutScope({ sort, sortDir, search: q, module, statusGroup, person, limit, offset }));
   });
 
   router.get('/tickets/triage', (req, res) => {
@@ -1247,9 +1255,9 @@ module.exports = function createRoutes(services, config) {
     const excludeStatuses = req.query.excludeStatuses ? req.query.excludeStatuses.split(',') : undefined;
     const excludeStatusCategory = req.query.excludeStatusCategory || undefined;
     if (q) {
-      res.json(enrichWithTruth(enrichWithReleases(enrichWithPrs(ticketStore.search(q, { limit, offset })))));
+      res.json(ticketStore.search(q, { limit, offset }));
     } else {
-      res.json(enrichWithTruth(enrichWithReleases(enrichWithPrs(ticketStore.getByFilter({ statusCategory, assignee, type, module, component, customer, project, product, person, hasFixVersion, createdSince, excludeStatuses, excludeStatusCategory, statusGroup, sort, sortDir, limit, offset })))));
+      res.json(ticketStore.getByFilter({ statusCategory, assignee, type, module, component, customer, project, product, person, hasFixVersion, createdSince, excludeStatuses, excludeStatusCategory, statusGroup, sort, sortDir, limit, offset }));
     }
   });
 

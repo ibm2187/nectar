@@ -97,6 +97,36 @@ class TicketStore extends EventEmitter {
     this._countStmt = this.db.prepare('SELECT COUNT(*) AS n FROM jira_tickets');
   }
 
+  // ── Enrichment SQL (releases + PRs + truth in one query) ──
+
+  /**
+   * SQL subquery fragments that add releases, PRs, and truth as JSON columns.
+   * Append these to any SELECT from jira_tickets aliased as `jt`.
+   */
+  static ENRICH_COLUMNS = `,
+    (SELECT json_group_array(json_object(
+      'version', r.version, 'repo', r.repo, 'state', r.state,
+      'jiraReleaseDate', r.jiraReleaseDate, 'jiraReleased', r.jiraReleased
+    )) FROM (
+      SELECT DISTINCT r2.version, r2.repo, r2.state, r2.jiraReleaseDate, r2.jiraReleased
+      FROM json_each(jt.fixVersions) fv JOIN releases r2 ON r2.version = fv.value
+      UNION
+      SELECT DISTINCT r3.version, r3.repo, r3.state, r3.jiraReleaseDate, r3.jiraReleased
+      FROM json_each(jt.targetFixVersions) tv JOIN releases r3 ON r3.version = tv.value
+    ) r) AS releases_json,
+    (SELECT json_group_array(json_object(
+      'prNumber', gp.prNumber, 'repo', gp.repo, 'status', gp.status,
+      'baseBranch', gp.baseBranch, 'prUrl', gp.prUrl
+    )) FROM pr_jira_keys pjk
+      JOIN github_prs gp ON gp.repo = pjk.repo AND gp.prNumber = pjk.prNumber
+      WHERE pjk.jiraKey = jt.key
+    ) AS prs_json,
+    (SELECT json_group_array(json_object(
+      'version', tt.version, 'health', tt.health, 'healthCategory', tt.healthCategory,
+      'healthMessage', tt.healthMessage, 'onBranch', tt.onBranch
+    )) FROM ticket_truth tt WHERE tt.jiraKey = jt.key
+    ) AS truth_json`;
+
   // ── Core CRUD ─────────────────────────────────────
 
   upsert(ticket) {
@@ -177,18 +207,18 @@ class TicketStore extends EventEmitter {
     const pattern = `%${query}%`;
 
     const rows = this.db.prepare(`
-      SELECT * FROM jira_tickets
-      WHERE key LIKE ? OR summary LIKE ? OR assignee LIKE ?
-      ORDER BY created DESC
+      SELECT jt.* ${TicketStore.ENRICH_COLUMNS} FROM jira_tickets jt
+      WHERE jt.key LIKE ? OR jt.summary LIKE ? OR jt.assignee LIKE ?
+      ORDER BY jt.created DESC
       LIMIT ? OFFSET ?
     `).all(pattern, pattern, pattern, limit + 1, offset);
 
     const hasMore = rows.length > limit;
-    const tickets = rows.slice(0, limit).map(ticketFromRow);
+    const tickets = rows.slice(0, limit).map(enrichedTicketFromRow);
 
     const total = this.db.prepare(`
-      SELECT COUNT(*) AS n FROM jira_tickets
-      WHERE key LIKE ? OR summary LIKE ? OR assignee LIKE ?
+      SELECT COUNT(*) AS n FROM jira_tickets jt
+      WHERE jt.key LIKE ? OR jt.summary LIKE ? OR jt.assignee LIKE ?
     `).get(pattern, pattern, pattern).n;
 
     return { tickets, total, hasMore };
@@ -278,17 +308,21 @@ class TicketStore extends EventEmitter {
     const sortCol = SORT_COLS[opts.sort] || 'created';
     const sortDir = opts.sortDir === 'asc' ? 'ASC' : 'DESC';
 
+    const enrich = opts.enrich !== false;
+    const selectCols = enrich ? `jt.* ${TicketStore.ENRICH_COLUMNS}` : 'jt.*';
+    const mapper = enrich ? enrichedTicketFromRow : ticketFromRow;
+
     const rows = this.db.prepare(`
-      SELECT * FROM jira_tickets ${where}
+      SELECT ${selectCols} FROM jira_tickets jt ${where}
       ORDER BY ${sortCol} ${sortDir}
       LIMIT ? OFFSET ?
     `).all(...params, limit + 1, offset);
 
     const hasMore = rows.length > limit;
-    const tickets = rows.slice(0, limit).map(ticketFromRow);
+    const tickets = rows.slice(0, limit).map(mapper);
 
     const total = this.db.prepare(
-      `SELECT COUNT(*) AS n FROM jira_tickets ${where}`
+      `SELECT COUNT(*) AS n FROM jira_tickets jt ${where}`
     ).get(...params).n;
 
     return { tickets, total, hasMore, offset, limit };
@@ -392,17 +426,22 @@ class TicketStore extends EventEmitter {
 
     const where = 'WHERE ' + conditions.join(' AND ');
 
+    // Use a CTE to get distinct ticket keys first, then enrich
     const rows = this.db.prepare(`
-      SELECT DISTINCT jt.* FROM jira_tickets jt
-      JOIN pr_jira_keys pjk ON pjk.jiraKey = jt.key
-      JOIN github_prs gp ON gp.repo = pjk.repo AND gp.prNumber = pjk.prNumber
-      ${where}
+      WITH scope AS (
+        SELECT DISTINCT jt2.key FROM jira_tickets jt2
+        JOIN pr_jira_keys pjk ON pjk.jiraKey = jt2.key
+        JOIN github_prs gp ON gp.repo = pjk.repo AND gp.prNumber = pjk.prNumber
+        ${where.replace(/jt\./g, 'jt2.')}
+      )
+      SELECT jt.* ${TicketStore.ENRICH_COLUMNS} FROM jira_tickets jt
+      JOIN scope ON scope.key = jt.key
       ORDER BY ${sortCol} ${sortDir}
       LIMIT ? OFFSET ?
     `).all(...params, limit + 1, offset);
 
     const hasMore = rows.length > limit;
-    const tickets = rows.slice(0, limit).map(ticketFromRow);
+    const tickets = rows.slice(0, limit).map(enrichedTicketFromRow);
 
     const total = this.db.prepare(`
       SELECT COUNT(DISTINCT jt.key) AS n FROM jira_tickets jt
@@ -914,6 +953,70 @@ function truthFromRow(row) {
     inFixVersion: !!row.inFixVersion,
     computedAt: row.computedAt,
   };
+}
+
+/**
+ * Parse an enriched row (with releases_json, prs_json, truth_json columns)
+ * into a fully-populated ticket object with releases, prs, truth arrays.
+ */
+function enrichedTicketFromRow(row) {
+  const ticket = ticketFromRow(row);
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Parse releases
+  const rawReleases = row.releases_json ? JSON.parse(row.releases_json) : [];
+  const fixSet = new Set(ticket.fixVersions || []);
+  const targetSet = new Set(ticket.targetFixVersions || []);
+  ticket.releases = rawReleases
+    .filter(r => r.version) // filter out nulls from empty json_group_array
+    .map(r => {
+      const inFixVersion = fixSet.has(r.version);
+      const inTarget = targetSet.has(r.version);
+      const isShipped = r.state === 'done' || !!r.jiraReleased;
+      const isOverdue = !!r.jiraReleaseDate && r.jiraReleaseDate < today && !isShipped;
+      return {
+        repo: r.repo,
+        version: r.version,
+        state: r.state,
+        jiraReleaseDate: r.jiraReleaseDate || null,
+        isImmediate: false,
+        isShipped,
+        isOverdue,
+        inTarget,
+        inFixVersion,
+        source: inTarget && inFixVersion ? 'both' : inTarget ? 'target' : 'fixVersion',
+      };
+    })
+    .sort((a, b) => {
+      if (a.isShipped !== b.isShipped) return a.isShipped ? 1 : -1;
+      if (a.isOverdue !== b.isOverdue) return a.isOverdue ? -1 : 1;
+      return (a.jiraReleaseDate || 'zzzz').localeCompare(b.jiraReleaseDate || 'zzzz');
+    });
+
+  // Parse PRs
+  const rawPrs = row.prs_json ? JSON.parse(row.prs_json) : [];
+  ticket.prs = rawPrs.filter(p => p.prNumber).map(p => ({
+    prNumber: p.prNumber,
+    repo: p.repo,
+    status: p.status,
+    baseBranch: p.baseBranch,
+    prUrl: p.prUrl,
+  }));
+
+  // Parse truth
+  const rawTruth = row.truth_json ? JSON.parse(row.truth_json) : [];
+  ticket.truth = rawTruth.filter(t => t.health).map(t => ({
+    version: t.version,
+    health: t.health,
+    healthCategory: t.healthCategory,
+    healthMessage: t.healthMessage,
+    onBranch: !!t.onBranch,
+  }));
+
+  // Add jiraStatus alias
+  ticket.jiraStatus = ticket.status || 'Unknown';
+
+  return ticket;
 }
 
 module.exports = TicketStore;
