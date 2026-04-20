@@ -336,8 +336,7 @@ class Simulator {
       }
 
       releaseResults.set(version, {
-        remaining,
-        uniqueRemaining: remaining,
+        remaining: relInfo.tickets.size,  // total not-done at start
         projectedDate: relInfo.projectedDate,
         deadlineDate: relInfo.deadlineDate,
         daysLate,
