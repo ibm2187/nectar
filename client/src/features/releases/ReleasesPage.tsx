@@ -152,13 +152,15 @@ function computeClientForecast(release: Release, now: Date) {
   return { risk, remaining, projectedLabel: null }
 }
 
-type ForecastRisk = 'low' | 'medium' | 'high' | 'critical'
-
-const FORECAST_RISK_STYLE: Record<ForecastRisk, { label: string; cls: string }> = {
-  low:      { label: 'LOW',      cls: 'bg-green-500/20 text-green-400' },
-  medium:   { label: 'MED',      cls: 'bg-yellow-500/20 text-yellow-400' },
-  high:     { label: 'HIGH',     cls: 'bg-red-500/20 text-red-400' },
-  critical: { label: 'CRIT',     cls: 'bg-red-500/30 text-red-300' },
+const FORECAST_RISK_STYLE: Record<string, { label: string; cls: string }> = {
+  'on-track': { label: 'OK',       cls: 'bg-green-500/20 text-green-400' },
+  tight:      { label: 'TIGHT',    cls: 'bg-yellow-500/20 text-yellow-400' },
+  'at-risk':  { label: 'AT RISK',  cls: 'bg-orange-500/20 text-orange-400' },
+  critical:   { label: 'CRIT',     cls: 'bg-red-500/30 text-red-300' },
+  // Legacy risk levels (fallback)
+  low:        { label: 'LOW',      cls: 'bg-green-500/20 text-green-400' },
+  medium:     { label: 'MED',      cls: 'bg-yellow-500/20 text-yellow-400' },
+  high:       { label: 'HIGH',     cls: 'bg-red-500/20 text-red-400' },
 }
 
 // ── Navigation constants ──────────────────────────────

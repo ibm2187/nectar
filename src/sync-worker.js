@@ -44,6 +44,9 @@ const peopleDirectory = new PeopleDirectory(config);
 const Availability = require('./core/availability');
 const availability = new Availability();
 
+const VelocityEngine = require('./core/velocity-engine');
+const velocityEngine = new VelocityEngine({ db, releases, availability, config });
+
 // ── Initialize integrations ─────────────────────────────────
 const JiraClient = require('./integrations/jira');
 const jira = new JiraClient();

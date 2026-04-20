@@ -80,23 +80,23 @@ export interface Release {
 }
 
 export interface DeliveryForecast {
-  version: string
-  releaseDate: string | null
-  deadlineDate: string | null
-  total: number
-  done: number
   remaining: number
-  daysLeft: number | null
-  velocity: {
-    actual: number
-    required: number | null
-    window: number
-    completedInWindow: number
-    source: 'version' | 'release-age' | 'global' | 'none'
-  }
-  risk: 'low' | 'medium' | 'high' | 'critical' | 'unknown'
-  riskMessage: string
+  uniqueRemaining: number
   projectedDate: string | null
+  deadlineDate: string | null
+  daysLate: number
+  risk: 'on-track' | 'tight' | 'at-risk' | 'critical' | 'unknown'
+  riskMessage: string
+  suggestions: string[]
+  bottleneck: {
+    person: string
+    role: string
+    queueSize: number
+    velocity: number
+    projectedClear: string
+    devBottleneck?: { person: string; role: string; queueSize: number; velocity: number } | null
+    qaBottleneck?: { person: string; role: string; queueSize: number; velocity: number } | null
+  } | null
   breakdown: {
     notStarted: number
     inDev: number
@@ -104,6 +104,10 @@ export interface DeliveryForecast {
     readyForQa: number
     inQa: number
     awaitingCp: number
+  }
+  velocity: {
+    devTotal: number
+    qaTotal: number
   }
 }
 
