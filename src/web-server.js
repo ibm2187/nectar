@@ -80,6 +80,9 @@ const ZohoClient = require('./integrations/zoho');
 const zoho = new ZohoClient();
 
 // ── Feature engines (used by API routes) ────────────────────
+const VelocityEngine = require('./core/velocity-engine');
+const velocityEngine = new VelocityEngine({ db, releases, availability, config });
+
 const RiskAssessor = require('./core/risk');
 const risk = new RiskAssessor(releases, github, jenkins, config);
 
@@ -224,7 +227,7 @@ const services = {
   aws, pipelineSync: pipelineSyncStub,
   releaseNotifier,
   peopleDirectory, notificationSettings, notificationEngine, availability,
-  ticketStore, prStore,
+  ticketStore, prStore, velocityEngine,
 };
 
 const webServer = createWebServer(services, config);

@@ -25,7 +25,7 @@ const DONE_STATUSES_FOR_RISK = new Set([
  * @param {object} config
  */
 module.exports = function createRoutes(services, config) {
-  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig, apiKeys, taskQueue, userStore, datadog, datadogPoller, ticketStore, prStore } = services;
+  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig, apiKeys, taskQueue, userStore, datadog, datadogPoller, ticketStore, prStore, velocityEngine } = services;
 
   // Nectar's own repo — used by the Issues page so users can file bugs/feedback.
   const NECTAR_REPO = 'mavencare/nectar';
@@ -297,11 +297,17 @@ module.exports = function createRoutes(services, config) {
         }
       }
 
-      // Compute delivery forecast for this release
+      // Compute delivery forecast from VelocityEngine simulation
       let forecast = null;
-      if (ticketStore) {
+      if (velocityEngine) {
         try {
-          forecast = ticketStore.getDeliveryForecast(release.version);
+          const cached = velocityEngine.getCachedForecast();
+          const releaseForecast = cached.releases?.get(release.version);
+          if (releaseForecast) {
+            forecast = { ...releaseForecast };
+            // Convert any Map values for JSON serialization
+            if (forecast.bottleneck instanceof Map) forecast.bottleneck = Object.fromEntries(forecast.bottleneck);
+          }
         } catch {
           // Non-critical — don't block the response
         }
@@ -1211,12 +1217,28 @@ module.exports = function createRoutes(services, config) {
 
   // ── Delivery Forecast ───────────────────────────────────
 
-  // GET /api/releases/:repo/:version/forecast — delivery risk forecast
+  // GET /api/releases/forecast — full simulation result for all releases
+  router.get('/releases/forecast', (req, res) => {
+    if (!velocityEngine) return res.status(503).json({ error: 'Velocity engine not available' });
+    const result = velocityEngine.getCachedForecast();
+    // Convert Maps to plain objects for JSON serialization
+    res.json({
+      releases: Object.fromEntries(result.releases || new Map()),
+      people: Object.fromEntries(result.people || new Map()),
+      globalVelocity: result.globalVelocity,
+      teamAverages: result.teamAverages,
+      simulation: result.simulation,
+    });
+  });
+
+  // GET /api/releases/:repo/:version/forecast — per-release delivery risk forecast
   router.get('/releases/:repo/:version/forecast', (req, res) => {
-    if (!ticketStore) return res.status(503).json({ error: 'Ticket store not available' });
-    const { version } = req.params;
-    const forecast = ticketStore.getDeliveryForecast(version);
-    res.json(forecast);
+    if (!velocityEngine) return res.status(503).json({ error: 'Velocity engine not available' });
+    const result = velocityEngine.getCachedForecast();
+    const releaseKey = req.params.version;
+    const releaseForecast = result.releases?.get(releaseKey);
+    // Return the per-release forecast with risk assessment
+    res.json(releaseForecast || { error: 'Release not found in forecast' });
   });
 
   // ── JIRA Sync ──────────────────────────────────────────

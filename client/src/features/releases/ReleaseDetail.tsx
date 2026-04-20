@@ -486,7 +486,7 @@ export function ReleaseDetail() {
       </div>
 
       {/* Delivery Forecast */}
-      {forecast && forecast.total > 0 && (
+      {forecast && forecast.remaining > 0 && (
         <Card className="mb-4">
           <CardContent className="p-4">
             <div className="flex items-center gap-3 mb-3">
@@ -498,47 +498,36 @@ export function ReleaseDetail() {
             <div className="h-2 rounded-full bg-muted/30 overflow-hidden mb-2">
               <div
                 className="h-full bg-green-500/70 transition-all"
-                style={{ width: `${forecast.total > 0 ? (forecast.done / forecast.total) * 100 : 0}%` }}
+                style={{ width: `${forecast.uniqueRemaining != null && forecast.remaining > 0
+                  ? Math.max(0, 100 - (forecast.remaining / (forecast.remaining + (forecast.uniqueRemaining || 0))) * 100)
+                  : 0}%` }}
               />
             </div>
 
             {/* Key metrics */}
             <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap mb-2">
               <span>
-                <span className="text-foreground font-medium">{forecast.remaining}</span> remaining of {forecast.total}
+                <span className="text-foreground font-medium">{forecast.remaining}</span> remaining
               </span>
-              {forecast.daysLeft !== null && (
+              {forecast.daysLate !== 0 && (
                 <>
                   <span className="text-muted-foreground/50">|</span>
-                  <span>
-                    <span className={cn("font-medium", forecast.daysLeft <= 0 ? 'text-red-400' : forecast.daysLeft <= 3 ? 'text-yellow-400' : 'text-foreground')}>
-                      {forecast.daysLeft}
-                    </span> days left
+                  <span className={cn("font-medium", forecast.daysLate > 0 ? 'text-red-400' : 'text-green-400')}>
+                    {forecast.daysLate > 0 ? `${forecast.daysLate}d late` : `${Math.abs(forecast.daysLate)}d early`}
                   </span>
-                </>
-              )}
-              {forecast.velocity.required !== null && (
-                <>
-                  <span className="text-muted-foreground/50">|</span>
-                  <span>need <span className="text-foreground font-medium">{forecast.velocity.required}</span>/day</span>
                 </>
               )}
             </div>
 
-            {/* Velocity comparison */}
+            {/* Velocity summary */}
             <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap mb-2">
               <span>
-                Team: <span className="text-foreground font-medium">{forecast.velocity.actual}</span>/day
-                <span className="text-muted-foreground/50 ml-1">({forecast.velocity.completedInWindow} in {forecast.velocity.window}d)</span>
+                Dev: <span className="text-foreground font-medium">{forecast.velocity.devTotal}</span>/day total
               </span>
-              {forecast.velocity.required !== null && (
-                <>
-                  <span className="text-muted-foreground/50">|</span>
-                  <span>
-                    Required: <span className="text-foreground font-medium">{forecast.velocity.required}</span>/day
-                  </span>
-                </>
-              )}
+              <span className="text-muted-foreground/50">|</span>
+              <span>
+                QA: <span className="text-foreground font-medium">{forecast.velocity.qaTotal}</span>/day total
+              </span>
             </div>
 
             {/* Risk message */}
@@ -546,23 +535,42 @@ export function ReleaseDetail() {
               {forecast.riskMessage}
             </div>
 
-            {/* Projected date */}
+            {/* Projected date vs deadline */}
             {forecast.projectedDate && (
-              <div className="text-xs text-muted-foreground">
+              <div className="text-xs text-muted-foreground mb-2">
                 Projected completion: <span className={cn(
                   "font-medium",
-                  forecast.releaseDate && forecast.projectedDate > forecast.releaseDate ? 'text-red-400' : 'text-green-400'
+                  forecast.deadlineDate && forecast.projectedDate > forecast.deadlineDate ? 'text-red-400' : 'text-green-400'
                 )}>{forecast.projectedDate}</span>
-                {forecast.releaseDate && (
+                {forecast.deadlineDate && (
                   <span className="ml-1">
-                    (target: {forecast.releaseDate})
+                    (deadline: {forecast.deadlineDate})
                   </span>
                 )}
               </div>
             )}
 
+            {/* Bottleneck section */}
+            {forecast.bottleneck && (
+              <div className="text-xs text-orange-400/90 bg-orange-500/10 rounded px-2 py-1.5 mb-2">
+                Bottleneck: <span className="font-medium">{forecast.bottleneck.person}</span>
+                {' '}({forecast.bottleneck.role}) — {forecast.bottleneck.queueSize} tickets at {forecast.bottleneck.velocity}/day
+              </div>
+            )}
+
+            {/* Suggestions list */}
+            {forecast.suggestions && forecast.suggestions.length > 0 && (
+              <div className="text-xs text-muted-foreground mb-2">
+                <ul className="list-disc list-inside space-y-0.5">
+                  {forecast.suggestions.map((s, i) => (
+                    <li key={i}>{s}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {/* Status breakdown */}
-            {forecast.remaining > 0 && (
+            {forecast.breakdown && forecast.remaining > 0 && (
               <div className="flex items-center gap-3 mt-3 text-[10px] text-muted-foreground flex-wrap">
                 {forecast.breakdown.notStarted > 0 && (
                   <span className="inline-flex items-center gap-1">
@@ -792,11 +800,15 @@ export function ReleaseDetail() {
 
 function ForecastRiskBadge({ risk }: { risk: string }) {
   const config: Record<string, { label: string; cls: string }> = {
-    low:      { label: 'LOW',      cls: 'bg-green-500/20 text-green-400 border-green-500/30' },
-    medium:   { label: 'MEDIUM',   cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
-    high:     { label: 'HIGH',     cls: 'bg-red-500/20 text-red-400 border-red-500/30' },
-    critical: { label: 'CRITICAL', cls: 'bg-red-500/30 text-red-300 border-red-500/50' },
-    unknown:  { label: 'UNKNOWN',  cls: 'bg-muted text-muted-foreground border-border' },
+    'on-track': { label: 'ON TRACK', cls: 'bg-green-500/20 text-green-400 border-green-500/30' },
+    tight:      { label: 'TIGHT',    cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+    'at-risk':  { label: 'AT RISK',  cls: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
+    critical:   { label: 'CRITICAL', cls: 'bg-red-500/30 text-red-300 border-red-500/50' },
+    unknown:    { label: 'UNKNOWN',  cls: 'bg-muted text-muted-foreground border-border' },
+    // Legacy risk levels (fallback)
+    low:        { label: 'LOW',      cls: 'bg-green-500/20 text-green-400 border-green-500/30' },
+    medium:     { label: 'MEDIUM',   cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+    high:       { label: 'HIGH',     cls: 'bg-red-500/20 text-red-400 border-red-500/30' },
   }
   const c = config[risk] || config.unknown
   return (

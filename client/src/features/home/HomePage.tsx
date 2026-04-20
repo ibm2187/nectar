@@ -1093,12 +1093,12 @@ function ReleasePanel({
         <ZohoImpactBadge count={r.zohoTicketCount} />
 
         {/* Delivery forecast */}
-        {r.forecast && r.forecast.total > 0 && r.state !== 'done' && (
+        {r.forecast && r.forecast.remaining > 0 && r.state !== 'done' && (
           <div className="flex items-center gap-1.5 shrink-0">
-            <HomeForecastBadge risk={r.forecast.risk} />
-            {r.forecast.velocity.actual > 0 && r.forecast.velocity.required !== null && (
+            <HomeForecastBadge risk={r.forecast.risk} bottleneck={r.forecast.bottleneck} />
+            {r.forecast.velocity && (
               <span className="text-[10px] text-muted-foreground">
-                {r.forecast.velocity.actual}/{r.forecast.velocity.required}/day
+                Dev: {r.forecast.velocity.devTotal}/day · QA: {r.forecast.velocity.qaTotal}/day
               </span>
             )}
             {r.forecast.projectedDate && (
@@ -1678,18 +1678,29 @@ function OooReleaseRiskBanner({ releases }: { releases: HomeRelease[] }) {
 
 // ── Delivery forecast risk badge ──────────────────────────
 
-function HomeForecastBadge({ risk }: { risk: string }) {
+function HomeForecastBadge({ risk, bottleneck }: { risk: string; bottleneck?: { person: string; role: string; queueSize: number } | null }) {
   const config: Record<string, { label: string; cls: string }> = {
-    low:      { label: 'LOW',  cls: 'bg-green-500/20 text-green-400 border-green-500/30' },
-    medium:   { label: 'MED',  cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
-    high:     { label: 'HIGH', cls: 'bg-red-500/20 text-red-400 border-red-500/30' },
-    critical: { label: 'CRIT', cls: 'bg-red-500/30 text-red-300 border-red-500/50' },
-    unknown:  { label: '?',    cls: 'bg-muted text-muted-foreground border-border' },
+    'on-track': { label: 'OK',       cls: 'bg-green-500/20 text-green-400 border-green-500/30' },
+    tight:      { label: 'TIGHT',    cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+    'at-risk':  { label: 'AT RISK',  cls: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
+    critical:   { label: 'CRIT',     cls: 'bg-red-500/30 text-red-300 border-red-500/50' },
+    unknown:    { label: '?',        cls: 'bg-muted text-muted-foreground border-border' },
+    // Legacy risk levels (fallback)
+    low:        { label: 'LOW',      cls: 'bg-green-500/20 text-green-400 border-green-500/30' },
+    medium:     { label: 'MED',      cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+    high:       { label: 'HIGH',     cls: 'bg-red-500/20 text-red-400 border-red-500/30' },
   }
   const c = config[risk] || config.unknown
   return (
-    <span className={cn('text-[10px] px-1.5 py-0.5 rounded border font-semibold', c.cls)}>
-      {c.label}
+    <span className="inline-flex items-center gap-1">
+      <span className={cn('text-[10px] px-1.5 py-0.5 rounded border font-semibold', c.cls)}>
+        {c.label}
+      </span>
+      {bottleneck && (
+        <span className="text-[9px] text-orange-400/80 truncate max-w-[120px]" title={`${bottleneck.person} (${bottleneck.role}) — ${bottleneck.queueSize} tickets`}>
+          {bottleneck.person}
+        </span>
+      )}
     </span>
   )
 }
