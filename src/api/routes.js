@@ -423,6 +423,32 @@ module.exports = function createRoutes(services, config) {
     res.json({ ...release, tickets: getTicketsForRelease(release) });
   });
 
+  // PR data for a release — returns prsByJiraKey for all tickets in the release.
+  // Used by TruthView to show cherry-pick and PR columns.
+  router.get('/releases/:version/prs', (req, res) => {
+    if (!prStore) return res.json({});
+    const release = releases.get(req.params.version);
+    if (!release) return res.status(404).json({ error: 'Release not found' });
+    const tickets = getTicketsForRelease(release);
+    const keys = tickets.map(t => t.key);
+    const prMap = prStore.findByJiraKeysSlim(keys);
+    // Convert Map to plain object for JSON
+    const result = {};
+    for (const [key, prs] of prMap) {
+      result[key] = prs.map(p => ({
+        prNumber: p.prNumber,
+        prTitle: null,
+        prAuthor: p.prAuthor || null,
+        prUrl: p.prUrl,
+        prCreatedAt: null,
+        status: p.status,
+        baseBranch: p.baseBranch,
+        reviewDecision: p.reviewDecision || null,
+      }));
+    }
+    res.json(result);
+  });
+
   // Notify release channel — sends status update to Slack
   router.post('/releases/:version/notify', asyncHandler(async (req, res) => {
     const version = req.params.version;

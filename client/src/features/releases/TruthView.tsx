@@ -59,7 +59,16 @@ type ViewMode = 'impact' | 'full'
 type FilterKey = 'all' | HealthCategory
 type CompareType = CompareTarget['type']
 
-export function TruthView({ repo, version, prsByJiraKey = {}, buildByJiraKey = {} }: Props) {
+export function TruthView({ repo, version, prsByJiraKey: prsByJiraKeyProp = {}, buildByJiraKey = {} }: Props) {
+  // Fetch PR data from PrStore (covers all PRs — open + merged, cherry-picks + originals)
+  // Falls back to the prop if the fetch hasn't completed yet.
+  const [fetchedPrs, setFetchedPrs] = useState<Record<string, PrInfo[]>>({})
+  useEffect(() => {
+    apiFetch<Record<string, PrInfo[]>>(`/releases/${encodeURIComponent(version)}/prs`)
+      .then(setFetchedPrs)
+      .catch(() => {}) // silent — fall back to prop
+  }, [version])
+  const prsByJiraKey = Object.keys(fetchedPrs).length > 0 ? fetchedPrs : prsByJiraKeyProp
   // ── URL-driven state (everything here is shareable) ─────────
   const [searchParams, setSearchParams] = useSearchParams()
 
