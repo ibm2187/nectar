@@ -25,6 +25,14 @@ log "Current HEAD: ${OLD_HEAD:0:7}"
 log "Fetching..."
 sudo -u ubuntu git fetch origin
 
+# Discard any runtime-generated files that dirty the worktree
+# (e.g. cache files written by the app). Without this, --ff-only
+# aborts and auto-updates silently stop.
+if ! sudo -u ubuntu git diff --quiet 2>/dev/null; then
+  log "Stashing dirty worktree..."
+  sudo -u ubuntu git stash --quiet
+fi
+
 log "Pulling..."
 sudo -u ubuntu git pull --ff-only
 
