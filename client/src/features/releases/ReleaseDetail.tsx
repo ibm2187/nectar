@@ -571,16 +571,9 @@ export function ReleaseDetail() {
                 </div>
               )}
 
-              {/* Suggestions — compact, show first 2 with +N more */}
+              {/* Suggestions — expandable */}
               {forecast.suggestions && forecast.suggestions.length > 0 && (
-                <div className="text-xs text-muted-foreground mt-1">
-                  {forecast.suggestions.slice(0, 2).join('; ')}
-                  {forecast.suggestions.length > 2 && (
-                    <span className="ml-1 text-muted-foreground/60" title={forecast.suggestions.slice(2).join('\n')}>
-                      +{forecast.suggestions.length - 2} more
-                    </span>
-                  )}
-                </div>
+                <SuggestionsList suggestions={forecast.suggestions} />
               )}
 
               {/* Status breakdown — stacked bar */}
@@ -815,6 +808,33 @@ export function ReleaseDetail() {
         </SheetContent>
       </Sheet>
 
+    </div>
+  )
+}
+
+function SuggestionsList({ suggestions }: { suggestions: string[] }) {
+  const [expanded, setExpanded] = useState(false)
+  const visible = expanded ? suggestions : suggestions.slice(0, 2)
+
+  return (
+    <div className="text-xs text-muted-foreground mt-1">
+      {visible.join('; ')}
+      {suggestions.length > 2 && !expanded && (
+        <button
+          onClick={() => setExpanded(true)}
+          className="ml-1 text-primary hover:underline cursor-pointer"
+        >
+          +{suggestions.length - 2} more
+        </button>
+      )}
+      {expanded && suggestions.length > 2 && (
+        <button
+          onClick={() => setExpanded(false)}
+          className="ml-1 text-primary hover:underline cursor-pointer"
+        >
+          show less
+        </button>
+      )}
     </div>
   )
 }
