@@ -562,11 +562,15 @@ function CollapsibleBucket({ bucketKey, items, config, forceExpanded }: {
         <Badge variant="secondary" className="text-xs ml-auto">{items.length}</Badge>
       </button>
       {expanded && (
-        <div className="px-3 pb-2.5 space-y-1.5 border-t border-white/5 pt-2">
-          {isPrBucket
-            ? (visibleItems as StandupPrItem[]).map(pr => <PrRow key={pr.prNumber} pr={pr} />)
-            : (visibleItems as StandupTicketItem[]).map(item => <TicketRow key={item.key + item.role} item={item} />)
-          }
+        <div className="border-t border-white/5">
+          <table className="w-full text-sm">
+            <tbody>
+              {isPrBucket
+                ? (visibleItems as StandupPrItem[]).map(pr => <PrRow key={pr.prNumber} pr={pr} />)
+                : (visibleItems as StandupTicketItem[]).map(item => <TicketRow key={item.key + item.role} item={item} />)
+              }
+            </tbody>
+          </table>
           {hasMore && !showAll && (
             <button
               onClick={(e) => { e.stopPropagation(); setShowAll(true) }}
@@ -591,34 +595,42 @@ function CollapsibleBucket({ bucketKey, items, config, forceExpanded }: {
 
 function TicketRow({ item }: { item: StandupTicketItem }) {
   return (
-    <div className="flex items-center gap-2 text-sm py-0.5">
-      <JiraLink jiraKey={item.key} className="font-mono text-xs shrink-0" />
-      <span className="truncate flex-1 text-foreground/80">{item.summary}</span>
-      <Badge variant="outline" className="text-[10px] shrink-0">{item.release.version}</Badge>
-      <span className="text-xs text-muted-foreground shrink-0 w-20 text-right truncate">{item.jiraStatus}</span>
-    </div>
+    <tr className="border-t border-white/5">
+      <td className="py-1.5 px-3 w-[90px]">
+        <JiraLink jiraKey={item.key} className="font-mono text-xs" />
+      </td>
+      <td className="py-1.5 pr-2 text-foreground/80 text-sm">
+        <span className="line-clamp-1">{item.summary}</span>
+      </td>
+      <td className="py-1.5 px-2 w-[110px] text-right">
+        <Badge variant="outline" className="text-[10px]">{item.release.version}</Badge>
+      </td>
+      <td className="py-1.5 px-3 w-[140px] text-right text-xs text-muted-foreground whitespace-nowrap">
+        {item.jiraStatus}
+      </td>
+    </tr>
   )
 }
 
 function PrRow({ pr }: { pr: StandupPrItem }) {
   const repoShort = pr.repo.split('/').pop() || pr.repo
   return (
-    <div className="flex items-center gap-2 text-sm py-0.5">
-      <a
-        href={pr.prUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="font-mono text-xs text-blue-400 hover:underline shrink-0"
-      >
-        #{pr.prNumber}
-      </a>
-      <span className="text-xs text-muted-foreground shrink-0">{repoShort}</span>
-      {pr.linkedTicket && (
-        <JiraLink jiraKey={pr.linkedTicket} className="font-mono text-[10px] shrink-0" />
-      )}
-      {pr.prAuthor && (
-        <span className="text-xs text-muted-foreground ml-auto">by @{pr.prAuthor}</span>
-      )}
-    </div>
+    <tr className="border-t border-white/5">
+      <td className="py-1.5 px-3 w-[90px]">
+        <a href={pr.prUrl} target="_blank" rel="noreferrer" className="font-mono text-xs text-blue-400 hover:underline">
+          #{pr.prNumber}
+        </a>
+      </td>
+      <td className="py-1.5 pr-2 text-sm">
+        <span className="text-xs text-muted-foreground">{repoShort}</span>
+        {pr.linkedTicket && (
+          <JiraLink jiraKey={pr.linkedTicket} className="font-mono text-[10px] ml-2" />
+        )}
+      </td>
+      <td className="py-1.5 px-2 w-[110px]" />
+      <td className="py-1.5 px-3 w-[140px] text-right text-xs text-muted-foreground whitespace-nowrap">
+        {pr.prAuthor && <>by @{pr.prAuthor}</>}
+      </td>
+    </tr>
   )
 }
