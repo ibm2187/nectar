@@ -7,6 +7,7 @@ import type { AuditEntry, ValidationReport, DatadogImpactResponse, ReleaseCommen
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Card, CardContent } from '../../components/ui/card'
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetBody } from '../../components/ui/sheet'
 import { timeAgo, cn } from '../../lib/utils'
 import { TruthView } from './TruthView'
 import { CustomerImpact } from './CustomerImpact'
@@ -93,6 +94,7 @@ export function ReleaseDetail() {
   const [comments, setComments] = useState<ReleaseComment[]>([])
   const [commentText, setCommentText] = useState('')
   const [commentPosting, setCommentPosting] = useState(false)
+  const [commentPanel, setCommentPanel] = useState(false)
   const authUser = useAuthStore(s => s.user)
   const ssoEnabled = useAuthStore(s => s.ssoEnabled)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -332,6 +334,9 @@ export function ReleaseDetail() {
               alert(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
             }
           }}>Notify Channel</Button>
+          <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => setCommentPanel(true)}>
+            {'\uD83D\uDCAC'} {comments.length} Comments
+          </Button>
           {/* Release Notes button */}
           {notesTaskLoading || (notesTask && (notesTask.status === 'pending' || notesTask.status === 'in-progress')) ? (
             <Button variant="outline" size="sm" className="text-xs h-7" disabled>
@@ -485,130 +490,138 @@ export function ReleaseDetail() {
         </div>
       </div>
 
-      {/* Delivery Forecast */}
-      {forecast && forecast.remaining > 0 && (
-        <Card className="mb-4">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3 mb-3">
-              <span className="text-sm font-semibold">Delivery Forecast</span>
-              <ForecastRiskBadge risk={forecast.risk} />
-            </div>
+      {/* Delivery Forecast + Pipeline side by side */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+        {/* Delivery Forecast card */}
+        {forecast && forecast.remaining > 0 && (
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center gap-3 mb-2">
+                <span className="text-sm font-semibold">Delivery Forecast</span>
+                {forecast.risk === 'unknown' ? (
+                  <span className="text-[10px] text-muted-foreground italic">insufficient velocity data</span>
+                ) : (
+                  <ForecastRiskBadge risk={forecast.risk} />
+                )}
+              </div>
 
-            {/* Progress bar */}
-            <div className="h-2 rounded-full bg-muted/30 overflow-hidden mb-2">
-              <div
-                className="h-full bg-green-500/70 transition-all"
-                style={{ width: `${forecast.uniqueRemaining != null && forecast.remaining > 0
-                  ? Math.max(0, 100 - (forecast.remaining / (forecast.remaining + (forecast.uniqueRemaining || 0))) * 100)
-                  : 0}%` }}
-              />
-            </div>
+              {/* Progress bar */}
+              <div className="h-2 rounded-full bg-muted/30 overflow-hidden mb-2">
+                <div
+                  className="h-full bg-green-500/70 transition-all"
+                  style={{ width: `${forecast.uniqueRemaining != null && forecast.remaining > 0
+                    ? Math.max(0, 100 - (forecast.remaining / (forecast.remaining + (forecast.uniqueRemaining || 0))) * 100)
+                    : 0}%` }}
+                />
+              </div>
 
-            {/* Key metrics */}
-            <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap mb-2">
-              <span>
-                <span className="text-foreground font-medium">{forecast.remaining}</span> remaining
-              </span>
-              {forecast.daysLate !== 0 && (
-                <>
-                  <span className="text-muted-foreground/50">|</span>
-                  <span className={cn("font-medium", forecast.daysLate > 0 ? 'text-red-400' : 'text-green-400')}>
-                    {forecast.daysLate > 0 ? `${forecast.daysLate}d late` : `${Math.abs(forecast.daysLate)}d early`}
-                  </span>
-                </>
+              {/* Key metrics + velocity on one line */}
+              <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap mb-1">
+                <span>
+                  <span className="text-foreground font-medium">{forecast.remaining}</span> remaining
+                </span>
+                {forecast.daysLate !== 0 && (
+                  <>
+                    <span className="text-muted-foreground/50">|</span>
+                    <span className={cn("font-medium", forecast.daysLate > 0 ? 'text-red-400' : 'text-green-400')}>
+                      {forecast.daysLate > 0 ? `${forecast.daysLate}d late` : `${Math.abs(forecast.daysLate)}d early`}
+                    </span>
+                  </>
+                )}
+                {forecast.velocity && (
+                  <>
+                    <span className="text-muted-foreground/50">|</span>
+                    <span>Dev: <span className="text-foreground font-medium">{forecast.velocity.devTotal}</span>/d</span>
+                    <span>QA: <span className="text-foreground font-medium">{forecast.velocity.qaTotal}</span>/d</span>
+                  </>
+                )}
+              </div>
+
+              {/* Projected date vs deadline */}
+              {forecast.projectedDate && (
+                <div className="text-xs text-muted-foreground mb-1">
+                  Projected: <span className={cn(
+                    "font-medium",
+                    forecast.deadlineDate && forecast.projectedDate > forecast.deadlineDate ? 'text-red-400' : 'text-green-400'
+                  )}>{forecast.projectedDate}</span>
+                  {forecast.deadlineDate && (
+                    <span className="ml-1 text-muted-foreground">(deadline: {forecast.deadlineDate})</span>
+                  )}
+                </div>
               )}
-            </div>
 
-            {/* Velocity summary */}
-            {forecast.velocity && (
-            <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap mb-2">
-              <span>
-                Dev: <span className="text-foreground font-medium">{forecast.velocity.devTotal}</span>/day total
+              {/* Risk message */}
+              <div className="text-xs text-muted-foreground mb-1">
+                {forecast.riskMessage}
+              </div>
+
+              {/* Bottleneck — compact inline */}
+              {forecast.bottleneck && (
+                <span className="text-xs text-orange-400">
+                  Bottleneck: {forecast.bottleneck.person} ({forecast.bottleneck.role}) — {forecast.bottleneck.queueSize} tickets at {forecast.bottleneck.velocity}/day
+                </span>
+              )}
+
+              {/* Suggestions — compact, show first 2 with +N more */}
+              {forecast.suggestions && forecast.suggestions.length > 0 && (
+                <div className="text-xs text-muted-foreground mt-1">
+                  {forecast.suggestions.slice(0, 2).join('; ')}
+                  {forecast.suggestions.length > 2 && (
+                    <span className="ml-1 text-muted-foreground/60" title={forecast.suggestions.slice(2).join('\n')}>
+                      +{forecast.suggestions.length - 2} more
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Status breakdown — stacked bar */}
+              {forecast.breakdown && forecast.remaining > 0 && (() => {
+                const b = forecast.breakdown
+                const total = b.notStarted + b.inDev + b.blocked + b.readyForQa + b.inQa + b.awaitingCp
+                if (total === 0) return null
+                const pct = (v: number) => (v / total) * 100
+                return (
+                  <div className="mt-2">
+                    <div className="flex h-2 rounded-full overflow-hidden bg-muted">
+                      {b.notStarted > 0 && <div className="bg-gray-400" style={{ width: `${pct(b.notStarted)}%` }} title={`${b.notStarted} not started`} />}
+                      {b.inDev > 0 && <div className="bg-yellow-400" style={{ width: `${pct(b.inDev)}%` }} title={`${b.inDev} in dev`} />}
+                      {b.blocked > 0 && <div className="bg-red-400" style={{ width: `${pct(b.blocked)}%` }} title={`${b.blocked} blocked`} />}
+                      {b.readyForQa > 0 && <div className="bg-purple-400" style={{ width: `${pct(b.readyForQa)}%` }} title={`${b.readyForQa} ready for QA`} />}
+                      {b.inQa > 0 && <div className="bg-blue-400" style={{ width: `${pct(b.inQa)}%` }} title={`${b.inQa} in QA`} />}
+                      {b.awaitingCp > 0 && <div className="bg-cyan-400" style={{ width: `${pct(b.awaitingCp)}%` }} title={`${b.awaitingCp} awaiting CP`} />}
+                    </div>
+                    <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground flex-wrap">
+                      {b.notStarted > 0 && <span className="inline-flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-gray-400" />{b.notStarted}</span>}
+                      {b.inDev > 0 && <span className="inline-flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />{b.inDev}</span>}
+                      {b.blocked > 0 && <span className="inline-flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-red-400" />{b.blocked}</span>}
+                      {b.readyForQa > 0 && <span className="inline-flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-purple-400" />{b.readyForQa} QA</span>}
+                      {b.inQa > 0 && <span className="inline-flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-blue-400" />{b.inQa}</span>}
+                      {b.awaitingCp > 0 && <span className="inline-flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />{b.awaitingCp} CP</span>}
+                    </div>
+                  </div>
+                )
+              })()}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Pipeline card */}
+        {release.repo === 'webplatform' && (
+          <Card>
+            <button
+              type="button"
+              className="w-full flex items-center justify-between px-4 py-3 text-left"
+            >
+              <span className="text-sm font-semibold">
+                {`Pipeline${(release as any).pipeline?.latest ? ` — Build #${(release as any).pipeline.latest.buildNumber} ${(release as any).pipeline.latest.status}` : ''}`}
               </span>
-              <span className="text-muted-foreground/50">|</span>
-              <span>
-                QA: <span className="text-foreground font-medium">{forecast.velocity.qaTotal}</span>/day total
-              </span>
-            </div>
-            )}
-
-            {/* Risk message */}
-            <div className="text-xs text-muted-foreground mb-2">
-              {forecast.riskMessage}
-            </div>
-
-            {/* Projected date vs deadline */}
-            {forecast.projectedDate && (
-              <div className="text-xs text-muted-foreground mb-2">
-                Projected completion: <span className={cn(
-                  "font-medium",
-                  forecast.deadlineDate && forecast.projectedDate > forecast.deadlineDate ? 'text-red-400' : 'text-green-400'
-                )}>{forecast.projectedDate}</span>
-                {forecast.deadlineDate && (
-                  <span className="ml-1">
-                    (deadline: {forecast.deadlineDate})
-                  </span>
-                )}
-              </div>
-            )}
-
-            {/* Bottleneck section */}
-            {forecast.bottleneck && (
-              <div className="text-xs text-orange-400/90 bg-orange-500/10 rounded px-2 py-1.5 mb-2">
-                Bottleneck: <span className="font-medium">{forecast.bottleneck.person}</span>
-                {' '}({forecast.bottleneck.role}) — {forecast.bottleneck.queueSize} tickets at {forecast.bottleneck.velocity}/day
-              </div>
-            )}
-
-            {/* Suggestions list */}
-            {forecast.suggestions && forecast.suggestions.length > 0 && (
-              <div className="text-xs text-muted-foreground mb-2">
-                <ul className="list-disc list-inside space-y-0.5">
-                  {forecast.suggestions.map((s, i) => (
-                    <li key={i}>{s}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {/* Status breakdown */}
-            {forecast.breakdown && forecast.remaining > 0 && (
-              <div className="flex items-center gap-3 mt-3 text-[10px] text-muted-foreground flex-wrap">
-                {forecast.breakdown.notStarted > 0 && (
-                  <span className="inline-flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-muted-foreground/30" />{forecast.breakdown.notStarted} not started
-                  </span>
-                )}
-                {forecast.breakdown.inDev > 0 && (
-                  <span className="inline-flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-blue-500/70" />{forecast.breakdown.inDev} in dev
-                  </span>
-                )}
-                {forecast.breakdown.blocked > 0 && (
-                  <span className="inline-flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-red-500/70" />{forecast.breakdown.blocked} blocked
-                  </span>
-                )}
-                {forecast.breakdown.readyForQa > 0 && (
-                  <span className="inline-flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-purple-500/70" />{forecast.breakdown.readyForQa} ready for QA
-                  </span>
-                )}
-                {forecast.breakdown.inQa > 0 && (
-                  <span className="inline-flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-yellow-500/70" />{forecast.breakdown.inQa} in QA
-                  </span>
-                )}
-                {forecast.breakdown.awaitingCp > 0 && (
-                  <span className="inline-flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-cyan-500/70" />{forecast.breakdown.awaitingCp} awaiting CP
-                  </span>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
+            </button>
+            <CardContent className="pt-0">
+              <PipelineView pipeline={(release as any).pipeline || null} />
+            </CardContent>
+          </Card>
+        )}
+      </div>
 
       {/* Validation report (collapsible, only shown when triggered) */}
       {validation && (
@@ -641,59 +654,6 @@ export function ReleaseDetail() {
             </div>
           </CardContent>
         </Card>
-      )}
-
-      {/* Comments — at the top for visibility */}
-      <CollapsibleSection title={`Comments${comments.length > 0 ? ` (${comments.length})` : ''}`} defaultOpen>
-        <div className="flex gap-2 mb-4">
-          <input
-            type="text"
-            className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="Add a comment..."
-            value={commentText}
-            onChange={e => setCommentText(e.target.value)}
-            onKeyDown={e => {
-              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') postComment()
-            }}
-            disabled={commentPosting}
-          />
-          <Button variant="outline" size="sm" className="text-xs h-9" onClick={postComment} disabled={!commentText.trim() || commentPosting}>
-            {commentPosting ? 'Posting...' : 'Post'}
-          </Button>
-        </div>
-        {comments.length === 0 ? (
-          <p className="text-sm text-muted-foreground italic">No comments yet. Add one to share context with your team.</p>
-        ) : (
-          <div className="space-y-3 max-h-80 overflow-auto">
-            {comments.map(comment => {
-              const canDelete = isAdmin || (currentUserEmail && comment.user === currentUserEmail)
-              return (
-                <div key={comment.id} className="flex items-start justify-between gap-2 py-2 border-b border-border/50 last:border-0">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-sm font-medium">{comment.user}</span>
-                      <span className="text-xs text-muted-foreground">{timeAgo(comment.createdAt)}</span>
-                    </div>
-                    <p className="text-sm text-foreground whitespace-pre-wrap break-words">{comment.text}</p>
-                  </div>
-                  {canDelete && (
-                    <button className="text-muted-foreground hover:text-destructive text-xs shrink-0 mt-1" onClick={() => deleteComment(comment.id)} title="Delete comment">x</button>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </CollapsibleSection>
-
-      {/* Pipeline — Build + Deploy status */}
-      {release.repo === 'webplatform' && (
-        <CollapsibleSection
-          title={`Pipeline${(release as any).pipeline?.latest ? ` — Build #${(release as any).pipeline.latest.buildNumber} ${(release as any).pipeline.latest.status}` : ''}`}
-          defaultOpen={!!(release as any).pipeline?.latest}
-        >
-          <PipelineView pipeline={(release as any).pipeline || null} />
-        </CollapsibleSection>
       )}
 
       {/* Truth view — JIRA + Git + PR reconciliation */}
@@ -795,6 +755,56 @@ export function ReleaseDetail() {
         releaseVersion={release.version}
         onRegenerated={refreshNotesTask}
       />
+
+      {/* Comments slide-out panel */}
+      <Sheet open={commentPanel} onOpenChange={setCommentPanel}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>Comments ({comments.length})</SheetTitle>
+          </SheetHeader>
+          <SheetBody>
+            <div className="flex gap-2 mb-4">
+              <input
+                type="text"
+                className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                placeholder="Add a comment..."
+                value={commentText}
+                onChange={e => setCommentText(e.target.value)}
+                onKeyDown={e => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') postComment()
+                }}
+                disabled={commentPosting}
+              />
+              <Button variant="outline" size="sm" className="text-xs h-9" onClick={postComment} disabled={!commentText.trim() || commentPosting}>
+                {commentPosting ? 'Posting...' : 'Post'}
+              </Button>
+            </div>
+            {comments.length === 0 ? (
+              <p className="text-sm text-muted-foreground italic">No comments yet. Add one to share context with your team.</p>
+            ) : (
+              <div className="space-y-3">
+                {comments.map(comment => {
+                  const canDelete = isAdmin || (currentUserEmail && comment.user === currentUserEmail)
+                  return (
+                    <div key={comment.id} className="flex items-start justify-between gap-2 py-2 border-b border-border/50 last:border-0">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-sm font-medium">{comment.user}</span>
+                          <span className="text-xs text-muted-foreground">{timeAgo(comment.createdAt)}</span>
+                        </div>
+                        <p className="text-sm text-foreground whitespace-pre-wrap break-words">{comment.text}</p>
+                      </div>
+                      {canDelete && (
+                        <button className="text-muted-foreground hover:text-destructive text-xs shrink-0 mt-1" onClick={() => deleteComment(comment.id)} title="Delete comment">x</button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </SheetBody>
+        </SheetContent>
+      </Sheet>
 
     </div>
   )
