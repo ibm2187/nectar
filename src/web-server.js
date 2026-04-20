@@ -72,9 +72,11 @@ const datadog = new DatadogClient();
 const DatadogPoller = require('./core/datadog-poller');
 const datadogPoller = new DatadogPoller(datadog);
 
-// Stub integrations that routes expect but don't use in web-only mode
+// Slack — connected in web server for user-triggered notifications (notify dialog).
+// Cron-based notifications (daily digest, build alerts) still run in sync worker.
 const SlackNotifier = require('./integrations/slack');
 const slack = new SlackNotifier(config);
+slack.start().catch(err => log.warn(`[web] Slack start failed: ${err.message}`));
 
 const ZohoClient = require('./integrations/zoho');
 const zoho = new ZohoClient();
