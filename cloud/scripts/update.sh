@@ -10,23 +10,10 @@
 #     --document-name "AWS-RunShellScript" \
 #     --parameters 'commands=["bash /home/ubuntu/nectar/cloud/scripts/update.sh"]' \
 #     --region us-east-1
-#
-# Force a full rebuild + restart regardless of HEAD:
-#
-#   bash /home/ubuntu/nectar/cloud/scripts/update.sh --force
 
 set -euo pipefail
 
 NECTAR_DIR="/home/ubuntu/nectar"
-FORCE=false
-
-for arg in "$@"; do
-  case "${arg}" in
-    --force|-f) FORCE=true ;;
-    *) echo "Unknown option: ${arg}" >&2; exit 1 ;;
-  esac
-done
-
 log() { echo "[$(date '+%H:%M:%S')] $1"; }
 
 cd "${NECTAR_DIR}"
@@ -38,58 +25,41 @@ log "Current HEAD: ${OLD_HEAD:0:7}"
 log "Fetching..."
 sudo -u ubuntu git fetch origin
 
-# Stash any runtime-generated files that dirty the worktree
+# Discard any runtime-generated files that dirty the worktree
 # (e.g. cache files written by the app). Without this, --ff-only
 # aborts and auto-updates silently stop.
-STASHED=false
 if ! sudo -u ubuntu git diff --quiet 2>/dev/null; then
   log "Stashing dirty worktree..."
   sudo -u ubuntu git stash --quiet
-  STASHED=true
 fi
 
 log "Pulling..."
 sudo -u ubuntu git pull --ff-only
 
-if [ "${STASHED}" = true ]; then
-  log "Reapplying stash..."
-  sudo -u ubuntu git stash pop --quiet 2>/dev/null || log "Stash pop conflict (discarding stale runtime files)"
-fi
-
 NEW_HEAD=$(sudo -u ubuntu git rev-parse HEAD)
 
-if [ "${OLD_HEAD}" = "${NEW_HEAD}" ] && [ "${FORCE}" = false ]; then
+if [ "${OLD_HEAD}" = "${NEW_HEAD}" ]; then
   log "Already up to date. Nothing to do."
   exit 0
 fi
 
-if [ "${FORCE}" = true ] && [ "${OLD_HEAD}" = "${NEW_HEAD}" ]; then
-  log "No new commits, but --force specified. Rebuilding anyway."
-fi
-
 log "Updated: ${OLD_HEAD:0:7} → ${NEW_HEAD:0:7}"
 
-if [ "${FORCE}" = true ]; then
-  log "Force mode — reinstalling all deps and rebuilding client..."
+# Detect what changed
+CHANGED=$(sudo -u ubuntu git diff --name-only "${OLD_HEAD}" "${NEW_HEAD}")
+
+if echo "${CHANGED}" | grep -qE '^package(-lock)?\.json$'; then
+  log "Server deps changed — running npm install..."
   sudo -u ubuntu npm install
-  sudo -u ubuntu bash -c "cd '${NECTAR_DIR}/client' && npm install && npm run build"
-else
-  # Detect what changed
-  CHANGED=$(sudo -u ubuntu git diff --name-only "${OLD_HEAD}" "${NEW_HEAD}")
+fi
 
-  if echo "${CHANGED}" | grep -qE '^package(-lock)?\.json$'; then
-    log "Server deps changed — running npm install..."
-    sudo -u ubuntu npm install
+if echo "${CHANGED}" | grep -q '^client/'; then
+  if echo "${CHANGED}" | grep -qE '^client/package(-lock)?\.json$'; then
+    log "Client deps changed — running npm install in client/..."
+    sudo -u ubuntu bash -c "cd '${NECTAR_DIR}/client' && npm install"
   fi
-
-  if echo "${CHANGED}" | grep -q '^client/'; then
-    if echo "${CHANGED}" | grep -qE '^client/package(-lock)?\.json$'; then
-      log "Client deps changed — running npm install in client/..."
-      sudo -u ubuntu bash -c "cd '${NECTAR_DIR}/client' && npm install"
-    fi
-    log "Rebuilding client..."
-    sudo -u ubuntu bash -c "cd '${NECTAR_DIR}/client' && npm run build"
-  fi
+  log "Rebuilding client..."
+  sudo -u ubuntu bash -c "cd '${NECTAR_DIR}/client' && npm run build"
 fi
 
 # Stop old single-process service if still active
