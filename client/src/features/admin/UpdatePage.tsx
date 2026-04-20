@@ -73,9 +73,31 @@ export function UpdatePage() {
   }
 
   const handlePullAndRestart = async () => {
-    await handlePull()
-    if (!error) {
+    setPulling(true)
+    setError(null)
+    addLog('Running git pull...')
+    let pullOk = false
+    try {
+      const result = await apiFetch<{ ok: boolean; output: string }>('/admin/pull', {
+        method: 'POST',
+      })
+      addLog(result.output || 'Pull completed')
+      if (result.ok) {
+        addLog('Pull successful. Reloading version info...')
+        await load()
+        pullOk = true
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Pull failed'
+      addLog(`ERROR: ${msg}`)
+      setError(msg)
+    }
+    setPulling(false)
+
+    if (pullOk) {
       await handleRestart()
+    } else {
+      addLog('Skipping restart due to pull failure.')
     }
   }
 
