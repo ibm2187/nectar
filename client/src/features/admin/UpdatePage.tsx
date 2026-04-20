@@ -12,6 +12,12 @@ interface VersionInfo {
   commitDate: string
 }
 
+interface PullResult {
+  ok: boolean
+  output: string
+  changed: boolean
+}
+
 export function UpdatePage() {
   const [version, setVersion] = useState<VersionInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -38,18 +44,26 @@ export function UpdatePage() {
     setLogLines(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${line}`])
   }
 
-  const handlePull = async () => {
+  const addMultiLog = (output: string) => {
+    for (const line of output.split('\n')) {
+      if (line.trim()) addLog(line)
+    }
+  }
+
+  const handlePull = async (): Promise<boolean> => {
     setPulling(true)
     setError(null)
-    addLog('Running git pull...')
+    addLog('Starting update...')
+    let success = false
     try {
-      const result = await apiFetch<{ ok: boolean; output: string }>('/admin/pull', {
+      const result = await apiFetch<PullResult>('/admin/pull', {
         method: 'POST',
       })
-      addLog(result.output || 'Pull completed')
+      addMultiLog(result.output || 'Done')
       if (result.ok) {
-        addLog('Pull successful. Reloading version info...')
+        addLog(result.changed ? 'Update complete.' : 'Already up to date.')
         await load()
+        success = true
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Pull failed'
@@ -57,6 +71,7 @@ export function UpdatePage() {
       setError(msg)
     }
     setPulling(false)
+    return success
   }
 
   const handleRestart = async () => {
@@ -73,28 +88,8 @@ export function UpdatePage() {
   }
 
   const handlePullAndRestart = async () => {
-    setPulling(true)
-    setError(null)
-    addLog('Running git pull...')
-    let pullOk = false
-    try {
-      const result = await apiFetch<{ ok: boolean; output: string }>('/admin/pull', {
-        method: 'POST',
-      })
-      addLog(result.output || 'Pull completed')
-      if (result.ok) {
-        addLog('Pull successful. Reloading version info...')
-        await load()
-        pullOk = true
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Pull failed'
-      addLog(`ERROR: ${msg}`)
-      setError(msg)
-    }
-    setPulling(false)
-
-    if (pullOk) {
+    const success = await handlePull()
+    if (success) {
       await handleRestart()
     } else {
       addLog('Skipping restart due to pull failure.')
@@ -116,7 +111,8 @@ export function UpdatePage() {
   return (
     <div className="w-full space-y-4">
       <p className="text-sm text-muted-foreground">
-        View current version and update the Nectar server.
+        View current version and update the Nectar server. Pull fetches latest code,
+        installs dependencies if changed, and rebuilds the client if needed.
       </p>
 
       {error && (
@@ -165,7 +161,15 @@ export function UpdatePage() {
               onClick={handlePullAndRestart}
               disabled={pulling || restarting}
             >
-              {pulling ? 'Pulling...' : restarting ? 'Restarting...' : 'Pull & Restart'}
+              {pulling ? 'Updating...' : restarting ? 'Restarting...' : 'Update & Restart'}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handlePull()}
+              disabled={pulling || restarting}
+            >
+              {pulling ? 'Updating...' : 'Update Only'}
             </Button>
             <Button
               variant="outline"
@@ -178,14 +182,6 @@ export function UpdatePage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={handlePull}
-              disabled={pulling || restarting}
-            >
-              {pulling ? 'Pulling...' : 'Pull Only'}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
               onClick={load}
               disabled={pulling || restarting}
             >
@@ -194,7 +190,8 @@ export function UpdatePage() {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Pull fetches latest code from git. Restart exits the server process (expects a process manager like pm2/systemd to restart it).
+            Update pulls latest code, installs deps if changed, and rebuilds the client if needed.
+            Restart uses systemctl in production or process exit locally.
           </p>
         </CardContent>
       </Card>
