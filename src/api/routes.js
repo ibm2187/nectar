@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 const log = require('../core/log');
 const { requireAdmin } = require('./auth');
 const ReleaseManager = require('../core/release');
@@ -3079,12 +3079,18 @@ module.exports = function createRoutes(services, config) {
 
   // ── Admin — Version & Update ──────────────────────────
 
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  function git(cmd) {
+    return execSync(`git ${cmd}`, { cwd: NECTAR_ROOT, encoding: 'utf8', timeout: 60000 }).trim();
+  }
+
   router.get('/admin/version', requireAdmin, (req, res) => {
     try {
-      const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: NECTAR_ROOT, encoding: 'utf8' }).trim();
-      const commit = execSync('git rev-parse --short HEAD', { cwd: NECTAR_ROOT, encoding: 'utf8' }).trim();
-      const commitMessage = execSync('git log -1 --format=%s', { cwd: NECTAR_ROOT, encoding: 'utf8' }).trim();
-      const commitDate = execSync('git log -1 --format=%aI', { cwd: NECTAR_ROOT, encoding: 'utf8' }).trim();
+      const branch = git('rev-parse --abbrev-ref HEAD');
+      const commit = git('rev-parse --short HEAD');
+      const commitMessage = git('log -1 --format=%s');
+      const commitDate = git('log -1 --format=%aI');
       res.json({ branch, commit, commitMessage, commitDate });
     } catch (err) {
       res.status(500).json({ error: `Failed to read git info: ${err.message}` });
@@ -3092,25 +3098,108 @@ module.exports = function createRoutes(services, config) {
   });
 
   router.post('/admin/pull', requireAdmin, asyncHandler(async (req, res) => {
+    const steps = [];
     try {
-      const output = execSync('git pull 2>&1', {
-        cwd: NECTAR_ROOT,
-        encoding: 'utf8',
-        timeout: 30000,
-      });
-      log.info(`Admin pull: ${output.trim()}`);
-      res.json({ ok: true, output: output.trim() });
+      // 1. Record current HEAD
+      const oldHead = git('rev-parse HEAD');
+      steps.push(`Current HEAD: ${oldHead.slice(0, 7)}`);
+
+      // 2. Fetch
+      steps.push('Fetching...');
+      git('fetch origin');
+
+      // 3. Stash dirty worktree (runtime-generated files like cache)
+      let stashed = false;
+      try {
+        git('diff --quiet');
+      } catch {
+        steps.push('Stashing dirty worktree...');
+        git('stash --quiet');
+        stashed = true;
+      }
+
+      // 4. Pull (fast-forward only)
+      steps.push('Pulling...');
+      const pullOutput = git('pull --ff-only 2>&1');
+      steps.push(pullOutput);
+
+      // 5. Reapply stash
+      if (stashed) {
+        steps.push('Reapplying stash...');
+        try {
+          git('stash pop --quiet');
+        } catch {
+          steps.push('Stash pop conflict (discarding stale runtime files)');
+        }
+      }
+
+      // 6. Detect what changed
+      const newHead = git('rev-parse HEAD');
+      if (oldHead === newHead) {
+        steps.push('Already up to date. Nothing to do.');
+        log.info('Admin pull: already up to date');
+        return res.json({ ok: true, output: steps.join('\n'), changed: false });
+      }
+
+      steps.push(`Updated: ${oldHead.slice(0, 7)} → ${newHead.slice(0, 7)}`);
+      const changed = git(`diff --name-only ${oldHead} ${newHead}`);
+
+      // 7. Reinstall server deps if package files changed
+      if (/^package(-lock)?\.json$/m.test(changed)) {
+        steps.push('Server deps changed — running npm install...');
+        execSync('npm install', { cwd: NECTAR_ROOT, encoding: 'utf8', timeout: 120000 });
+        steps.push('npm install complete.');
+      }
+
+      // 8. Reinstall client deps and rebuild if client/ changed
+      if (/^client\//m.test(changed)) {
+        const clientDir = path.join(NECTAR_ROOT, 'client');
+        if (/^client\/package(-lock)?\.json$/m.test(changed)) {
+          steps.push('Client deps changed — running npm install in client/...');
+          execSync('npm install', { cwd: clientDir, encoding: 'utf8', timeout: 120000 });
+        }
+        steps.push('Rebuilding client...');
+        execSync('npm run build', { cwd: clientDir, encoding: 'utf8', timeout: 120000 });
+        steps.push('Client build complete.');
+      }
+
+      log.info(`Admin pull: ${oldHead.slice(0, 7)} → ${newHead.slice(0, 7)}`);
+      res.json({ ok: true, output: steps.join('\n'), changed: true });
     } catch (err) {
-      res.status(500).json({ error: err.message, output: err.stdout || '' });
+      steps.push(`ERROR: ${err.message}`);
+      log.error(`Admin pull failed: ${err.message}`);
+      res.status(500).json({ error: err.message, output: steps.join('\n') });
     }
   }));
 
   router.post('/admin/restart', requireAdmin, (req, res) => {
-    log.info('Admin restart requested — exiting process');
+    log.info('Admin restart requested');
     res.json({ ok: true, message: 'Restarting...' });
-    // Give the response time to flush before exiting
+
     setTimeout(() => {
-      process.exit(1);
+      if (isProduction) {
+        // Production: restart both systemd services
+        try {
+          execSync('sudo systemctl restart nectar-web nectar-sync', {
+            encoding: 'utf8',
+            timeout: 30000,
+          });
+        } catch (err) {
+          log.error(`systemctl restart failed: ${err.message}`);
+          process.exit(1);
+        }
+      } else {
+        // Local: spawn a replacement process after a delay (so the port
+        // is freed after this process exits), then exit immediately.
+        const entryPoint = path.join(NECTAR_ROOT, 'src', 'index.js');
+        spawn('bash', ['-c', `sleep 1 && exec node "${entryPoint}"`], {
+          cwd: NECTAR_ROOT,
+          detached: true,
+          stdio: 'ignore',
+          env: process.env,
+        }).unref();
+        process.exit(0);
+      }
     }, 500);
   });
 
