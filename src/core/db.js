@@ -325,17 +325,18 @@ function applySchema(db) {
 
     -- ── github_prs (normalized PR database) ────────────────
     CREATE TABLE IF NOT EXISTS github_prs (
-      prNumber      INTEGER NOT NULL,
-      repo          TEXT NOT NULL,
-      prTitle       TEXT,
-      prAuthor      TEXT,
-      prUrl         TEXT,
-      status        TEXT NOT NULL,           -- 'open', 'merged', 'closed'
-      baseBranch    TEXT,
-      headBranch    TEXT,
-      prCreatedAt   TEXT,
-      prUpdatedAt   TEXT,
-      syncedAt      TEXT NOT NULL,
+      prNumber        INTEGER NOT NULL,
+      repo            TEXT NOT NULL,
+      prTitle         TEXT,
+      prAuthor        TEXT,
+      prUrl           TEXT,
+      status          TEXT NOT NULL,           -- 'open', 'merged', 'closed'
+      reviewDecision  TEXT,                    -- 'APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED', or NULL
+      baseBranch      TEXT,
+      headBranch      TEXT,
+      prCreatedAt     TEXT,
+      prUpdatedAt     TEXT,
+      syncedAt        TEXT NOT NULL,
       PRIMARY KEY (repo, prNumber)
     );
     CREATE INDEX IF NOT EXISTS idx_gpr_status     ON github_prs(status);
@@ -566,6 +567,14 @@ function applyMigrations(db) {
       if (cleaned > 0) log.info(`DB migration v8: normalized ${cleaned} tickets with prefixed version names`);
       // Force full re-sync so all tickets get re-normalized
       db.prepare("UPDATE jira_sync_meta SET lastTicketSyncTime = NULL WHERE id = 1").run();
+    },
+    // v9: Add reviewDecision column to github_prs for PR review state tracking.
+    // Values: 'APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED', or NULL.
+    (db) => {
+      const cols = db.prepare("PRAGMA table_info(github_prs)").all().map(c => c.name);
+      if (!cols.includes('reviewDecision')) {
+        db.prepare(`ALTER TABLE github_prs ADD COLUMN reviewDecision TEXT`).run();
+      }
     },
   ];
 

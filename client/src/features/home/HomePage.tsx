@@ -17,6 +17,7 @@ import { CustomerPills } from '../../components/CustomerPill'
 import { CurrentlyOutBanner } from '../../components/CurrentlyOutBanner'
 import { OutIcon } from '../../components/PersonBadge'
 import { useAvailabilityStore } from '../../stores/availabilityStore'
+import { StandupCard } from '../standup/StandupCard'
 
 // ── Types ────────────────────────────────────────────────
 
@@ -394,6 +395,9 @@ export function HomePage() {
 
   return (
     <div className="space-y-4">
+      {/* Start Standup card — time-aware, highlights at 10 AM ET */}
+      <StandupCard />
+
       {/* OOO awareness banner — dismissible, only renders when relevant */}
       <CurrentlyOutBanner />
 

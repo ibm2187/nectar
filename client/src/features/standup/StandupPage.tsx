@@ -1,0 +1,512 @@
+import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { apiFetch } from '../../api/client'
+import { Card, CardContent } from '../../components/ui/card'
+import { Badge } from '../../components/ui/badge'
+import { cn } from '../../lib/utils'
+import { JiraLink } from '../../components/JiraLink'
+
+// ── Types ─────────────────────────────────────────────────
+
+interface StandupPrItem {
+  prNumber: number
+  repo: string
+  prUrl: string
+  reviewDecision: string | null
+  prAuthor: string | null
+  linkedTicket?: string
+}
+
+interface StandupTicketItem {
+  key: string
+  summary: string
+  jiraStatus: string
+  type: string
+  priority: string | null
+  role: string
+  release: {
+    version: string
+    dueDate: string
+    state: string
+  }
+  prs: StandupPrItem[]
+  health: string | null
+  healthCategory: string | null
+  originalBucket?: string
+}
+
+interface PersonBuckets {
+  releaseCritical: StandupTicketItem[]
+  awaitingCherryPick: StandupTicketItem[]
+  reviewChangesRequested: StandupPrItem[]
+  reviewApproved: StandupPrItem[]
+  blocked: StandupTicketItem[]
+  pendingTesting: StandupTicketItem[]
+  inDev: StandupTicketItem[]
+}
+
+interface StandupPerson {
+  name: string
+  slackId: string | null
+  roles: string[]
+  isOoo: boolean
+  buckets: PersonBuckets
+  urgencyScore: number
+  totalItems: number
+}
+
+interface ReleaseSummary {
+  version: string
+  dueDate: string
+  state: string
+  repo: string | null
+  ticketsRemaining: number
+}
+
+interface StandupData {
+  people: StandupPerson[]
+  releasesDueThisWeek: ReleaseSummary[]
+  generatedAt: string
+}
+
+// ── Bucket config ──────────────────────────────────────────
+
+const BUCKET_CONFIG: Record<keyof PersonBuckets, { label: string; icon: string; color: string }> = {
+  releaseCritical:        { label: 'Release-Critical',            icon: '🔴', color: 'border-red-500/40 bg-red-500/5' },
+  awaitingCherryPick:     { label: 'Awaiting Cherry-Pick',        icon: '⏳', color: 'border-amber-500/40 bg-amber-500/5' },
+  reviewChangesRequested: { label: 'Reviews — Changes Requested', icon: '🟠', color: 'border-orange-500/40 bg-orange-500/5' },
+  reviewApproved:         { label: 'Reviews — Approved',          icon: '✅', color: 'border-green-500/40 bg-green-500/5' },
+  blocked:                { label: 'Blocked',                     icon: '🚫', color: 'border-red-500/30 bg-red-500/5' },
+  pendingTesting:         { label: 'Pending Testing',             icon: '🧪', color: 'border-purple-500/30 bg-purple-500/5' },
+  inDev:                  { label: 'In Development',              icon: '🛠', color: 'border-blue-500/30 bg-blue-500/5' },
+}
+
+const BUCKET_ORDER: (keyof PersonBuckets)[] = [
+  'releaseCritical', 'awaitingCherryPick', 'reviewChangesRequested',
+  'reviewApproved', 'blocked', 'pendingTesting', 'inDev',
+]
+
+const INITIAL_SHOW_COUNT = 10
+
+// ── Sort options ───────────────────────────────────────────
+
+type SortMode = 'urgency' | 'name' | 'items'
+
+const SORT_OPTIONS: { key: SortMode; label: string }[] = [
+  { key: 'urgency', label: 'Urgency' },
+  { key: 'name',    label: 'Name' },
+  { key: 'items',   label: 'Most Items' },
+]
+
+function sortPeople(people: StandupPerson[], mode: SortMode): StandupPerson[] {
+  const sorted = [...people]
+  switch (mode) {
+    case 'urgency':
+      // OOO last, then urgency desc
+      sorted.sort((a, b) => {
+        if (a.isOoo !== b.isOoo) return a.isOoo ? 1 : -1
+        return b.urgencyScore - a.urgencyScore
+      })
+      break
+    case 'name':
+      // OOO last, then alphabetical
+      sorted.sort((a, b) => {
+        if (a.isOoo !== b.isOoo) return a.isOoo ? 1 : -1
+        return a.name.localeCompare(b.name)
+      })
+      break
+    case 'items':
+      // OOO last, then by total items desc
+      sorted.sort((a, b) => {
+        if (a.isOoo !== b.isOoo) return a.isOoo ? 1 : -1
+        return b.totalItems - a.totalItems
+      })
+      break
+  }
+  return sorted
+}
+
+// ── Component ─────────────────────────────────────────────
+
+export function StandupPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [data, setData] = useState<StandupData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [sortMode, setSortMode] = useState<SortMode>('urgency')
+  const [allExpanded, setAllExpanded] = useState<boolean | null>(null) // null = per-bucket default
+
+  // Current person index from URL (0-based), with localStorage resume
+  const personIdx = useMemo(() => {
+    const urlParam = searchParams.get('person')
+    if (urlParam !== null) return parseInt(urlParam, 10)
+    try {
+      const saved = localStorage.getItem('nectar:standup:position')
+      if (saved) {
+        const { idx, date } = JSON.parse(saved)
+        if (date === new Date().toISOString().slice(0, 10)) return idx
+      }
+    } catch {}
+    return 0
+  }, [searchParams])
+
+  // Fetch standup data
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    apiFetch<StandupData>('/standup')
+      .then(d => { if (!cancelled) { setData(d); setLoading(false) } })
+      .catch(err => { if (!cancelled) { setError(err.message); setLoading(false) } })
+    return () => { cancelled = true }
+  }, [])
+
+  // Sort people
+  const sortedPeople = useMemo(() => {
+    if (!data) return []
+    return sortPeople(data.people, sortMode)
+  }, [data, sortMode])
+
+  // Navigate between people — persists position to localStorage for resume
+  const goTo = useCallback((idx: number) => {
+    const clamped = Math.max(0, Math.min(idx, sortedPeople.length - 1))
+    setSearchParams({ person: String(clamped) }, { replace: true })
+    setAllExpanded(null) // reset expand/collapse when switching person
+    try {
+      localStorage.setItem('nectar:standup:position', JSON.stringify({
+        idx: clamped,
+        date: new Date().toISOString().slice(0, 10),
+      }))
+    } catch {}
+  }, [sortedPeople.length, setSearchParams])
+
+  const goNext = useCallback(() => goTo(personIdx + 1), [goTo, personIdx])
+  const goPrev = useCallback(() => goTo(personIdx - 1), [goTo, personIdx])
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); goNext() }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); goPrev() }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [goNext, goPrev])
+
+  // ── Render ───────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[50vh]">
+        <div className="text-muted-foreground animate-pulse">Loading standup data...</div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-[50vh]">
+        <div className="text-red-400">Failed to load: {error}</div>
+      </div>
+    )
+  }
+
+  if (!data || sortedPeople.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3">
+        <p className="text-3xl">All clear!</p>
+        <p className="text-muted-foreground">No team members found for this week.</p>
+      </div>
+    )
+  }
+
+  const safeIdx = Math.min(personIdx, sortedPeople.length - 1)
+  const currentPerson = sortedPeople[safeIdx]
+  const hasNext = safeIdx < sortedPeople.length - 1
+  const hasPrev = safeIdx > 0
+
+  // Count non-empty buckets for expand/collapse visibility
+  const nonEmptyBuckets = BUCKET_ORDER.filter(k => (currentPerson.buckets[k] || []).length > 0).length
+
+  return (
+    <div className="flex gap-4 h-[calc(100vh-7rem)]">
+      {/* ── Left sidebar: People list ────────────────────── */}
+      <div className="w-56 shrink-0 flex flex-col border rounded-lg bg-card overflow-hidden">
+        <div className="px-3 py-2 border-b bg-muted/30 flex items-center justify-between">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            Team ({sortedPeople.length})
+          </span>
+          {/* Sort selector */}
+          <select
+            value={sortMode}
+            onChange={e => setSortMode(e.target.value as SortMode)}
+            className="text-[10px] bg-transparent border border-border rounded px-1 py-0.5 text-muted-foreground"
+          >
+            {SORT_OPTIONS.map(o => (
+              <option key={o.key} value={o.key}>{o.label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {sortedPeople.map((person, i) => {
+            const isOooSection = person.isOoo && (i === 0 || !sortedPeople[i - 1].isOoo)
+            return (
+              <div key={person.name}>
+                {/* OOO divider */}
+                {isOooSection && (
+                  <div className="px-3 py-1.5 text-[10px] font-medium text-amber-400 uppercase tracking-wider border-t border-amber-500/20 bg-amber-500/5">
+                    Out of Office
+                  </div>
+                )}
+                <button
+                  onClick={() => goTo(i)}
+                  className={cn(
+                    'w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors border-l-2',
+                    i === safeIdx
+                      ? 'bg-accent border-l-primary text-foreground'
+                      : 'border-l-transparent hover:bg-accent/50 text-foreground/80',
+                    person.isOoo && i !== safeIdx && 'opacity-50'
+                  )}
+                >
+                  {person.isOoo && (
+                    <span className="shrink-0 w-2 h-2 rounded-full bg-amber-500" title="Out of Office" />
+                  )}
+                  <span className={cn('truncate flex-1', person.isOoo && 'italic text-amber-300/70')}>
+                    {person.name}
+                  </span>
+                  <span className={cn(
+                    'shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded',
+                    person.totalItems > 0 ? 'bg-muted text-muted-foreground' : 'text-muted-foreground/30'
+                  )}>
+                    {person.totalItems}
+                  </span>
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* ── Main content area ────────────────────────────── */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Top bar: Nav + expand/collapse + releases */}
+        <div className="flex items-center justify-between gap-3 pb-3">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={goPrev}
+              disabled={!hasPrev}
+              className={cn(
+                'px-3 py-1.5 rounded-md text-sm font-medium transition-colors border',
+                hasPrev ? 'hover:bg-accent border-border text-foreground' : 'border-transparent text-muted-foreground/30 cursor-not-allowed'
+              )}
+            >
+              ← Prev
+            </button>
+            <button
+              onClick={goNext}
+              disabled={!hasNext}
+              className={cn(
+                'px-4 py-1.5 rounded-md text-sm font-medium transition-colors',
+                hasNext
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm'
+                  : 'bg-muted text-muted-foreground/40 cursor-not-allowed'
+              )}
+            >
+              Next →
+            </button>
+            <span className="text-xs text-muted-foreground font-mono ml-2">
+              {safeIdx + 1}/{sortedPeople.length}
+            </span>
+
+            {/* Expand all / Collapse all */}
+            {nonEmptyBuckets > 0 && (
+              <div className="flex gap-1 ml-3 border-l pl-3 border-border">
+                <button
+                  onClick={() => setAllExpanded(true)}
+                  className="text-xs text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded hover:bg-accent/50"
+                >
+                  Expand all
+                </button>
+                <button
+                  onClick={() => setAllExpanded(false)}
+                  className="text-xs text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded hover:bg-accent/50"
+                >
+                  Collapse all
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Releases due */}
+          {data.releasesDueThisWeek.length > 0 && (
+            <div className="flex gap-1.5 flex-wrap">
+              {data.releasesDueThisWeek.map(r => (
+                <Badge key={r.version} variant="outline" className="text-xs">
+                  {r.version} — {r.ticketsRemaining} left
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Person content */}
+        <div className="flex-1 overflow-y-auto">
+          <PersonSlide person={currentPerson} forceExpanded={allExpanded} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Sub-components ──────────────────────────────────────────
+
+function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceExpanded: boolean | null }) {
+  const hasBuckets = BUCKET_ORDER.some(k => (person.buckets[k] || []).length > 0)
+
+  return (
+    <Card className={cn('transition-all', person.isOoo && 'opacity-60 border-amber-500/30')}>
+      <CardContent className="p-5 space-y-3">
+        {/* Person header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-lg font-medium">{person.name}</span>
+            {person.roles.map(r => (
+              <Badge key={r} variant="outline" className="text-xs capitalize">{r}</Badge>
+            ))}
+            {person.isOoo && (
+              <Badge className="bg-amber-500/20 text-amber-300 border-amber-500/30 text-xs">
+                Out of Office
+              </Badge>
+            )}
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {person.totalItems} item{person.totalItems !== 1 ? 's' : ''}
+          </span>
+        </div>
+
+        {/* Priority buckets */}
+        {hasBuckets ? (
+          <div className="space-y-2">
+            {BUCKET_ORDER.map(bucketKey => {
+              const items = person.buckets[bucketKey]
+              const config = BUCKET_CONFIG[bucketKey]
+              if (!items || items.length === 0) return null
+              return (
+                <CollapsibleBucket
+                  key={bucketKey}
+                  bucketKey={bucketKey}
+                  items={items}
+                  config={config}
+                  forceExpanded={forceExpanded}
+                />
+              )
+            })}
+          </div>
+        ) : (
+          <div className="text-center py-8 text-muted-foreground">
+            All clear — no action items this week
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function CollapsibleBucket({ bucketKey, items, config, forceExpanded }: {
+  bucketKey: string
+  items: (StandupTicketItem | StandupPrItem)[]
+  config: { label: string; icon: string; color: string }
+  forceExpanded: boolean | null
+}) {
+  const [localExpanded, setLocalExpanded] = useState(false)
+  const [showAll, setShowAll] = useState(false)
+  const isPrBucket = bucketKey === 'reviewChangesRequested' || bucketKey === 'reviewApproved'
+
+  // forceExpanded overrides local state when set
+  const expanded = forceExpanded !== null ? forceExpanded : localExpanded
+
+  // Reset showAll when collapsing
+  const toggle = () => {
+    const next = !expanded
+    setLocalExpanded(next)
+    if (!next) setShowAll(false)
+  }
+
+  const hasMore = items.length > INITIAL_SHOW_COUNT
+  const visibleItems = expanded && !showAll && hasMore ? items.slice(0, INITIAL_SHOW_COUNT) : items
+  const hiddenCount = items.length - INITIAL_SHOW_COUNT
+
+  return (
+    <div className={cn('rounded-md border transition-colors', config.color)}>
+      <button
+        onClick={toggle}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left"
+      >
+        <span className="text-xs transition-transform" style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+          ▶
+        </span>
+        <span>{config.icon}</span>
+        <span className="font-medium text-sm">{config.label}</span>
+        <Badge variant="secondary" className="text-xs ml-auto">{items.length}</Badge>
+      </button>
+      {expanded && (
+        <div className="px-3 pb-2.5 space-y-1.5 border-t border-white/5 pt-2">
+          {isPrBucket
+            ? (visibleItems as StandupPrItem[]).map(pr => <PrRow key={pr.prNumber} pr={pr} />)
+            : (visibleItems as StandupTicketItem[]).map(item => <TicketRow key={item.key + item.role} item={item} />)
+          }
+          {hasMore && !showAll && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowAll(true) }}
+              className="w-full text-center text-xs text-muted-foreground hover:text-foreground py-1.5 rounded hover:bg-white/5 transition-colors"
+            >
+              Show {hiddenCount} more...
+            </button>
+          )}
+          {hasMore && showAll && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowAll(false) }}
+              className="w-full text-center text-xs text-muted-foreground hover:text-foreground py-1.5 rounded hover:bg-white/5 transition-colors"
+            >
+              Show less
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TicketRow({ item }: { item: StandupTicketItem }) {
+  return (
+    <div className="flex items-center gap-2 text-sm py-0.5">
+      <JiraLink jiraKey={item.key} className="font-mono text-xs shrink-0" />
+      <span className="truncate flex-1 text-foreground/80">{item.summary}</span>
+      <Badge variant="outline" className="text-[10px] shrink-0">{item.release.version}</Badge>
+      <span className="text-xs text-muted-foreground shrink-0 w-20 text-right truncate">{item.jiraStatus}</span>
+    </div>
+  )
+}
+
+function PrRow({ pr }: { pr: StandupPrItem }) {
+  const repoShort = pr.repo.split('/').pop() || pr.repo
+  return (
+    <div className="flex items-center gap-2 text-sm py-0.5">
+      <a
+        href={pr.prUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="font-mono text-xs text-blue-400 hover:underline shrink-0"
+      >
+        #{pr.prNumber}
+      </a>
+      <span className="text-xs text-muted-foreground shrink-0">{repoShort}</span>
+      {pr.linkedTicket && (
+        <JiraLink jiraKey={pr.linkedTicket} className="font-mono text-[10px] shrink-0" />
+      )}
+      {pr.prAuthor && (
+        <span className="text-xs text-muted-foreground ml-auto">by @{pr.prAuthor}</span>
+      )}
+    </div>
+  )
+}

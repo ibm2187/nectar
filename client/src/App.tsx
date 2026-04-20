@@ -17,6 +17,7 @@ import { ConfigPage } from './features/config/ConfigPage'
 import { TasksPage } from './features/tasks/TasksPage'
 import { HealthDashboard } from './features/health/HealthDashboard'
 import { CustomerStatusPage } from './features/health/CustomerStatusPage'
+import { StandupPage } from './features/standup/StandupPage'
 import { LoginPage } from './features/auth/LoginPage'
 import { connectWebSocket, disconnectWebSocket, useWsStore } from './stores/wsStore'
 import { useAuthStore, type UserPermissions } from './stores/authStore'
@@ -77,6 +78,7 @@ export default function App() {
             </AuthGuard>
           }>
             <Route path="/" element={<HomePage />} />
+            <Route path="/standup" element={<StandupPage />} />
             <Route path="/builds" element={<BuildsPage />} />
             <Route path="/releases" element={<PermissionGuard permKey="releases"><ReleasesPage /></PermissionGuard>} />
             <Route path="/features" element={<PermissionGuard permKey="features"><FeaturesPage /></PermissionGuard>} />
