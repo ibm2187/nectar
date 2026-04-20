@@ -154,8 +154,12 @@ class Simulator {
         const devVelocity = vel?.dev?.ticketsPerDay || teamAvgDev;
         const qaVelocity = vel?.qa?.ticketsPerDay || teamAvgQa;
 
-        // Dev work
-        let devCapacity = devVelocity;
+        // Dev work — use fractional accumulation to prevent sub-1.0 velocity
+        // from being inflated to 1 ticket/day
+        if (!queues._devAccumulator) queues._devAccumulator = 0;
+        queues._devAccumulator += devVelocity;
+        let devCapacity = Math.floor(queues._devAccumulator);
+        queues._devAccumulator -= devCapacity;
         let devDone = 0;
         while (devDone < devCapacity && queues.devQueue.length > 0) {
           const ticket = queues.devQueue[0];
@@ -190,8 +194,11 @@ class Simulator {
           dynamicQa.length = 0;
         }
 
-        // QA work
-        let qaCapacity = qaVelocity;
+        // QA work — fractional accumulation same as dev
+        if (!queues._qaAccumulator) queues._qaAccumulator = 0;
+        queues._qaAccumulator += qaVelocity;
+        let qaCapacity = Math.floor(queues._qaAccumulator);
+        queues._qaAccumulator -= qaCapacity;
         let qaDone = 0;
         const skipped = [];
         while (qaDone < qaCapacity && queues.qaQueue.length > 0) {

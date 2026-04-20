@@ -115,7 +115,7 @@ class WorkloadBuilder {
 
     // Query all non-Done tickets in active releases
     // Tickets belong to releases via fixVersions or targetFixVersions JSON arrays
-    const allTickets = this._queryTicketsForVersions(versions);
+    const allTickets = this._queryTicketsForVersions(versions, versionDeadlines);
 
     // Deduplicate tickets by key — same ticket in multiple releases counted once
     const ticketMap = new Map(); // key → enriched ticket
@@ -195,10 +195,9 @@ class WorkloadBuilder {
    * @param {string[]} versions
    * @returns {object[]}
    */
-  _queryTicketsForVersions(versions) {
+  _queryTicketsForVersions(versions, versionDeadlines) {
     if (versions.length === 0) return [];
 
-    // Build version deadline map for urgency
     const results = [];
 
     for (const version of versions) {
@@ -236,7 +235,7 @@ class WorkloadBuilder {
           targetFixVersions,
           customerTags,
           _releaseVersions: [version],
-          _urgency: '9999-12-31', // will be updated later
+          _urgency: (versionDeadlines && versionDeadlines.get(version)) || '9999-12-31',
           _stateProximity: getStateProximity(row.status),
         });
       }
