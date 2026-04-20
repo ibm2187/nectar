@@ -238,7 +238,11 @@ setInterval(() => {
   log.info(`[web] Memory: RSS=${Math.round(mem.rss / 1024 / 1024)}MB heap=${Math.round(mem.heapUsed / 1024 / 1024)}/${Math.round(mem.heapTotal / 1024 / 1024)}MB`);
 }, 60000);
 
-// ── SQLite change detection → WebSocket broadcasts ─────────
+// ── SQLite change detection → lightweight WebSocket signals ──
+// The sync worker writes to SQLite; we poll for changes, reload in-memory
+// state, and notify connected clients with a lightweight signal so they
+// can re-fetch only the data they need.  We never serialize the full
+// release list here — that was causing 791MB+ memory spikes and OOM kills.
 let lastReleasesAt = null;
 let lastEnvsAt = null;
 let lastBuildsAt = null;
@@ -253,7 +257,7 @@ setInterval(() => {
       lastReleasesAt = relAt;
       releases._loadState();
       if (webServer.broadcast) {
-        webServer.broadcast({ type: 'jira:sync-completed', releases: releases.list().map(r => ({ ...r, tickets: releases.getTickets(r) })) });
+        webServer.broadcast({ type: 'jira:sync-completed' });
       }
     }
 
@@ -261,18 +265,14 @@ setInterval(() => {
       lastEnvsAt = envAt;
       customerStore._loadState();
       if (webServer.broadcast) {
-        webServer.broadcast({
-          type: 'webplatform:scan-completed',
-          customers: customerStore.listCustomers(),
-          environments: customerStore.listEnvironments(),
-        });
+        webServer.broadcast({ type: 'webplatform:scan-completed' });
       }
     }
 
     if (buildsAt && buildsAt !== lastBuildsAt) {
       lastBuildsAt = buildsAt;
       if (webServer.broadcast) {
-        webServer.broadcast({ type: 'pipeline:sync-completed', releases: releases.list().map(r => ({ ...r, tickets: releases.getTickets(r) })) });
+        webServer.broadcast({ type: 'pipeline:sync-completed' });
       }
     }
   } catch (err) {

@@ -1,6 +1,7 @@
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const zlib = require('zlib');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { WebSocketServer } = require('ws');
@@ -21,6 +22,35 @@ function createWebServer(services, config) {
   const app = express();
   app.set('trust proxy', 1); // Trust first proxy (ALB) for X-Forwarded-For
   app.use(express.json({ limit: '1mb' }));
+
+  // ── Gzip compression for API responses ────────────────
+  // JSON responses (especially /releases/home) can be 1-2MB uncompressed.
+  // Gzip typically reduces this 10x, cutting content download from 8s to <1s.
+  app.use((req, res, next) => {
+    const acceptEncoding = req.headers['accept-encoding'] || '';
+    if (!acceptEncoding.includes('gzip')) return next();
+
+    const origJson = res.json.bind(res);
+    res.json = function (body) {
+      const raw = JSON.stringify(body);
+      // Only compress responses larger than 1KB
+      if (raw.length < 1024) {
+        res.setHeader('Content-Type', 'application/json');
+        return res.send(raw);
+      }
+      zlib.gzip(Buffer.from(raw), (err, compressed) => {
+        if (err) {
+          res.setHeader('Content-Type', 'application/json');
+          return res.send(raw);
+        }
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Content-Length', compressed.length);
+        res.end(compressed);
+      });
+    };
+    next();
+  });
 
   // ── Auth routes (before auth middleware) ──────────────
   const { createAuthRoutes, createAuthMiddleware } = require('../api/auth');
@@ -187,18 +217,35 @@ function createWebServer(services, config) {
     }
   });
 
-  // Enrich a release with tickets from TicketStore for WebSocket payloads
+  // enrichRelease — slim version for WebSocket event broadcasts.
+  // Individual release events don't need tickets or heavy enrichment.
   function enrichRelease(r) {
-    return { ...r, tickets: releases.getTickets(r) };
+    return slimRelease(r);
   }
-  function enrichedReleaseList() {
-    return releases.list().map(enrichRelease);
+
+  // Slim release for WebSocket payloads — only fields the client needs
+  // for list views, dropdowns, and routing. Drops heavy enrichment data
+  // (prsByJiraKey 483KB, pipeline 473KB, buildByJiraKey 42KB, risk 46KB).
+  function slimRelease(r) {
+    return {
+      id: r.id, repo: r.repo, version: r.version, state: r.state,
+      branch: r.branch, jiraVersionId: r.jiraVersionId,
+      jiraVersionName: r.jiraVersionName, jiraReleased: r.jiraReleased,
+      jiraReleaseDate: r.jiraReleaseDate, jiraArchived: r.jiraArchived,
+      createdAt: r.createdAt, updatedAt: r.updatedAt,
+      notes: r.notes, cutFrom: r.cutFrom, cutAt: r.cutAt, cutBy: r.cutBy,
+      cherryPicks: r.cherryPicks || [], deployments: r.deployments || [],
+      approvals: r.approvals || [], comments: r.comments || [],
+      tickets: r.tickets || [], risk: r.risk || null, ci: r.ci || null,
+    };
   }
 
   function sendInitialState(ws) {
+    // Send slim releases (no tickets, no heavy enrichment) to keep init small.
+    // Individual pages fetch their own data via API calls.
     ws.send(JSON.stringify({
       type: 'init',
-      releases: enrichedReleaseList(),
+      releases: releases.list().map(slimRelease),
       customers: customerStore ? customerStore.listCustomers() : [],
       environments: customerStore ? customerStore.listEnvironments() : [],
       config: {
