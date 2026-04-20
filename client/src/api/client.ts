@@ -94,6 +94,8 @@ export interface DeliveryForecast {
     queueSize: number
     velocity: number
     projectedClear: string
+    devBottleneck?: { person: string; role: string; queueSize: number; velocity: number } | null
+    qaBottleneck?: { person: string; role: string; queueSize: number; velocity: number } | null
   } | null
   breakdown: {
     notStarted: number

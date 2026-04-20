@@ -555,10 +555,15 @@ export function ReleaseDetail() {
                 {forecast.riskMessage}
               </div>
 
-              {/* Bottleneck — compact inline */}
-              {forecast.bottleneck && (
+              {/* Bottlenecks — dev and QA */}
+              {forecast.bottleneck?.devBottleneck && forecast.bottleneck.devBottleneck.queueSize > 0 && (
                 <span className="text-xs text-orange-400">
-                  Bottleneck: {forecast.bottleneck.person} ({forecast.bottleneck.role}) — {forecast.bottleneck.queueSize} tickets at {forecast.bottleneck.velocity}/day
+                  Dev bottleneck: {forecast.bottleneck.devBottleneck.person} — {forecast.bottleneck.devBottleneck.queueSize} tickets at {forecast.bottleneck.devBottleneck.velocity}/day
+                </span>
+              )}
+              {forecast.bottleneck?.qaBottleneck && forecast.bottleneck.qaBottleneck.queueSize > 0 && (
+                <span className="text-xs text-purple-400">
+                  QA bottleneck: {forecast.bottleneck.qaBottleneck.person} — {forecast.bottleneck.qaBottleneck.queueSize} tickets at {forecast.bottleneck.qaBottleneck.velocity}/day
                 </span>
               )}
 

@@ -427,14 +427,13 @@ class Simulator {
   }
 
   /**
-   * Find the bottleneck person for a release.
+   * Find bottleneck people for a release — returns worst dev AND worst QA.
    */
   _findBottleneck(relInfo, personVelocities, workQueues, teamAvgDev, teamAvgQa) {
-    let worstPerson = null;
-    let worstDays = 0;
-    let worstRole = null;
-    let worstQueueSize = 0;
-    let worstVelocity = 0;
+    let worstDev = null;
+    let worstDevDays = 0;
+    let worstQa = null;
+    let worstQaDays = 0;
 
     for (const [name, queues] of workQueues.people) {
       const vel = personVelocities.get(name);
@@ -446,12 +445,9 @@ class Simulator {
       const devV = vel?.dev?.ticketsPerDay || teamAvgDev;
       const devDays = devV > 0 ? devInRelease / devV : (devInRelease > 0 ? Infinity : 0);
 
-      if (devDays > worstDays) {
-        worstDays = devDays;
-        worstPerson = name;
-        worstRole = 'dev';
-        worstQueueSize = devInRelease;
-        worstVelocity = devV;
+      if (devDays > worstDevDays) {
+        worstDevDays = devDays;
+        worstDev = { person: name, role: 'dev', queueSize: devInRelease, velocity: devV };
       }
 
       // Check QA queue for this release
@@ -461,23 +457,21 @@ class Simulator {
       const qaV = vel?.qa?.ticketsPerDay || teamAvgQa;
       const qaDays = qaV > 0 ? qaInRelease / qaV : (qaInRelease > 0 ? Infinity : 0);
 
-      if (qaDays > worstDays) {
-        worstDays = qaDays;
-        worstPerson = name;
-        worstRole = 'qa';
-        worstQueueSize = qaInRelease;
-        worstVelocity = qaV;
+      if (qaDays > worstQaDays) {
+        worstQaDays = qaDays;
+        worstQa = { person: name, role: 'qa', queueSize: qaInRelease, velocity: qaV };
       }
     }
 
-    if (!worstPerson) return null;
+    // Return the single worst bottleneck (backward compat) + both dev/qa bottlenecks
+    const overall = (worstDevDays >= worstQaDays) ? worstDev : worstQa;
+    if (!overall) return null;
 
     return {
-      person: worstPerson,
-      role: worstRole,
-      queueSize: worstQueueSize,
-      velocity: worstVelocity,
-      projectedClear: worstDays === Infinity ? null : Math.ceil(worstDays),
+      ...overall,
+      projectedClear: Math.max(worstDevDays, worstQaDays) === Infinity ? null : Math.ceil(Math.max(worstDevDays, worstQaDays)),
+      devBottleneck: worstDev,
+      qaBottleneck: worstQa,
     };
   }
 
