@@ -129,7 +129,7 @@ describe('PrStore.findByJiraKeysSlim', () => {
     prStore = new PrStore({ db });
   });
 
-  it('returns slim PR objects with only 5 fields', () => {
+  it('returns slim PR objects with expected fields', () => {
     insertPr(db, 'mavencare/webplatform', 100, { status: 'merged', baseBranch: 'master' });
     linkPrToJira(db, 'mavencare/webplatform', 100, 'DEV-1');
 
@@ -139,7 +139,7 @@ describe('PrStore.findByJiraKeysSlim', () => {
     expect(prs).toHaveLength(1);
 
     const pr = prs[0];
-    expect(Object.keys(pr).sort()).toEqual(['baseBranch', 'prNumber', 'prUrl', 'repo', 'status']);
+    expect(Object.keys(pr).sort()).toEqual(['baseBranch', 'prAuthor', 'prNumber', 'prUrl', 'repo', 'reviewDecision', 'status']);
     expect(pr.prNumber).toBe(100);
     expect(pr.status).toBe('merged');
     expect(pr.baseBranch).toBe('master');

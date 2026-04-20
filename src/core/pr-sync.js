@@ -96,7 +96,12 @@ class PrSync extends EventEmitter {
           const prs = await this._fetchRepoPRs(repo.github, isIncremental);
           results.prsFetched += prs.length;
 
+          // Fetch review decisions for open PRs in this batch
+          const openPrs = prs.filter(pr => !pr.merged_at && pr.state !== 'closed');
+          const reviewDecisions = await this._fetchReviewDecisions(repo.github, openPrs);
+
           for (const pr of prs) {
+            const isOpen = !pr.merged_at && pr.state !== 'closed';
             const normalized = {
               prNumber: pr.number,
               prTitle: pr.title,
@@ -105,6 +110,7 @@ class PrSync extends EventEmitter {
               prCreatedAt: pr.created_at,
               prUpdatedAt: pr.updated_at,
               status: pr.merged_at ? 'merged' : pr.state === 'closed' ? 'closed' : 'open',
+              reviewDecision: isOpen ? (reviewDecisions.get(pr.number) || null) : null,
               repo: repo.github,
               baseBranch: pr.base?.ref || null,
               headBranch: pr.head?.ref || null,
@@ -186,6 +192,68 @@ class PrSync extends EventEmitter {
     }
 
     return allPrs;
+  }
+
+  /**
+   * Fetch review decisions for a batch of open PRs.
+   * Uses the GitHub REST reviews endpoint and derives the overall decision
+   * from the latest review per reviewer (same logic as GitHub UI).
+   * Returns Map<prNumber, 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED'>
+   */
+  async _fetchReviewDecisions(repoPath, openPrs) {
+    const decisions = new Map();
+    if (!openPrs || openPrs.length === 0) return decisions;
+
+    // Batch limit — only fetch reviews for the first 50 open PRs to avoid rate limits
+    const toFetch = openPrs.slice(0, 50);
+
+    await Promise.all(toFetch.map(async (pr) => {
+      try {
+        const reviews = await this.github._paginate(
+          `/repos/${repoPath}/pulls/${pr.number}/reviews?per_page=100`, 1
+        );
+        const decision = this._deriveReviewDecision(reviews);
+        if (decision) decisions.set(pr.number, decision);
+      } catch (err) {
+        // Non-critical — skip this PR's review state
+        log.warn(`PR sync: failed to fetch reviews for ${repoPath}#${pr.number}: ${err.message}`);
+      }
+    }));
+
+    return decisions;
+  }
+
+  /**
+   * Derive overall review decision from a list of review objects.
+   * Takes the latest non-comment review per reviewer.
+   * If any reviewer has CHANGES_REQUESTED (not superseded by a later APPROVED), → CHANGES_REQUESTED
+   * If all reviewers APPROVED → APPROVED
+   * Otherwise → REVIEW_REQUIRED (or null if no reviews at all)
+   */
+  _deriveReviewDecision(reviews) {
+    if (!reviews || reviews.length === 0) return null;
+
+    // Only consider actual decisions (not COMMENTED or PENDING)
+    const decisional = reviews.filter(r =>
+      r.state === 'APPROVED' || r.state === 'CHANGES_REQUESTED'
+    );
+    if (decisional.length === 0) return null;
+
+    // Latest review per reviewer wins
+    const byReviewer = new Map();
+    for (const review of decisional) {
+      const reviewer = review.user?.login;
+      if (!reviewer) continue;
+      // Reviews are ordered chronologically — last one wins
+      byReviewer.set(reviewer, review.state);
+    }
+
+    if (byReviewer.size === 0) return null;
+
+    const states = [...byReviewer.values()];
+    if (states.includes('CHANGES_REQUESTED')) return 'CHANGES_REQUESTED';
+    if (states.every(s => s === 'APPROVED')) return 'APPROVED';
+    return 'REVIEW_REQUIRED';
   }
 
   /**

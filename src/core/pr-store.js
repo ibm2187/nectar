@@ -24,10 +24,10 @@ class PrStore extends EventEmitter {
   _prepareStatements() {
     this._upsertPr = this.db.prepare(`
       INSERT INTO github_prs (
-        prNumber, repo, prTitle, prAuthor, prUrl, status,
+        prNumber, repo, prTitle, prAuthor, prUrl, status, reviewDecision,
         baseBranch, headBranch, prCreatedAt, prUpdatedAt, syncedAt
       ) VALUES (
-        @prNumber, @repo, @prTitle, @prAuthor, @prUrl, @status,
+        @prNumber, @repo, @prTitle, @prAuthor, @prUrl, @status, @reviewDecision,
         @baseBranch, @headBranch, @prCreatedAt, @prUpdatedAt, @syncedAt
       )
       ON CONFLICT(repo, prNumber) DO UPDATE SET
@@ -35,6 +35,7 @@ class PrStore extends EventEmitter {
         prAuthor = excluded.prAuthor,
         prUrl = excluded.prUrl,
         status = excluded.status,
+        reviewDecision = excluded.reviewDecision,
         baseBranch = excluded.baseBranch,
         headBranch = excluded.headBranch,
         prCreatedAt = excluded.prCreatedAt,
@@ -151,7 +152,7 @@ class PrStore extends EventEmitter {
       const chunk = jiraKeys.slice(i, i + 500);
       const placeholders = chunk.map(() => '?').join(',');
       const rows = this.db.prepare(`
-        SELECT j.jiraKey, p.prNumber, p.repo, p.prUrl, p.status, p.baseBranch
+        SELECT j.jiraKey, p.prNumber, p.repo, p.prUrl, p.status, p.baseBranch, p.reviewDecision, p.prAuthor
         FROM pr_jira_keys j
         JOIN github_prs p ON p.repo = j.repo AND p.prNumber = j.prNumber
         WHERE j.jiraKey IN (${placeholders})
@@ -165,8 +166,44 @@ class PrStore extends EventEmitter {
           prUrl: row.prUrl,
           status: row.status,
           baseBranch: row.baseBranch,
+          reviewDecision: row.reviewDecision || null,
+          prAuthor: row.prAuthor || null,
         });
       }
+    }
+    return result;
+  }
+
+  /**
+   * Find open PRs by author with a specific review decision.
+   * Used by the standup page to show "your PRs with changes requested" etc.
+   */
+  findOpenByAuthorAndReview(author, reviewDecision) {
+    const rows = this.db.prepare(`
+      SELECT * FROM github_prs
+      WHERE status = 'open' AND prAuthor = ? AND reviewDecision = ?
+      ORDER BY prUpdatedAt DESC
+    `).all(author, reviewDecision);
+    return rows.map(prFromRow);
+  }
+
+  /**
+   * Find all open PRs grouped by review state for a given author.
+   * Returns { approved: PR[], changesRequested: PR[], pending: PR[] }
+   */
+  getOpenPrReviewSummary(author) {
+    const rows = this.db.prepare(`
+      SELECT * FROM github_prs
+      WHERE status = 'open' AND prAuthor = ?
+      ORDER BY prUpdatedAt DESC
+    `).all(author);
+
+    const result = { approved: [], changesRequested: [], pending: [] };
+    for (const row of rows) {
+      const pr = prFromRow(row);
+      if (row.reviewDecision === 'APPROVED') result.approved.push(pr);
+      else if (row.reviewDecision === 'CHANGES_REQUESTED') result.changesRequested.push(pr);
+      else result.pending.push(pr);
     }
     return result;
   }
@@ -272,6 +309,7 @@ function prToRow(pr) {
     prAuthor: pr.prAuthor || null,
     prUrl: pr.prUrl || null,
     status: pr.status || 'open',
+    reviewDecision: pr.reviewDecision || null,
     baseBranch: pr.baseBranch || null,
     headBranch: pr.headBranch || null,
     prCreatedAt: pr.prCreatedAt || null,
@@ -288,6 +326,7 @@ function prFromRow(row) {
     prAuthor: row.prAuthor,
     prUrl: row.prUrl,
     status: row.status,
+    reviewDecision: row.reviewDecision || null,
     baseBranch: row.baseBranch,
     headBranch: row.headBranch,
     prCreatedAt: row.prCreatedAt,
