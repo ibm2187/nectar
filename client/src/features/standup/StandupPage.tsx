@@ -347,16 +347,6 @@ export function StandupPage() {
             )}
           </div>
 
-          {/* Releases due */}
-          {data.releasesDueThisWeek.length > 0 && (
-            <div className="flex gap-1.5 flex-wrap">
-              {data.releasesDueThisWeek.map(r => (
-                <Badge key={r.version} variant="outline" className="text-xs">
-                  {r.version} — {r.ticketsRemaining} left
-                </Badge>
-              ))}
-            </div>
-          )}
         </div>
 
         {/* Person content */}
