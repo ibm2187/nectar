@@ -18,80 +18,48 @@ const EXCLUDED_DONE_STATUSES = [
 const DEFAULT_LOOKBACK_DAYS = 28;
 
 /**
- * Compute per-person historical throughput separated by role (dev vs QA).
+ * Computes per-person historical throughput separated by role (dev vs QA).
  *
- * Queries the jira_tickets table directly for performance — does not
- * depend on TicketStore.
+ * Uses SHIPPED RELEASES as the ground truth for velocity:
+ * - Find all releases shipped (state='done', jiraReleaseDate set) in the lookback window
+ * - Count distinct Done tickets across those releases per person
+ * - Deduplicate: a ticket in multiple releases counts once
+ * - Divide by business days in the window
  */
 class PersonVelocity {
-  /**
-   * @param {import('better-sqlite3').Database} db
-   */
   constructor(db) {
     this.db = db || getDb();
   }
 
   /**
-   * Count business days (Mon–Fri) between two ISO date strings (inclusive of start, exclusive of end).
-   * @param {string} startDate - ISO date (YYYY-MM-DD)
-   * @param {string} endDate   - ISO date (YYYY-MM-DD)
-   * @returns {number}
-   */
-  _countBusinessDays(startDate, endDate) {
-    let count = 0;
-    const end = new Date(endDate + 'T00:00:00Z');
-    const cursor = new Date(startDate + 'T00:00:00Z');
-    while (cursor < end) {
-      const dow = cursor.getUTCDay();
-      if (dow !== 0 && dow !== 6) count++;
-      cursor.setUTCDate(cursor.getUTCDate() + 1);
-    }
-    return count;
-  }
-
-  /**
-   * Compute the lookback window dates.
-   * @param {object} opts
-   * @param {number} [opts.lookbackDays] - Calendar days to look back
-   * @param {Date}   [opts.now]          - Override current date (for testing)
-   * @returns {{ windowStart: string, windowEnd: string, businessDays: number }}
+   * Compute the lookback window in calendar and business days.
    */
   _getWindow(opts = {}) {
     const lookbackDays = opts.lookbackDays || DEFAULT_LOOKBACK_DAYS;
     const now = opts.now || new Date();
-    const todayStr = now.toISOString().slice(0, 10);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-    const start = new Date(now);
-    start.setDate(start.getDate() - lookbackDays);
-    const windowStart = start.toISOString().slice(0, 10);
+    const windowStartDate = new Date(today.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
+    const windowStart = windowStartDate.toISOString().slice(0, 10);
+    const todayStr = today.toISOString().slice(0, 10);
 
-    const businessDays = this._countBusinessDays(windowStart, todayStr);
+    // Count business days (Mon-Fri) in the window
+    let businessDays = 0;
+    const cursor = new Date(windowStartDate);
+    while (cursor <= today) {
+      const dow = cursor.getDay();
+      if (dow !== 0 && dow !== 6) businessDays++;
+      cursor.setDate(cursor.getDate() + 1);
+    }
 
     return { windowStart, windowEnd: todayStr, businessDays };
   }
 
   /**
-   * Check whether we should fall back to syncedAt because updatedInJira
-   * is empty for >50% of Done tickets.
-   * @returns {{ useSyncedAt: boolean }}
-   */
-  _checkDataQuality() {
-    const totalDone = this.db.prepare(`
-      SELECT COUNT(*) AS n FROM jira_tickets WHERE statusCategory = 'Done'
-    `).get().n;
-
-    if (totalDone === 0) return { useSyncedAt: false };
-
-    const withUpdated = this.db.prepare(`
-      SELECT COUNT(*) AS n FROM jira_tickets
-      WHERE statusCategory = 'Done' AND updatedInJira IS NOT NULL AND updatedInJira != ''
-    `).get().n;
-
-    return { useSyncedAt: withUpdated < totalDone * 0.5 };
-  }
-
-  /**
    * Compute velocity for a single person in a role.
+   *
+   * Uses shipped releases to determine which tickets were completed in the window.
+   * Deduplicates: a ticket in multiple releases counts once.
    *
    * @param {string} name - Person name (as stored in assignee or qaAssignee)
    * @param {'dev'|'qa'} role - Which role to compute velocity for
@@ -102,26 +70,25 @@ class PersonVelocity {
    */
   computeForPerson(name, role, opts = {}) {
     const { windowStart, windowEnd, businessDays } = this._getWindow(opts);
-    const { useSyncedAt } = this._checkDataQuality();
-
-    const dateColumn = useSyncedAt ? 'syncedAt' : 'updatedInJira';
     const personColumn = role === 'qa' ? 'qaAssignee' : 'assignee';
-
-    // Build the exclusion list for status
     const excludePlaceholders = EXCLUDED_DONE_STATUSES.map(() => '?').join(',');
 
+    // Count DISTINCT tickets completed by this person in shipped releases within the window
     const row = this.db.prepare(`
-      SELECT COUNT(*) AS n FROM jira_tickets
-      WHERE ${personColumn} = ?
-        AND statusCategory = 'Done'
-        AND status NOT IN (${excludePlaceholders})
-        AND ${dateColumn} >= ?
-        AND ${dateColumn} <= ?
+      SELECT COUNT(DISTINCT jt.key) AS n FROM jira_tickets jt
+      WHERE jt.${personColumn} = ?
+        AND jt.statusCategory = 'Done'
+        AND jt.status NOT IN (${excludePlaceholders})
+        AND EXISTS (
+          SELECT 1 FROM json_each(jt.fixVersions) fv
+          JOIN releases r ON r.version = fv.value
+          WHERE r.state = 'done' AND r.jiraReleaseDate >= ? AND r.jiraReleaseDate <= ?
+        )
     `).get(
       name,
       ...EXCLUDED_DONE_STATUSES,
       windowStart,
-      windowEnd + 'T23:59:59',
+      windowEnd,
     );
 
     const completedInWindow = row?.n || 0;
@@ -132,169 +99,144 @@ class PersonVelocity {
       completedInWindow,
       businessDays,
       window: { start: windowStart, end: windowEnd },
-      dataQuality: useSyncedAt ? 'estimated' : 'accurate',
+      dataQuality: 'accurate',
     };
   }
 
   /**
-   * Compute velocities for all active people (anyone with a Done ticket in the window).
-   *
-   * @param {object} [opts]
-   * @param {number} [opts.lookbackDays] - Calendar days to look back (default 28)
-   * @param {Date}   [opts.now]          - Override current date (for testing)
-   * @returns {Map<string, { dev: object|null, qa: object|null }>}
+   * Compute velocities for all active people.
+   * Returns Map<name, { dev: velocityObj|null, qa: velocityObj|null }>
    */
   computeAll(opts = {}) {
     const { windowStart, windowEnd, businessDays } = this._getWindow(opts);
-    const { useSyncedAt } = this._checkDataQuality();
-    const dateColumn = useSyncedAt ? 'syncedAt' : 'updatedInJira';
-
     const excludePlaceholders = EXCLUDED_DONE_STATUSES.map(() => '?').join(',');
 
-    // Gather all people who have any dev or QA activity
+    const result = new Map();
+
+    // Dev velocity: count distinct tickets per assignee in shipped releases
     const devRows = this.db.prepare(`
-      SELECT assignee AS name, COUNT(*) AS n FROM jira_tickets
-      WHERE assignee IS NOT NULL AND assignee != ''
-        AND statusCategory = 'Done'
-        AND status NOT IN (${excludePlaceholders})
-        AND ${dateColumn} >= ?
-        AND ${dateColumn} <= ?
-      GROUP BY assignee
-    `).all(...EXCLUDED_DONE_STATUSES, windowStart, windowEnd + 'T23:59:59');
+      SELECT jt.assignee AS name, COUNT(DISTINCT jt.key) AS n FROM jira_tickets jt
+      WHERE jt.assignee IS NOT NULL
+        AND jt.statusCategory = 'Done'
+        AND jt.status NOT IN (${excludePlaceholders})
+        AND EXISTS (
+          SELECT 1 FROM json_each(jt.fixVersions) fv
+          JOIN releases r ON r.version = fv.value
+          WHERE r.state = 'done' AND r.jiraReleaseDate >= ? AND r.jiraReleaseDate <= ?
+        )
+      GROUP BY jt.assignee
+    `).all(...EXCLUDED_DONE_STATUSES, windowStart, windowEnd);
 
+    for (const row of devRows) {
+      if (!result.has(row.name)) result.set(row.name, { dev: null, qa: null });
+      result.get(row.name).dev = {
+        ticketsPerDay: businessDays > 0 ? Math.round((row.n / businessDays) * 1000) / 1000 : 0,
+        completedInWindow: row.n,
+        businessDays,
+        window: { start: windowStart, end: windowEnd },
+        dataQuality: 'accurate',
+      };
+    }
+
+    // QA velocity: count distinct tickets per qaAssignee in shipped releases
     const qaRows = this.db.prepare(`
-      SELECT qaAssignee AS name, COUNT(*) AS n FROM jira_tickets
-      WHERE qaAssignee IS NOT NULL AND qaAssignee != ''
-        AND statusCategory = 'Done'
-        AND status NOT IN (${excludePlaceholders})
-        AND ${dateColumn} >= ?
-        AND ${dateColumn} <= ?
-      GROUP BY qaAssignee
-    `).all(...EXCLUDED_DONE_STATUSES, windowStart, windowEnd + 'T23:59:59');
+      SELECT jt.qaAssignee AS name, COUNT(DISTINCT jt.key) AS n FROM jira_tickets jt
+      WHERE jt.qaAssignee IS NOT NULL
+        AND jt.statusCategory = 'Done'
+        AND jt.status NOT IN (${excludePlaceholders})
+        AND EXISTS (
+          SELECT 1 FROM json_each(jt.fixVersions) fv
+          JOIN releases r ON r.version = fv.value
+          WHERE r.state = 'done' AND r.jiraReleaseDate >= ? AND r.jiraReleaseDate <= ?
+        )
+      GROUP BY jt.qaAssignee
+    `).all(...EXCLUDED_DONE_STATUSES, windowStart, windowEnd);
 
-    // Also include people who have open (non-Done) tickets assigned
-    const activeDev = this.db.prepare(`
-      SELECT DISTINCT assignee AS name FROM jira_tickets
-      WHERE assignee IS NOT NULL AND assignee != ''
-        AND statusCategory != 'Done'
-    `).all();
-
-    const activeQa = this.db.prepare(`
-      SELECT DISTINCT qaAssignee AS name FROM jira_tickets
-      WHERE qaAssignee IS NOT NULL AND qaAssignee != ''
-        AND statusCategory != 'Done'
-    `).all();
-
-    const people = new Map();
-
-    // Initialize all known people
-    const allNames = new Set();
-    for (const r of [...devRows, ...qaRows, ...activeDev, ...activeQa]) {
-      if (r.name) allNames.add(r.name);
+    for (const row of qaRows) {
+      if (!result.has(row.name)) result.set(row.name, { dev: null, qa: null });
+      result.get(row.name).qa = {
+        ticketsPerDay: businessDays > 0 ? Math.round((row.n / businessDays) * 1000) / 1000 : 0,
+        completedInWindow: row.n,
+        businessDays,
+        window: { start: windowStart, end: windowEnd },
+        dataQuality: 'accurate',
+      };
     }
 
-    const devMap = new Map(devRows.map(r => [r.name, r.n]));
-    const qaMap = new Map(qaRows.map(r => [r.name, r.n]));
-
-    const dataQuality = useSyncedAt ? 'estimated' : 'accurate';
-
-    for (const name of allNames) {
-      const devCompleted = devMap.get(name) || 0;
-      const qaCompleted = qaMap.get(name) || 0;
-
-      people.set(name, {
-        dev: devCompleted > 0 ? {
-          ticketsPerDay: Math.round((devCompleted / businessDays) * 1000) / 1000,
-          completedInWindow: devCompleted,
-          businessDays,
-          window: { start: windowStart, end: windowEnd },
-          dataQuality,
-        } : null,
-        qa: qaCompleted > 0 ? {
-          ticketsPerDay: Math.round((qaCompleted / businessDays) * 1000) / 1000,
-          completedInWindow: qaCompleted,
-          businessDays,
-          window: { start: windowStart, end: windowEnd },
-          dataQuality,
-        } : null,
-      });
-    }
-
-    return people;
+    return result;
   }
 
   /**
    * Team-wide average velocity for fallback when a person has no history.
+   * Computed as total unique tickets / business days / active people.
    *
-   * @param {object} [opts]
-   * @param {number} [opts.lookbackDays] - Calendar days to look back (default 28)
-   * @param {Date}   [opts.now]          - Override current date (for testing)
    * @returns {{ dev: number, qa: number, dataQuality: string }}
    */
   getTeamAverages(opts = {}) {
     const { windowStart, windowEnd, businessDays } = this._getWindow(opts);
-    const { useSyncedAt } = this._checkDataQuality();
-    const dateColumn = useSyncedAt ? 'syncedAt' : 'updatedInJira';
-
     const excludePlaceholders = EXCLUDED_DONE_STATUSES.map(() => '?').join(',');
 
-    // Count unique dev completions
-    const devRow = this.db.prepare(`
-      SELECT COUNT(*) AS n FROM jira_tickets
-      WHERE assignee IS NOT NULL AND assignee != ''
-        AND statusCategory = 'Done'
-        AND status NOT IN (${excludePlaceholders})
-        AND ${dateColumn} >= ?
-        AND ${dateColumn} <= ?
-    `).get(...EXCLUDED_DONE_STATUSES, windowStart, windowEnd + 'T23:59:59');
+    // Total unique Done tickets in shipped releases (dev)
+    const devTotal = this.db.prepare(`
+      SELECT COUNT(DISTINCT jt.key) AS n FROM jira_tickets jt
+      WHERE jt.assignee IS NOT NULL
+        AND jt.statusCategory = 'Done'
+        AND jt.status NOT IN (${excludePlaceholders})
+        AND EXISTS (
+          SELECT 1 FROM json_each(jt.fixVersions) fv
+          JOIN releases r ON r.version = fv.value
+          WHERE r.state = 'done' AND r.jiraReleaseDate >= ? AND r.jiraReleaseDate <= ?
+        )
+    `).get(...EXCLUDED_DONE_STATUSES, windowStart, windowEnd);
 
-    // Count unique people who completed dev work
-    const devPeopleRow = this.db.prepare(`
-      SELECT COUNT(DISTINCT assignee) AS n FROM jira_tickets
-      WHERE assignee IS NOT NULL AND assignee != ''
-        AND statusCategory = 'Done'
-        AND status NOT IN (${excludePlaceholders})
-        AND ${dateColumn} >= ?
-        AND ${dateColumn} <= ?
-    `).get(...EXCLUDED_DONE_STATUSES, windowStart, windowEnd + 'T23:59:59');
+    const devPeople = this.db.prepare(`
+      SELECT COUNT(DISTINCT jt.assignee) AS n FROM jira_tickets jt
+      WHERE jt.assignee IS NOT NULL
+        AND jt.statusCategory = 'Done'
+        AND jt.status NOT IN (${excludePlaceholders})
+        AND EXISTS (
+          SELECT 1 FROM json_each(jt.fixVersions) fv
+          JOIN releases r ON r.version = fv.value
+          WHERE r.state = 'done' AND r.jiraReleaseDate >= ? AND r.jiraReleaseDate <= ?
+        )
+    `).get(...EXCLUDED_DONE_STATUSES, windowStart, windowEnd);
 
-    // Count unique QA completions
-    const qaRow = this.db.prepare(`
-      SELECT COUNT(*) AS n FROM jira_tickets
-      WHERE qaAssignee IS NOT NULL AND qaAssignee != ''
-        AND statusCategory = 'Done'
-        AND status NOT IN (${excludePlaceholders})
-        AND ${dateColumn} >= ?
-        AND ${dateColumn} <= ?
-    `).get(...EXCLUDED_DONE_STATUSES, windowStart, windowEnd + 'T23:59:59');
+    // QA totals
+    const qaTotal = this.db.prepare(`
+      SELECT COUNT(DISTINCT jt.key) AS n FROM jira_tickets jt
+      WHERE jt.qaAssignee IS NOT NULL
+        AND jt.statusCategory = 'Done'
+        AND jt.status NOT IN (${excludePlaceholders})
+        AND EXISTS (
+          SELECT 1 FROM json_each(jt.fixVersions) fv
+          JOIN releases r ON r.version = fv.value
+          WHERE r.state = 'done' AND r.jiraReleaseDate >= ? AND r.jiraReleaseDate <= ?
+        )
+    `).get(...EXCLUDED_DONE_STATUSES, windowStart, windowEnd);
 
-    const qaPeopleRow = this.db.prepare(`
-      SELECT COUNT(DISTINCT qaAssignee) AS n FROM jira_tickets
-      WHERE qaAssignee IS NOT NULL AND qaAssignee != ''
-        AND statusCategory = 'Done'
-        AND status NOT IN (${excludePlaceholders})
-        AND ${dateColumn} >= ?
-        AND ${dateColumn} <= ?
-    `).get(...EXCLUDED_DONE_STATUSES, windowStart, windowEnd + 'T23:59:59');
+    const qaPeople = this.db.prepare(`
+      SELECT COUNT(DISTINCT jt.qaAssignee) AS n FROM jira_tickets jt
+      WHERE jt.qaAssignee IS NOT NULL
+        AND jt.statusCategory = 'Done'
+        AND jt.status NOT IN (${excludePlaceholders})
+        AND EXISTS (
+          SELECT 1 FROM json_each(jt.fixVersions) fv
+          JOIN releases r ON r.version = fv.value
+          WHERE r.state = 'done' AND r.jiraReleaseDate >= ? AND r.jiraReleaseDate <= ?
+        )
+    `).get(...EXCLUDED_DONE_STATUSES, windowStart, windowEnd);
 
-    const totalDev = devRow?.n || 0;
-    const totalQa = qaRow?.n || 0;
-    const devPeople = devPeopleRow?.n || 1;
-    const qaPeople = qaPeopleRow?.n || 1;
-
-    // Average = total completed / people / business days
-    const devAvg = businessDays > 0 ? (totalDev / devPeople) / businessDays : 0;
-    const qaAvg = businessDays > 0 ? (totalQa / qaPeople) / businessDays : 0;
+    const devAvg = (devPeople?.n > 0 && businessDays > 0)
+      ? (devTotal.n / devPeople.n / businessDays) : 0;
+    const qaAvg = (qaPeople?.n > 0 && businessDays > 0)
+      ? (qaTotal.n / qaPeople.n / businessDays) : 0;
 
     return {
       dev: Math.round(devAvg * 1000) / 1000,
       qa: Math.round(qaAvg * 1000) / 1000,
-      dataQuality: useSyncedAt ? 'estimated' : 'accurate',
+      dataQuality: 'accurate',
     };
   }
 }
 
 module.exports = PersonVelocity;
-module.exports.REAL_DONE_STATUSES = REAL_DONE_STATUSES;
-module.exports.EXCLUDED_DONE_STATUSES = EXCLUDED_DONE_STATUSES;
-module.exports.DEFAULT_LOOKBACK_DAYS = DEFAULT_LOOKBACK_DAYS;

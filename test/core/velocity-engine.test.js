@@ -85,6 +85,14 @@ describe('VelocityEngine', () => {
     // - forecast.people has entries for Alice, Bob, Carol
     // - forecast.globalVelocity has dev and qa values
 
+    // Insert a shipped release so velocity can be computed from it
+    db.prepare(`
+      INSERT INTO releases (key, id, repo, version, state, jiraReleaseDate, jiraReleased, jiraArchived, createdAt, updatedAt,
+        tickets, cherryPicks, ci, risk, comments, deployments, approvals)
+      VALUES ('webplatform:4.1.0', 'rel-4.1.0', 'webplatform', '4.1.0', 'done', '2026-04-10', 1, 0, datetime('now'), datetime('now'),
+        '[]', '[]', '{}', '{}', '[]', '[]', '[]')
+    `).run();
+
     // Insert historical Done tickets to establish velocity
     for (let i = 1; i <= 10; i++) {
       insertTicket(db, {
