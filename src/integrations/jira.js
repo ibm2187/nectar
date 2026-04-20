@@ -24,6 +24,11 @@ const DEPLOYED_ENVS_FIELD = 'customfield_10595';
 const QA_ASSIGNEE_FIELD = 'customfield_10466';
 const PRODUCT_ASSIGNEE_FIELD = 'customfield_10757';
 
+// Product taxonomy fields — added 2026-04-18 for roadmap categorization.
+const MODULE_FIELD = 'customfield_11124';     // Viv Module — single select
+const PRODUCT_FIELD = 'customfield_11123';    // Viv Product — multi checkbox
+const PROJECTS_FIELD = 'customfield_11122';   // Projects — multi checkbox
+
 // Risk and priority signals — used by Nectar to sort/filter tickets.
 const RISK_LEVEL_FIELD = 'customfield_10650';        // "1 - Low Risk" / "2 - Medium Risk" / "3 - High Risk"
 const CUSTOMER_PRIORITY_FIELD = 'customfield_11023'; // URGENT / High / Medium / Low / Internal Only
@@ -33,6 +38,8 @@ const CUSTOMER_PRIORITY_FIELD = 'customfield_11023'; // URGENT / High / Medium /
 const NECTAR_FIELDS = [
   'summary', 'status', 'issuetype', 'assignee', 'reporter', 'fixVersions', 'labels',
   'priority',           // Built-in priority (Urgent/High/Medium/Low/Lowest)
+  'created',            // Issue creation date (for triage views)
+  'updated',            // Last update timestamp (for velocity/burndown)
   'customfield_10594',  // Target FixVersion
   'customfield_10463',  // Component / area
   'customfield_11056',  // Customer tag
@@ -44,6 +51,9 @@ const NECTAR_FIELDS = [
   'customfield_11023',  // Customer Priority
   'customfield_10992',  // Submitter Name
   'customfield_10993',  // Submitter Email
+  'customfield_11124',  // Viv Module
+  'customfield_11123',  // Viv Product
+  'customfield_11122',  // Projects
 ];
 // Matches /details/<digits> in Zoho agent URLs
 const ZOHO_URL_ID_REGEX = /\/details\/(\d+)/;
@@ -277,10 +287,13 @@ class JiraClient {
       type: fields.issuetype ? fields.issuetype.name : 'Unknown',
       assignee: fields.assignee ? fields.assignee.displayName : null,
       priority: fields.priority ? fields.priority.name : null,
-      fixVersions: (fields.fixVersions || []).map(v => v.name),
-      targetFixVersions: JiraClient.extractVersionNames(fields[TARGET_FIX_VERSION_FIELD]),
+      fixVersions: (fields.fixVersions || []).map(v => JiraClient.cleanVersionName(v.name)),
+      targetFixVersions: JiraClient.extractVersionNames(fields[TARGET_FIX_VERSION_FIELD]).map(v => JiraClient.cleanVersionName(v)),
       labels: fields.labels || [],
       component: JiraClient.extractFieldString(fields[COMPONENT_FIELD]),
+      module: JiraClient.extractFieldString(fields[MODULE_FIELD]),
+      product: JiraClient.extractStringArray(fields[PRODUCT_FIELD]),
+      projects: JiraClient.extractStringArray(fields[PROJECTS_FIELD]),
       customerTags: JiraClient.extractStringArray(fields[CUSTOMER_TAG_FIELD]),
       reporter: fields.reporter ? fields.reporter.displayName : null,
       qaAssignee: fields[QA_ASSIGNEE_FIELD] ? fields[QA_ASSIGNEE_FIELD].displayName || null : null,
@@ -291,7 +304,23 @@ class JiraClient {
       zohoRef: rawZoho ? JiraClient.parseZohoRef(rawZoho) : null,
       submitterName: fields[ZOHO_SUBMITTER_NAME_FIELD] || null,
       submitterEmail: fields[ZOHO_SUBMITTER_EMAIL_FIELD] || null,
+      statusCategory: fields.status && fields.status.statusCategory
+        ? fields.status.statusCategory.name : null,
+      created: fields.created || null,
+      state: JiraClient.mapStatus(fields.status ? fields.status.name : 'Unknown'),
     };
+  }
+
+  /**
+   * Strip repo prefixes from JIRA version names so they match release.version.
+   * "iOS 2026.4.0" → "2026.4.0", "Android 2026.4.0" → "2026.4.0", "4.2.0" → "4.2.0"
+   */
+  static cleanVersionName(name) {
+    if (!name) return name;
+    const lower = name.toLowerCase();
+    if (lower.startsWith('ios ')) return name.substring(4).trim();
+    if (lower.startsWith('android ')) return name.substring(8).trim();
+    return name;
   }
 
   /**

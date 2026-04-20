@@ -79,6 +79,34 @@ export interface Release {
   effectiveStatus?: EffectiveStatus
 }
 
+export interface DeliveryForecast {
+  version: string
+  releaseDate: string | null
+  deadlineDate: string | null
+  total: number
+  done: number
+  remaining: number
+  daysLeft: number | null
+  velocity: {
+    actual: number
+    required: number | null
+    window: number
+    completedInWindow: number
+    source: 'version' | 'release-age' | 'global' | 'none'
+  }
+  risk: 'low' | 'medium' | 'high' | 'critical' | 'unknown'
+  riskMessage: string
+  projectedDate: string | null
+  breakdown: {
+    notStarted: number
+    inDev: number
+    blocked: number
+    readyForQa: number
+    inQa: number
+    awaitingCp: number
+  }
+}
+
 export interface ReleaseComment {
   id: string
   text: string

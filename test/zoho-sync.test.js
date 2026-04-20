@@ -30,6 +30,7 @@ function makeMockReleases(releaseList) {
     releases: map,
     _key: (repo, version) => `${repo}:${version}`,
     _debounceSave: vi.fn(),
+    getTickets: (release) => (release.tickets || []),
   };
 }
 

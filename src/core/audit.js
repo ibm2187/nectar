@@ -64,9 +64,22 @@ class Audit extends EventEmitter {
 
   /**
    * Get audit entries for a specific release.
+   * Queries the DB directly for efficiency (avoids loading all entries into memory).
    */
   forRelease(version) {
-    return this._entries.filter(e => e.version === version);
+    try {
+      const rows = this._db.prepare('SELECT * FROM audit WHERE version = ? ORDER BY at ASC, rowid ASC').all(version);
+      return rows.map(r => ({
+        id: r.id,
+        version: r.version,
+        action: r.action,
+        detail: safeParse(r.detail, {}),
+        user: r.user,
+        at: r.at,
+      }));
+    } catch {
+      return this._entries.filter(e => e.version === version);
+    }
   }
 
   /**

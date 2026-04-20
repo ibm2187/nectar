@@ -296,7 +296,7 @@ class NotificationEngine {
     const byPerson = new Map(); // name → [{ release, ticket }]
 
     for (const release of relevant) {
-      for (const ticket of (release.tickets || [])) {
+      for (const ticket of this.releases.getTickets(release)) {
         const status = ticket.jiraStatus || '';
         if (DONE_STATUSES.has(status)) continue;
 
@@ -497,7 +497,7 @@ class NotificationEngine {
     const matchingNames = new Set();
     const allPeople = new Set();
     for (const release of relevant) {
-      for (const ticket of (release.tickets || [])) {
+      for (const ticket of this.releases.getTickets(release)) {
         if (ticket.assignee) allPeople.add(ticket.assignee);
         if (ticket.qaAssignee) allPeople.add(ticket.qaAssignee);
       }
@@ -516,7 +516,7 @@ class NotificationEngine {
     // Collect their undone tickets
     const items = [];
     for (const release of relevant) {
-      for (const ticket of (release.tickets || [])) {
+      for (const ticket of this.releases.getTickets(release)) {
         if (DONE_STATUSES.has(ticket.jiraStatus || '')) continue;
         const isAssignee = ticket.assignee && matchingNames.has(ticket.assignee);
         const isQa = ticket.qaAssignee && matchingNames.has(ticket.qaAssignee);
@@ -618,7 +618,7 @@ class NotificationEngine {
     const ticketSummaries = [];
 
     for (const key of jiraKeys) {
-      const ticket = (release.tickets || []).find(t => t.key === key);
+      const ticket = this.releases.getTickets(release).find(t => t.key === key);
       if (!ticket) continue;
       if (ticket.assignee) people.add(ticket.assignee);
       if (ticket.qaAssignee) people.add(ticket.qaAssignee);

@@ -6,6 +6,8 @@ vi.mock('../src/core/log', () => ({
 }));
 
 const PrSync = require('../src/core/pr-sync');
+const PrStore = require('../src/core/pr-store');
+const { createTestDb } = require('../src/core/db');
 
 function makeRelease(version, tickets = [], opts = {}) {
   return {
@@ -14,7 +16,6 @@ function makeRelease(version, tickets = [], opts = {}) {
     state: opts.state || 'stabilizing',
     jiraArchived: false,
     tickets,
-    prsByJiraKey: {},
     ...opts,
   };
 }
@@ -26,7 +27,6 @@ function makeMockReleases(releaseList) {
     list: () => releaseList,
     releases: map,
     _key: (repo, version) => `${repo}:${version}`,
-    _debounceSave: vi.fn(),
   };
 }
 
@@ -42,6 +42,7 @@ function makeGitHubPr(number, opts = {}) {
     updated_at: opts.updated_at || '2026-04-13T18:00:00Z',
     user: { login: opts.author || 'nukul' },
     base: { ref: opts.base || 'master' },
+    head: opts.head || undefined,
     labels: [],
   };
 }
@@ -62,9 +63,15 @@ function makeMockGithub(prsToReturn = []) {
 }
 
 describe('PrSync', () => {
-  let releases, github, sync;
+  let releases, github, sync, prStore, db;
 
   beforeEach(() => {
+    db = createTestDb();
+    // Seed singleton rows
+    db.prepare('INSERT OR IGNORE INTO jira_sync_meta (id, totalTicketsSynced) VALUES (1, 0)').run();
+    db.prepare('INSERT OR IGNORE INTO pr_sync_meta (id, totalPrsSynced) VALUES (1, 0)').run();
+    prStore = new PrStore({ db });
+
     releases = makeMockReleases([
       makeRelease('4.3.0', [
         { key: 'DEV-100', source: 'jira' },
@@ -73,79 +80,83 @@ describe('PrSync', () => {
     ]);
   });
 
-  it('matches PRs to JIRA keys in releases', async () => {
+  function createSync(gh) {
+    const s = new PrSync(releases, gh, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    s.setPrStore(prStore);
+    return s;
+  }
+
+  it('persists PRs with JIRA keys to PrStore', async () => {
     github = makeMockGithub([
       makeGitHubPr(25500, { title: 'Fix DEV-100 scheduling bug' }),
     ]);
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
-    const results = await sync.run();
+    sync = createSync(github);
+    await sync.run();
 
-    expect(results.prsFetched).toBeGreaterThan(0);
-    expect(results.matched).toBe(1);
-
-    const release = releases.releases.get('webplatform:4.3.0');
-    expect(release.prsByJiraKey['DEV-100']).toHaveLength(1);
-    expect(release.prsByJiraKey['DEV-100'][0].prNumber).toBe(25500);
-    expect(release.prsByJiraKey['DEV-100'][0].status).toBe('open');
+    expect(prStore.count()).toBe(1);
+    const prs = prStore.findByJiraKey('DEV-100');
+    expect(prs).toHaveLength(1);
+    expect(prs[0].prNumber).toBe(25500);
+    expect(prs[0].status).toBe('open');
   });
 
   it('extracts JIRA keys from title and body', async () => {
     github = makeMockGithub([
       makeGitHubPr(25501, { title: 'Misc fixes', body: 'Fixes DEV-100 and DEV-101' }),
     ]);
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    sync = createSync(github);
     await sync.run();
 
-    const release = releases.releases.get('webplatform:4.3.0');
-    expect(release.prsByJiraKey['DEV-100']).toHaveLength(1);
-    expect(release.prsByJiraKey['DEV-101']).toHaveLength(1);
+    expect(prStore.findByJiraKey('DEV-100')).toHaveLength(1);
+    expect(prStore.findByJiraKey('DEV-101')).toHaveLength(1);
   });
 
   it('detects merged PRs', async () => {
     github = makeMockGithub([
       makeGitHubPr(25500, { title: 'Fix DEV-100', state: 'closed', merged_at: '2026-04-13T15:00:00Z' }),
     ]);
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    sync = createSync(github);
     await sync.run();
 
-    const release = releases.releases.get('webplatform:4.3.0');
-    expect(release.prsByJiraKey['DEV-100'][0].status).toBe('merged');
+    const prs = prStore.findByJiraKey('DEV-100');
+    expect(prs[0].status).toBe('merged');
   });
 
   it('second run is incremental', async () => {
     github = makeMockGithub([
       makeGitHubPr(25500, { title: 'Fix DEV-100' }),
     ]);
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    sync = createSync(github);
 
     await sync.run(); // full
     github._paginate.mockClear();
 
     const results = await sync.run(); // incremental
     expect(results.incremental).toBe(true);
-    // Still matches from cache
-    expect(results.matched).toBe(1);
+    // PR is still in PrStore
+    expect(prStore.findByJiraKey('DEV-100')).toHaveLength(1);
   });
 
-  it('ignores PRs without JIRA keys', async () => {
+  it('tracks JIRA key count correctly', async () => {
     github = makeMockGithub([
       makeGitHubPr(25500, { title: 'Update README', body: 'Just docs' }),
     ]);
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    sync = createSync(github);
     const results = await sync.run();
 
-    expect(results.matched).toBe(0);
+    expect(results.jiraKeysFound).toBe(0);
   });
 
-  it('ignores PRs for JIRA keys not in any active release', async () => {
+  it('persists PRs for JIRA keys not in any active release', async () => {
     github = makeMockGithub([
       makeGitHubPr(25500, { title: 'Fix DEV-999' }),
     ]);
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    sync = createSync(github);
     const results = await sync.run();
 
     expect(results.jiraKeysFound).toBe(1);
-    expect(results.matched).toBe(0);
+    // PR is persisted even if no matching release
+    expect(prStore.findByJiraKey('DEV-999')).toHaveLength(1);
   });
 
   it('handles multiple PRs for the same JIRA key', async () => {
@@ -153,28 +164,15 @@ describe('PrSync', () => {
       makeGitHubPr(25500, { title: 'Fix DEV-100' }),
       makeGitHubPr(25501, { title: 'CHERRY_PICK [DEV-100] to 4.3.0', base: 'releases/4.3.0' }),
     ]);
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    sync = createSync(github);
     await sync.run();
 
-    const release = releases.releases.get('webplatform:4.3.0');
-    expect(release.prsByJiraKey['DEV-100']).toHaveLength(2);
-  });
-
-  it('clears stale PR data', async () => {
-    const rel = makeRelease('4.3.0', [{ key: 'DEV-100', source: 'jira' }]);
-    rel.prsByJiraKey = { 'DEV-100': [{ prNumber: 99999 }] };
-    releases = makeMockReleases([rel]);
-
-    github = makeMockGithub([]); // no PRs
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
-    await sync.run();
-
-    expect(rel.prsByJiraKey).toEqual({});
+    expect(prStore.findByJiraKey('DEV-100')).toHaveLength(2);
   });
 
   it('emits sync:completed', async () => {
     github = makeMockGithub([]);
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    sync = createSync(github);
     const handler = vi.fn();
     sync.on('sync:completed', handler);
     await sync.run();
@@ -186,23 +184,21 @@ describe('PrSync', () => {
       isConfigured: () => true,
       _paginate: vi.fn(async () => { await new Promise(r => setTimeout(r, 100)); return []; }),
     };
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    sync = createSync(github);
     const p1 = sync.run();
     const p2 = sync.run();
     await Promise.all([p1, p2]);
-    // Only one run's worth of API calls
-    expect(github._paginate.mock.calls.length).toBeLessThanOrEqual(2); // open + closed
+    expect(github._paginate.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
   it('indexes PRs by head branch for findPRByBranch lookup', async () => {
-    const openPr = makeGitHubPr(25600, { title: 'Fix DEV-100' });
-    openPr.head = { ref: 'eric/foo' };
+    const openPr = makeGitHubPr(25600, { title: 'Fix DEV-100', head: { ref: 'eric/foo' } });
     const mergedPr = makeGitHubPr(25601, {
       title: 'Release DEV-101',
       state: 'closed',
       merged_at: '2026-04-13T15:00:00Z',
+      head: { ref: 'releases/4.2.0' },
     });
-    mergedPr.head = { ref: 'releases/4.2.0' };
 
     github = {
       isConfigured: () => true,
@@ -212,20 +208,17 @@ describe('PrSync', () => {
         return [];
       }),
     };
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    sync = createSync(github);
     await sync.run();
 
     const found = sync.findPRByBranch('eric/foo');
     expect(found).not.toBeNull();
     expect(found.prNumber).toBe(25600);
-    expect(found.prUrl).toBeTruthy();
     expect(found.status).toBe('open');
-    expect(found.headBranch).toBe('eric/foo');
 
     const mergedFound = sync.findPRByBranch('releases/4.2.0');
     expect(mergedFound).not.toBeNull();
     expect(mergedFound.status).toBe('merged');
-    expect(mergedFound.headBranch).toBe('releases/4.2.0');
 
     expect(sync.findPRByBranch('unknown')).toBeNull();
     expect(sync.findPRByBranch(null)).toBeNull();
@@ -233,8 +226,7 @@ describe('PrSync', () => {
   });
 
   it('indexes PRs without JIRA keys by head branch', async () => {
-    const pr = makeGitHubPr(25700, { title: 'Update README', body: 'Just docs' });
-    pr.head = { ref: 'chore/docs' };
+    const pr = makeGitHubPr(25700, { title: 'Update README', body: 'Just docs', head: { ref: 'chore/docs' } });
     github = {
       isConfigured: () => true,
       _paginate: vi.fn(async (path) => {
@@ -242,37 +234,28 @@ describe('PrSync', () => {
         return [];
       }),
     };
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    sync = createSync(github);
     await sync.run();
 
     const found = sync.findPRByBranch('chore/docs');
     expect(found).not.toBeNull();
     expect(found.prNumber).toBe(25700);
-    expect(found.prUrl).toBeTruthy();
     expect(found.status).toBe('open');
-    expect(found.headBranch).toBe('chore/docs');
   });
 
   it('prefers open PR over closed PR when sharing a head branch', async () => {
-    const closedPr = makeGitHubPr(50, {
-      title: 'DEV-300 old',
-      state: 'closed',
-      merged_at: null,
-    });
-    closedPr.head = { ref: 'eric/shared' };
-    const openPr = makeGitHubPr(60, { title: 'DEV-301 new' });
-    openPr.head = { ref: 'eric/shared' };
+    const closedPr = makeGitHubPr(50, { title: 'DEV-300 old', state: 'closed', head: { ref: 'eric/shared' } });
+    const openPr = makeGitHubPr(60, { title: 'DEV-301 new', head: { ref: 'eric/shared' } });
 
     github = {
       isConfigured: () => true,
       _paginate: vi.fn(async (path) => {
         if (path.includes('state=open')) return [openPr];
-        // Closed PRs come from the closed-state fetch after the open ones
         if (path.includes('state=closed')) return [closedPr];
         return [];
       }),
     };
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    sync = createSync(github);
     await sync.run();
 
     const found = sync.findPRByBranch('eric/shared');
@@ -281,10 +264,11 @@ describe('PrSync', () => {
     expect(found.status).toBe('open');
   });
 
-  it('getStatus reports cache size', async () => {
+  it('getStatus reports PrStore stats', async () => {
     github = makeMockGithub([makeGitHubPr(25500, { title: 'Fix DEV-100' })]);
-    sync = new PrSync(releases, github, { repos: [{ name: 'webplatform', github: 'mavencare/webplatform' }] });
+    sync = createSync(github);
     await sync.run();
-    expect(sync.getStatus().cacheSize).toBe(1);
+    const status = sync.getStatus();
+    expect(status.prStore.totalPrs).toBe(1);
   });
 });

@@ -81,7 +81,7 @@ class ReleaseNotifier {
    * Send a status update for a single release to its Slack channel.
    */
   async notifyRelease(release) {
-    const tickets = release.tickets || [];
+    const tickets = this.releases.getTickets(release);
 
     const groupCounts = {
       total: tickets.length,

@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useHomeStore, type HomeView, type HomeRange } from '../../stores/homeStore'
 import { apiFetch } from '../../api/client'
-import type { Release } from '../../api/client'
+import type { Release, DeliveryForecast } from '../../api/client'
 import { Card, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
 import { cn } from '../../lib/utils'
@@ -11,7 +11,7 @@ import { JiraLink } from '../../components/JiraLink'
 import { ZohoImpactBadge } from '../releases/CustomerImpact'
 import { PipelineBadge } from '../releases/PipelineView'
 import { PrDetailPanel, type PrInfo } from '../../components/PrDetailPanel'
-import { ReleaseBadge, TicketDeployedCell as SharedDeployedCell, type TicketRowData } from '../../components/TicketRow'
+import { ReleaseBadge, TicketDeployedCell as SharedDeployedCell, PriorityBadge, RiskBadge, HealthBadge, getNextRelease, priorityOrdinal, riskOrdinal, NextReleaseVersionCell, NextReleaseDateCell, type TicketRowData } from '../../components/TicketRow'
 import { SortableHeader, useSortableData, useSortState } from '../../components/SortableHeader'
 import { CustomerPills } from '../../components/CustomerPill'
 import { CurrentlyOutBanner } from '../../components/CurrentlyOutBanner'
@@ -31,6 +31,7 @@ interface HomeRelease extends Release {
   zohoTicketCount: number
   zohoTickets: Array<{ id: string; ticketNumber: string | null; subject: string; status: string; priority: string | null; departmentId: string | null; webUrl: string | null }>
   isOverdue: boolean
+  forecast?: DeliveryForecast | null
   oooRisk?: Array<{
     name: string
     role: 'dev' | 'qa'
@@ -136,7 +137,8 @@ export function HomePage() {
   const [repoFilter, setRepoFilter] = useState('')
   const [ticketSearch, setTicketSearch] = useState('')
 
-  // Fetch home data — releases-grouped uses /releases/home, tickets-grouped uses /tickets/home
+  // Fetch home data — ALL views use /releases/home as single source of truth.
+  // Tickets view derives its flat list client-side from the same releases data.
   useEffect(() => {
     setLoading(true)
     const params = new URLSearchParams()
@@ -144,33 +146,82 @@ export function HomePage() {
     if (person) params.set('person', person)
     params.set('range', range)
 
-    if (groupBy === 'tickets') {
-      Promise.all([
-        apiFetch<{ tickets: TicketRowData[] }>(`/tickets/home?${params}`),
-        apiFetch<Person[]>('/people'),
-      ])
-        .then(([data, ppl]) => {
-          setTickets(data.tickets || [])
-          setPeople(ppl)
-        })
-        .catch(() => {})
-        .finally(() => setLoading(false))
-    } else {
-      // Both 'releases' and 'people' use the same API — just grouped differently
-      Promise.all([
-        apiFetch<HomeRelease[]>(`/releases/home?${params}`),
-        apiFetch<Person[]>('/people'),
-      ])
-        .then(([rels, ppl]) => {
-          setReleases(rels)
-          setPeople(ppl)
-          setCollapsed(new Set())
-          setExpandedTickets(new Set())
-        })
-        .catch(() => {})
-        .finally(() => setLoading(false))
-    }
-  }, [view, person, groupBy, range])
+    Promise.all([
+      apiFetch<HomeRelease[]>(`/releases/home?${params}`),
+      apiFetch<Person[]>('/people'),
+    ])
+      .then(([rels, ppl]) => {
+        setReleases(rels)
+        setPeople(ppl)
+        setCollapsed(new Set())
+        setExpandedTickets(new Set())
+
+        // Derive flat ticket list from releases (deduped by key).
+        // Each ticket gets a `releases[]` array showing which releases it belongs to,
+        // matching the shape that TicketsTable / TicketRowData expects.
+        const today = new Date().toISOString().slice(0, 10)
+        const byKey = new Map<string, TicketRowData>()
+        for (const r of rels) {
+          for (const t of (r.tickets || [])) {
+            // Cast to any — the server enriches tickets with fields (priority, truth,
+            // assigneeOut, etc.) that aren't on the base Ticket type.
+            const ta = t as any
+            if (!byKey.has(t.key)) {
+              byKey.set(t.key, {
+                key: t.key,
+                summary: t.summary || '',
+                jiraStatus: t.jiraStatus || 'Unknown',
+                state: t.state || 'pending',
+                type: t.type || null,
+                assignee: t.assignee || null,
+                qaAssignee: t.qaAssignee || null,
+                zohoRef: t.zohoRef || null,
+                deployedEnvironments: t.deployedEnvironments || [],
+                fixVersions: t.fixVersions || [],
+                targetFixVersions: t.targetFixVersions || [],
+                priority: ta.priority || null,
+                riskLevel: ta.riskLevel || null,
+                customerPriority: ta.customerPriority || null,
+                truth: ta.truth || [],
+                releases: [],
+                // Carry through OOO annotations if present
+                ...(ta.assigneeOut ? { assigneeOut: ta.assigneeOut } : {}),
+                ...(ta.qaAssigneeOut ? { qaAssigneeOut: ta.qaAssigneeOut } : {}),
+              } as TicketRowData)
+            }
+            const existing = byKey.get(t.key)!
+            const fixSet = new Set(existing.fixVersions || [])
+            const targetSet = new Set(existing.targetFixVersions || [])
+            const inFixVersion = fixSet.has(r.version)
+            const inTarget = targetSet.has(r.version)
+            const isShipped = r.state === 'done'
+            const isOverdue = !!(r.jiraReleaseDate && r.jiraReleaseDate < today && !isShipped)
+            existing.releases.push({
+              repo: r.repo || '',
+              version: r.version,
+              state: r.state,
+              jiraReleaseDate: r.jiraReleaseDate || null,
+              isShipped,
+              isOverdue,
+              inTarget,
+              inFixVersion,
+              source: inTarget && inFixVersion ? 'both' : inTarget ? 'target' : 'fixVersion',
+            })
+          }
+        }
+        // Sort each ticket's releases: non-shipped first, overdue first, then by date
+        for (const t of byKey.values()) {
+          t.releases.sort((a, b) => {
+            if (a.isShipped !== b.isShipped) return a.isShipped ? 1 : -1
+            if (a.isOverdue !== b.isOverdue) return a.isOverdue ? -1 : 1
+            return (a.jiraReleaseDate || 'zzzz').localeCompare(b.jiraReleaseDate || 'zzzz')
+          })
+        }
+        setTickets(Array.from(byKey.values()))
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [view, person, range])
 
   const toggleCollapse = (id: string) => {
     setCollapsed(prev => {
@@ -430,6 +481,7 @@ export function HomePage() {
           {([
             { key: 'today', label: 'Today' },
             { key: 'week', label: 'This Week' },
+            { key: 'nextweek', label: 'Next Week' },
             { key: '2w', label: '2 Weeks' },
             { key: '4w', label: '4 Weeks' },
           ] as { key: HomeRange; label: string }[]).map(r => (
@@ -556,7 +608,7 @@ export function HomePage() {
               )}
               {upcoming.length > 0 && (
                 <ReleaseGroup
-                  title={`Upcoming (${range === 'today' ? 'today' : range === 'week' ? 'this week' : range === '2w' ? 'next 2 weeks' : 'next 4 weeks'})`}
+                  title={`Upcoming (${range === 'today' ? 'today' : range === 'week' ? 'this week' : range === 'nextweek' ? 'next week' : range === '2w' ? 'next 2 weeks' : 'next 4 weeks'})`}
                   releases={upcoming}
                   view={view}
                   person={person}
@@ -624,15 +676,53 @@ function PeopleGroupView({
     return next
   })
 
+  // Release filter chips — multi-select with OR semantics (same as TicketsTable)
+  const [selectedReleases, setSelectedReleases] = useState<Set<string>>(new Set())
+  const toggleRelease = (version: string) => {
+    setSelectedReleases(prev => {
+      const next = new Set(prev)
+      if (next.has(version)) next.delete(version)
+      else next.add(version)
+      return next
+    })
+  }
+
+  // All non-shipped releases for the chip bar
+  const releaseChips = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    const seen = new Map<string, { version: string; jiraReleaseDate: string | null; isOverdue: boolean }>()
+    for (const r of releases) {
+      if (r.state === 'done') continue
+      if (!seen.has(r.version)) {
+        seen.set(r.version, {
+          version: r.version,
+          jiraReleaseDate: r.jiraReleaseDate || null,
+          isOverdue: !!(r.jiraReleaseDate && r.jiraReleaseDate < today),
+        })
+      }
+    }
+    return Array.from(seen.values()).sort((a, b) => {
+      const aDate = a.jiraReleaseDate || 'zzzz'
+      const bDate = b.jiraReleaseDate || 'zzzz'
+      return aDate.localeCompare(bDate)
+    })
+  }, [releases])
+
+  // Filter releases by selected chips
+  const filteredReleases = useMemo(() => {
+    if (selectedReleases.size === 0) return releases
+    return releases.filter(r => selectedReleases.has(r.version))
+  }, [releases, selectedReleases])
+
   // Determine which assignee field to group by based on role view
   const assigneeField = view === 'qa' ? 'qaAssignee' : 'assignee'
 
-  // Build person groups from releases
+  // Build person groups from filtered releases
   const groups = useMemo(() => {
     const map = new Map<string, PersonGroup>()
     const doneStatuses = new Set(STATUS_GROUPS.find(g => g.key === 'done')?.statuses || [])
 
-    for (const r of releases) {
+    for (const r of filteredReleases) {
       for (const t of (r.tickets || [])) {
         const name = (t as any)[assigneeField] || 'Not Assigned'
         if (!map.has(name)) map.set(name, { name, tickets: [], statusCounts: {} })
@@ -651,25 +741,70 @@ function PeopleGroupView({
       const bNotDone = b.tickets.filter(t => !doneStatuses.has(t.jiraStatus || '')).length
       return bNotDone - aNotDone
     })
-  }, [releases, assigneeField])
+  }, [filteredReleases, assigneeField])
 
-  if (groups.length === 0) {
+  if (groups.length === 0 && releaseChips.length === 0) {
     return <div className="text-sm text-muted-foreground py-8 text-center italic">No assignees found</div>
   }
 
   return (
-    <div className="space-y-2">
-      {groups.map(group => (
-        <PersonPanel
-          key={group.name}
-          group={group}
-          view={view}
-          navigate={navigate}
-          isCollapsed={collapsed.has(group.name)}
-          onToggle={() => toggle(group.name)}
-          onClickPr={onClickPr}
-        />
-      ))}
+    <div className="space-y-3">
+      {/* Release filter chips */}
+      {releaseChips.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+          {releaseChips.map(c => {
+            const isSelected = selectedReleases.has(c.version)
+            return (
+              <button
+                key={c.version}
+                type="button"
+                onClick={() => toggleRelease(c.version)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs transition-colors font-mono',
+                  isSelected
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : c.isOverdue
+                      ? 'bg-red-500/10 text-red-400 border-red-500/40 hover:bg-red-500/20'
+                      : 'bg-muted/30 border-muted hover:bg-accent/50'
+                )}
+                title={c.jiraReleaseDate ? `${c.version} — ${c.jiraReleaseDate}${c.isOverdue ? ' (OVERDUE)' : ''}` : c.version}
+              >
+                <span>{c.version}</span>
+                {c.jiraReleaseDate && (
+                  <span className="text-[10px] opacity-70">{c.jiraReleaseDate.slice(5)}</span>
+                )}
+              </button>
+            )
+          })}
+          {selectedReleases.size > 0 && (
+            <button
+              type="button"
+              onClick={() => setSelectedReleases(new Set())}
+              className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-accent/50"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+
+      {groups.length === 0 ? (
+        <div className="text-sm text-muted-foreground py-8 text-center italic">No assignees match the selected releases</div>
+      ) : (
+        <div className="space-y-2">
+          {groups.map(group => (
+            <PersonPanel
+              key={group.name}
+              group={group}
+              view={view}
+              navigate={navigate}
+              isCollapsed={collapsed.has(group.name)}
+              onToggle={() => toggle(group.name)}
+              onClickPr={onClickPr}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -956,6 +1091,23 @@ function ReleasePanel({
 
         {/* Zoho badge */}
         <ZohoImpactBadge count={r.zohoTicketCount} />
+
+        {/* Delivery forecast */}
+        {r.forecast && r.forecast.total > 0 && r.state !== 'done' && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            <HomeForecastBadge risk={r.forecast.risk} />
+            {r.forecast.velocity.actual > 0 && r.forecast.velocity.required !== null && (
+              <span className="text-[10px] text-muted-foreground">
+                {r.forecast.velocity.actual}/{r.forecast.velocity.required}/day
+              </span>
+            )}
+            {r.forecast.projectedDate && (
+              <span className="text-[10px] text-muted-foreground">
+                Est: {r.forecast.projectedDate.slice(5)}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Ticket count — right aligned */}
         <span className="ml-auto text-xs text-muted-foreground shrink-0">
@@ -1250,35 +1402,13 @@ function CustomerGroupedView({ releases }: { releases: HomeRelease[] }) {
 
 /**
  * Extract the "next release" — the earliest non-shipped release for a ticket.
- * Releases come pre-sorted from /api/tickets/home (overdue first, then upcoming, shipped last).
+ * Releases come pre-sorted (overdue first, then upcoming, shipped last) — derived
+ * client-side from /api/releases/home data.
  */
-function getNextRelease(ticket: TicketRowData): TicketRowData['releases'][number] | null {
-  for (const r of (ticket.releases || [])) {
-    if (!r.isShipped) return r
-  }
-  return null
-}
-
-// Numeric ordering for JIRA priority/customer-priority enums.
-// Lower number = more urgent, so ascending sort puts urgent first.
-const PRIORITY_ORDER: Record<string, number> = {
-  'urgent': 0, 'highest': 1, 'high': 2, 'medium': 3, 'low': 4, 'lowest': 5,
-  'internal only': 6,
-}
-function priorityOrdinal(value: string | null | undefined): number | null {
-  if (!value) return null
-  return PRIORITY_ORDER[value.toLowerCase()] ?? 99
-}
-// Risk Level field comes through as "1 - Low Risk", "2 - Medium Risk", "3 - High Risk".
-// Higher number = riskier, so DESC puts high risk first.
-function riskOrdinal(value: string | null | undefined): number | null {
-  if (!value) return null
-  const m = value.match(/^(\d+)/)
-  return m ? parseInt(m[1], 10) : null
-}
+// getNextRelease, priorityOrdinal, riskOrdinal — imported from ../../components/TicketRow
 
 function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
-  type TicketSortKey = 'key' | 'summary' | 'status' | 'priority' | 'risk' | 'customerPriority' | 'assignee' | 'qa' | 'deployed' | 'nextRelease' | 'nextDate' | 'releases'
+  type TicketSortKey = 'key' | 'summary' | 'status' | 'health' | 'priority' | 'risk' | 'customerPriority' | 'assignee' | 'qa' | 'deployed' | 'nextRelease' | 'nextDate' | 'releases'
   // Default: earliest release date first
   const [sortState, onSort] = useSortState<TicketSortKey>('nextDate', 'asc')
 
@@ -1320,10 +1450,16 @@ function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
     return tickets.filter(t => (t.releases || []).some(r => selectedReleases.has(r.version)))
   }, [tickets, selectedReleases])
 
+  const HEALTH_SORT_PRIORITY: Record<string, number> = { attention: 0, 'in-dev': 1, 'awaiting-cp': 2, 'in-qa': 3, done: 4 }
+  const worstHealthOrdinal = (t: TicketRowData): number => {
+    if (!t.truth || t.truth.length === 0) return 99
+    return t.truth.reduce((w, e) => Math.min(w, HEALTH_SORT_PRIORITY[e.healthCategory] ?? 5), 99)
+  }
   const accessors = useMemo(() => ({
     key:              (t: TicketRowData) => t.key,
     summary:          (t: TicketRowData) => t.summary,
     status:           (t: TicketRowData) => t.jiraStatus,
+    health:           (t: TicketRowData) => worstHealthOrdinal(t),
     priority:         (t: TicketRowData) => priorityOrdinal(t.priority),
     risk:             (t: TicketRowData) => riskOrdinal(t.riskLevel),
     customerPriority: (t: TicketRowData) => priorityOrdinal(t.customerPriority),
@@ -1385,6 +1521,7 @@ function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
                 <col className="w-28" />
                 <col />{/* summary */}
                 <col className="w-40" />
+                <col className="w-20" />{/* health */}
                 <col className="w-20" />{/* priority */}
                 <col className="w-24" />{/* risk */}
                 <col className="w-28" />{/* customer priority */}
@@ -1400,6 +1537,7 @@ function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
                   <SortableHeader label="Key"          sortKey="key"              state={sortState} onSort={k => onSort(k as TicketSortKey)} />
                   <SortableHeader label="Summary"      sortKey="summary"          state={sortState} onSort={k => onSort(k as TicketSortKey)} />
                   <SortableHeader label="Status"       sortKey="status"           state={sortState} onSort={k => onSort(k as TicketSortKey)} />
+                  <SortableHeader label="Health"       sortKey="health"           state={sortState} onSort={k => onSort(k as TicketSortKey)} />
                   <SortableHeader label="Priority"     sortKey="priority"         state={sortState} onSort={k => onSort(k as TicketSortKey)} />
                   <SortableHeader label="Risk"         sortKey="risk"             state={sortState} onSort={k => onSort(k as TicketSortKey)} />
                   <SortableHeader label="Cust Prio"    sortKey="customerPriority" state={sortState} onSort={k => onSort(k as TicketSortKey)} className="hidden md:table-cell" title="Primary Customer Priority" />
@@ -1426,7 +1564,7 @@ function TicketsTable({ tickets }: { tickets: TicketRowData[] }) {
 
 // HomeTicketRow — wraps TicketRow but injects a Next Release column.
 // Inlined here (not in shared TicketRow) because the column relies on
-// /api/tickets/home enrichment fields that the /tickets page doesn't carry.
+// release membership enrichment that the /tickets page doesn't carry.
 function HomeTicketRow({ ticket: t, onReleaseClick }: {
   ticket: TicketRowData
   onReleaseClick: (version: string) => void
@@ -1444,6 +1582,7 @@ function HomeTicketRow({ ticket: t, onReleaseClick }: {
       <td className="px-3 py-2 align-top">
         <span className="text-xs">{t.jiraStatus}</span>
       </td>
+      <td className="px-3 py-2 align-top"><HealthBadge truth={t.truth} /></td>
       <td className="px-3 py-2 align-top"><PriorityBadge value={t.priority} /></td>
       <td className="px-3 py-2 align-top"><RiskBadge value={t.riskLevel} /></td>
       <td className="px-3 py-2 align-top hidden md:table-cell"><PriorityBadge value={t.customerPriority} /></td>
@@ -1460,7 +1599,7 @@ function HomeTicketRow({ ticket: t, onReleaseClick }: {
         </span>
       </td>
       <td className="px-3 py-2 align-top hidden md:table-cell">
-        <NextReleaseCellDeployed envs={t.deployedEnvironments} jiraStatus={t.jiraStatus} />
+        <SharedDeployedCell envs={t.deployedEnvironments} jiraStatus={t.jiraStatus} />
       </td>
       <td className="px-3 py-2 align-top">
         <NextReleaseVersionCell next={next} onClick={onReleaseClick} />
@@ -1483,86 +1622,7 @@ function HomeTicketRow({ ticket: t, onReleaseClick }: {
   )
 }
 
-function NextReleaseVersionCell({ next, onClick }: {
-  next: TicketRowData['releases'][number] | null
-  onClick: (version: string) => void
-}) {
-  if (!next) return <span className="text-xs text-muted-foreground italic">—</span>
-  const isOverdue = next.isOverdue
-  return (
-    <button
-      type="button"
-      onClick={() => onClick(next.version)}
-      className={cn(
-        'inline-flex items-center px-2 py-0.5 rounded text-xs font-mono border cursor-pointer transition-colors',
-        isOverdue
-          ? 'bg-red-500/10 text-red-400 border-red-500/40 hover:bg-red-500/20'
-          : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/40 hover:bg-yellow-500/20'
-      )}
-      title={`${next.version}${next.jiraReleaseDate ? ' — ' + next.jiraReleaseDate : ''}${isOverdue ? ' (OVERDUE)' : ''} · click to filter`}
-    >
-      {next.version}
-    </button>
-  )
-}
-
-function PriorityBadge({ value }: { value: string | null | undefined }) {
-  if (!value) return <span className="text-xs text-muted-foreground italic">—</span>
-  const v = value.toLowerCase()
-  const style =
-    v === 'urgent' || v === 'highest'
-      ? 'bg-red-500/15 text-red-400 border-red-500/40'
-      : v === 'high'
-        ? 'bg-orange-500/15 text-orange-400 border-orange-500/40'
-        : v === 'medium'
-          ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/40'
-          : v === 'low' || v === 'lowest'
-            ? 'bg-muted/30 text-muted-foreground border-muted'
-            : 'bg-blue-500/10 text-blue-400 border-blue-500/30' // "Internal Only" etc.
-  return (
-    <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border whitespace-nowrap', style)} title={value}>
-      {value}
-    </span>
-  )
-}
-
-function RiskBadge({ value }: { value: string | null | undefined }) {
-  if (!value) return <span className="text-xs text-muted-foreground italic">—</span>
-  // "1 - Low Risk" / "2 - Medium Risk" / "3 - High Risk"
-  const m = value.match(/^(\d+)/)
-  const level = m ? parseInt(m[1], 10) : null
-  const label = value.replace(/^\d+\s*-\s*/, '') // strip leading "1 - "
-  const style =
-    level === 3
-      ? 'bg-red-500/15 text-red-400 border-red-500/40'
-      : level === 2
-        ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/40'
-        : level === 1
-          ? 'bg-green-500/10 text-green-400 border-green-500/30'
-          : 'bg-muted/30 text-muted-foreground border-muted'
-  return (
-    <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border whitespace-nowrap', style)} title={value}>
-      {label}
-    </span>
-  )
-}
-
-function NextReleaseDateCell({ next }: { next: TicketRowData['releases'][number] | null }) {
-  if (!next || !next.jiraReleaseDate) {
-    return <span className="text-xs text-muted-foreground italic">—</span>
-  }
-  return (
-    <span className={cn('text-xs whitespace-nowrap', next.isOverdue && 'text-red-400 font-medium')}>
-      {next.jiraReleaseDate}
-    </span>
-  )
-}
-
-// Reuse the existing TicketDeployedCell rendering by importing the shared one
-// (renamed locally so we don't shadow the symbol).
-function NextReleaseCellDeployed(props: { envs: string[]; jiraStatus: string }) {
-  return <SharedDeployedCell {...props} />
-}
+// PriorityBadge, RiskBadge, NextReleaseVersionCell, NextReleaseDateCell — imported from ../../components/TicketRow
 
 // ── OOO release-risk banner ──────────────────────────────
 // Renders a red banner when any release due today/tomorrow has an assignee
@@ -1613,5 +1673,23 @@ function OooReleaseRiskBanner({ releases }: { releases: HomeRelease[] }) {
         </div>
       </div>
     </div>
+  )
+}
+
+// ── Delivery forecast risk badge ──────────────────────────
+
+function HomeForecastBadge({ risk }: { risk: string }) {
+  const config: Record<string, { label: string; cls: string }> = {
+    low:      { label: 'LOW',  cls: 'bg-green-500/20 text-green-400 border-green-500/30' },
+    medium:   { label: 'MED',  cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+    high:     { label: 'HIGH', cls: 'bg-red-500/20 text-red-400 border-red-500/30' },
+    critical: { label: 'CRIT', cls: 'bg-red-500/30 text-red-300 border-red-500/50' },
+    unknown:  { label: '?',    cls: 'bg-muted text-muted-foreground border-border' },
+  }
+  const c = config[risk] || config.unknown
+  return (
+    <span className={cn('text-[10px] px-1.5 py-0.5 rounded border font-semibold', c.cls)}>
+      {c.label}
+    </span>
   )
 }

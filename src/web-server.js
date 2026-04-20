@@ -46,6 +46,16 @@ peopleDirectory.load();
 const Availability = require('./core/availability');
 const availability = new Availability();
 
+// ── Data stores (read from SQLite, written by sync worker) ──
+const TicketStore = require('./core/ticket-store');
+const ticketStore = new TicketStore();
+log.info(`[web] Ticket store: ${ticketStore.count()} tickets`);
+releases.setTicketStore(ticketStore);
+
+const PrStore = require('./core/pr-store');
+const prStore = new PrStore();
+log.info(`[web] PR store: ${prStore.count()} PRs`);
+
 // ── Lightweight integrations (no sync engines) ─────────────
 const JiraClient = require('./integrations/jira');
 const jira = new JiraClient();
@@ -214,6 +224,7 @@ const services = {
   aws, pipelineSync: pipelineSyncStub,
   releaseNotifier,
   peopleDirectory, notificationSettings, notificationEngine, availability,
+  ticketStore, prStore,
 };
 
 const webServer = createWebServer(services, config);
@@ -239,7 +250,7 @@ setInterval(() => {
       lastReleasesAt = relAt;
       releases._loadState();
       if (webServer.broadcast) {
-        webServer.broadcast({ type: 'jira:sync-completed', releases: releases.list() });
+        webServer.broadcast({ type: 'jira:sync-completed', releases: releases.list().map(r => ({ ...r, tickets: releases.getTickets(r) })) });
       }
     }
 
@@ -258,7 +269,7 @@ setInterval(() => {
     if (buildsAt && buildsAt !== lastBuildsAt) {
       lastBuildsAt = buildsAt;
       if (webServer.broadcast) {
-        webServer.broadcast({ type: 'pipeline:sync-completed', releases: releases.list() });
+        webServer.broadcast({ type: 'pipeline:sync-completed', releases: releases.list().map(r => ({ ...r, tickets: releases.getTickets(r) })) });
       }
     }
   } catch (err) {

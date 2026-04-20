@@ -338,7 +338,7 @@ function migrateReleases(db, baseDir) {
         cutFrom: r.cutFrom ?? null,
         cutAt: r.cutAt ?? null,
         cutBy: r.cutBy ?? null,
-        tickets: JSON.stringify(r.tickets || []),
+        tickets: '[]',  // Tickets now live in jira_tickets table
         cherryPicks: JSON.stringify(r.cherryPicks || []),
         ci: JSON.stringify(r.ci || {}),
         risk: JSON.stringify(r.risk || {}),

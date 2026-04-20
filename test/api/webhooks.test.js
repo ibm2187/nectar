@@ -7,7 +7,7 @@ const Audit = require('../../src/core/audit');
 const ReleaseManager = require('../../src/core/release');
 const createWebhookRoutes = require('../../src/api/webhooks');
 const { createTestDb } = require('../../src/core/db');
-
+const TicketStore = require('../../src/core/ticket-store');
 async function request(app, method, path, body, headers = {}) {
   return new Promise((resolve, reject) => {
     const server = http.createServer(app);
@@ -48,6 +48,7 @@ describe('Webhook Routes', () => {
     const db = createTestDb();
     audit = new Audit({ db });
     releases = new ReleaseManager(audit, { db });
+    releases.setTicketStore(new TicketStore({ db }));
     const github = {
       isConfigured: () => true,
       cherryPickLabel: 'cherry-pick',
