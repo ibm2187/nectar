@@ -27,10 +27,11 @@ sudo -u ubuntu git fetch origin
 
 # Discard any runtime-generated files that dirty the worktree
 # (e.g. cache files written by the app). Without this, --ff-only
-# aborts and auto-updates silently stop.
+# aborts and auto-updates silently stop. These are regenerated at
+# startup so nothing of value is lost.
 if ! sudo -u ubuntu git diff --quiet 2>/dev/null; then
-  log "Stashing dirty worktree..."
-  sudo -u ubuntu git stash --quiet
+  log "Resetting dirty worktree..."
+  sudo -u ubuntu git checkout -- .
 fi
 
 log "Pulling..."
