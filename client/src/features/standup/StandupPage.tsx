@@ -5,6 +5,7 @@ import { Card, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
 import { cn } from '../../lib/utils'
 import { JiraLink } from '../../components/JiraLink'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog'
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -422,9 +423,14 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
               </Badge>
             )}
           </div>
-          <span className="text-xs text-muted-foreground">
-            {filteredTotal} item{filteredTotal !== 1 ? 's' : ''}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">
+              {filteredTotal} item{filteredTotal !== 1 ? 's' : ''}
+            </span>
+            {person.totalItems > 0 && (
+              <SendReminderButton personName={person.name} />
+            )}
+          </div>
         </div>
 
         {/* Release filters */}
@@ -639,5 +645,133 @@ function PrRow({ pr }: { pr: StandupPrItem }) {
         {pr.prAuthor && <>by @{pr.prAuthor}</>}
       </td>
     </tr>
+  )
+}
+
+// ── Send Reminder button + dialog ─────────────────────────
+
+const REMINDER_CANNED = [
+  { id: 'standup-list', label: 'Send ticket list',           text: 'Here are your current tickets — please review.' },
+  { id: 'cherry-pick',  label: 'Cherry-pick request',       text: 'Can you cherry-pick your changes?' },
+  { id: 'status',       label: 'Status update request',     text: 'Can you provide a status update?' },
+  { id: 'blocker',      label: 'Release blocker',           text: 'You have items blocking the release — please prioritize.' },
+  { id: 'custom',       label: 'Custom message',            text: '' },
+]
+
+function SendReminderButton({ personName }: { personName: string }) {
+  const [open, setOpen] = useState(false)
+  const [selectedCanned, setSelectedCanned] = useState('standup-list')
+  const [messageText, setMessageText] = useState(REMINDER_CANNED[0].text)
+  const [sending, setSending] = useState(false)
+  const [result, setResult] = useState<{ sent: boolean; error?: string } | null>(null)
+
+  useEffect(() => {
+    if (open) { setResult(null); setSending(false) }
+  }, [open])
+
+  const handleCannedChange = (id: string) => {
+    setSelectedCanned(id)
+    const msg = REMINDER_CANNED.find(m => m.id === id)
+    if (msg) setMessageText(msg.text)
+  }
+
+  const handleSend = async () => {
+    if (sending) return
+    setSending(true)
+    try {
+      const res = await apiFetch<{ sent: boolean; error?: string }>('/notify/standup', {
+        method: 'POST',
+        body: JSON.stringify({
+          personName,
+          message: messageText.trim() || undefined,
+        }),
+      })
+      setResult(res)
+    } catch (err) {
+      setResult({ sent: false, error: (err as Error).message })
+    }
+    setSending(false)
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="text-xs text-muted-foreground hover:text-foreground px-2 py-0.5 rounded border border-border hover:border-foreground/30 transition-colors"
+        title={`Send reminder to ${personName}`}
+      >
+        ✉ Remind
+      </button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send reminder to {personName}</DialogTitle>
+          </DialogHeader>
+
+          {result ? (
+            <div className="space-y-3 py-2">
+              {result.sent ? (
+                <div className="flex items-center gap-2 text-green-400">
+                  <span className="text-lg">✓</span>
+                  <span>Reminder sent to {personName}</span>
+                </div>
+              ) : (
+                <div className="text-red-400">
+                  Failed to send{result.error && `: ${result.error}`}
+                </div>
+              )}
+              <DialogFooter>
+                <button onClick={() => setOpen(false)} className="px-4 py-2 rounded-md text-sm font-medium bg-muted hover:bg-accent">
+                  Close
+                </button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <div className="space-y-4 py-2">
+              <p className="text-sm text-muted-foreground">
+                This will DM {personName} their full ticket list (like the daily digest) with your message.
+              </p>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Message</label>
+                <select
+                  value={selectedCanned}
+                  onChange={e => handleCannedChange(e.target.value)}
+                  className="w-full h-8 px-2 text-sm rounded-md border bg-background text-foreground"
+                >
+                  {REMINDER_CANNED.map(m => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </select>
+                <textarea
+                  value={messageText}
+                  onChange={e => setMessageText(e.target.value)}
+                  rows={3}
+                  className="w-full px-3 py-2 text-sm rounded-md border bg-background text-foreground resize-none"
+                  placeholder="Type your message (optional)..."
+                />
+              </div>
+
+              <DialogFooter>
+                <button onClick={() => setOpen(false)} className="px-4 py-2 rounded-md text-sm font-medium bg-muted hover:bg-accent">
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSend}
+                  disabled={sending}
+                  className={cn(
+                    'px-4 py-2 rounded-md text-sm font-medium transition-colors',
+                    !sending ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted text-muted-foreground/40 cursor-not-allowed'
+                  )}
+                >
+                  {sending ? 'Sending...' : 'Send Reminder'}
+                </button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

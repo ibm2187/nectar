@@ -15,6 +15,7 @@ import { CompareSelector } from './CompareSelector'
 import type { CompareTarget } from './CompareSelector'
 import { SavedViews } from '../../components/SavedViews'
 import { PrDetailPanel, isCodeStatus, type PrInfo } from '../../components/PrDetailPanel'
+import { NotifyDialog } from '../../components/NotifyDialog'
 import { STATUS_GROUPS, getStatusBadgeColor, displayAssignee, type StatusGroup } from '../../lib/status-colors'
 
 interface Props {
@@ -146,6 +147,9 @@ export function TruthView({ repo, version, prsByJiraKey: prsByJiraKeyProp = {}, 
   const [computing, setComputing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [prPanel, setPrPanel] = useState<{ jiraKey: string; summary: string; prs: PrInfo[] } | null>(null)
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
+  const [notifyOpen, setNotifyOpen] = useState(false)
+  const [notifySingleTicket, setNotifySingleTicket] = useState<VerifiedTicket | null>(null)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Poll for truth result — triggers background computation, then polls until ready
@@ -525,6 +529,7 @@ export function TruthView({ repo, version, prsByJiraKey: prsByJiraKeyProp = {}, 
           <div className="overflow-x-auto">
             <table className="w-full text-sm table-fixed">
               <colgroup>
+                <col className="w-8" />{/* checkbox */}
                 <col className="w-28" />
                 <col />{/* title takes remaining */}
                 <col className="w-44" />
@@ -539,6 +544,17 @@ export function TruthView({ repo, version, prsByJiraKey: prsByJiraKeyProp = {}, 
               </colgroup>
               <thead className="sticky top-0 bg-background z-10">
                 <tr className="border-b text-left">
+                  <th className="px-1 py-2">
+                    <input
+                      type="checkbox"
+                      checked={sorted.length > 0 && selectedKeys.size === sorted.length}
+                      onChange={e => {
+                        if (e.target.checked) setSelectedKeys(new Set(sorted.map(t => t.key)))
+                        else setSelectedKeys(new Set())
+                      }}
+                      className="rounded border-border"
+                    />
+                  </th>
                   <SortableHeader label="Key"         sortKey="key"        state={sortState} onSort={k => setSort(k as SortKey)} />
                   <SortableHeader label="Title"       sortKey="title"      state={sortState} onSort={k => setSort(k as SortKey)} />
                   <SortableHeader label="JIRA Status" sortKey="jiraStatus" state={sortState} onSort={k => setSort(k as SortKey)} />
@@ -555,18 +571,51 @@ export function TruthView({ repo, version, prsByJiraKey: prsByJiraKeyProp = {}, 
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="px-3 py-8 text-center text-sm text-muted-foreground italic">
+                    <td colSpan={12} className="px-3 py-8 text-center text-sm text-muted-foreground italic">
                       No tickets match the current filter
                     </td>
                   </tr>
                 ) : (
-                  sorted.map(t => <TicketRow key={t.key} ticket={t} prs={prsByJiraKey[t.key] || []} build={buildByJiraKey[t.key] || null} version={version} onClickPr={(prs) => setPrPanel({ jiraKey: t.key, summary: t.summary, prs })} />)
+                  sorted.map(t => <TicketRow key={t.key} ticket={t} prs={prsByJiraKey[t.key] || []} build={buildByJiraKey[t.key] || null} version={version} onClickPr={(prs) => setPrPanel({ jiraKey: t.key, summary: t.summary, prs })} selected={selectedKeys.has(t.key)} onSelect={(checked) => { const next = new Set(selectedKeys); if (checked) next.add(t.key); else next.delete(t.key); setSelectedKeys(next) }} onNotify={() => { setNotifySingleTicket(t); setNotifyOpen(true) }} />)
                 )}
               </tbody>
             </table>
           </div>
         </CardContent>
       </Card>
+
+      {/* Floating action bar for selected tickets */}
+      {selectedKeys.size > 0 && (
+        <div className="sticky bottom-4 z-20 flex justify-center">
+          <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg border bg-card shadow-lg">
+            <span className="text-sm font-medium">{selectedKeys.size} selected</span>
+            <button
+              onClick={() => { setNotifySingleTicket(null); setNotifyOpen(true) }}
+              className="px-3 py-1.5 rounded-md text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              Notify
+            </button>
+            <button
+              onClick={() => setSelectedKeys(new Set())}
+              className="px-3 py-1.5 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Notify dialog */}
+      <NotifyDialog
+        open={notifyOpen}
+        onClose={() => { setNotifyOpen(false); setNotifySingleTicket(null) }}
+        tickets={
+          notifySingleTicket
+            ? [{ key: notifySingleTicket.key, summary: notifySingleTicket.summary, assignee: notifySingleTicket.assignee, qaAssignee: notifySingleTicket.qaAssignee, jiraStatus: notifySingleTicket.jiraStatus }]
+            : sorted.filter(t => selectedKeys.has(t.key)).map(t => ({ key: t.key, summary: t.summary, assignee: t.assignee, qaAssignee: t.qaAssignee, jiraStatus: t.jiraStatus }))
+        }
+        version={version}
+      />
 
       {/* Rogue commits */}
       {activeRogues.length > 0 && (
@@ -680,18 +729,19 @@ export function TruthView({ repo, version, prsByJiraKey: prsByJiraKeyProp = {}, 
   )
 }
 
-function TicketRow({ ticket: t, prs, build, version, onClickPr }: { ticket: VerifiedTicket; prs: PrInfo[]; build: { buildNumber: number; status: string; startTime: string; branch: string } | null; version: string; onClickPr: (prs: PrInfo[]) => void }) {
+function TicketRow({ ticket: t, prs, build, version, onClickPr, selected, onSelect, onNotify }: { ticket: VerifiedTicket; prs: PrInfo[]; build: { buildNumber: number; status: string; startTime: string; branch: string } | null; version: string; onClickPr: (prs: PrInfo[]) => void; selected: boolean; onSelect: (checked: boolean) => void; onNotify: () => void }) {
   const info = HEALTH_INFO[t.health]
-  // A ticket is a "missing plan" for this release if it appears in Target FixVersion
-  // but NOT in the canonical fixVersions — meaning the plan says it should ship here,
-  // but no cherry-pick has landed to prove it will.
   const isPlannedOnly = t.inTarget === true && t.inFixVersion === false
   const isUnplannedAdd = t.inTarget === false && t.inFixVersion === true
   return (
     <tr className={cn(
-      "border-b border-border/30 hover:bg-accent/30 transition-colors",
+      "border-b border-border/30 hover:bg-accent/30 transition-colors group",
       isPlannedOnly && "bg-yellow-500/[0.03]"
     )}>
+      {/* Checkbox */}
+      <td className="px-1 py-2 align-top text-center">
+        <input type="checkbox" checked={selected} onChange={e => onSelect(e.target.checked)} className="rounded border-border" />
+      </td>
       {/* Key */}
       <td className="px-3 py-2 align-top">
         <div className="flex flex-col gap-1">
@@ -838,7 +888,7 @@ function TicketRow({ ticket: t, prs, build, version, onClickPr }: { ticket: Veri
       </td>
 
       {/* Health */}
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-2 align-top relative">
         <div
           className={cn("inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border", info.color)}
           title={t.healthMessage}
@@ -848,6 +898,13 @@ function TicketRow({ ticket: t, prs, build, version, onClickPr }: { ticket: Veri
         <div className="text-xs text-muted-foreground mt-0.5 truncate" title={t.healthMessage}>
           {t.healthMessage}
         </div>
+        <button
+          onClick={onNotify}
+          className="absolute top-2 right-1 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+          title="Notify about this ticket"
+        >
+          <span className="text-xs">✉</span>
+        </button>
       </td>
     </tr>
   )

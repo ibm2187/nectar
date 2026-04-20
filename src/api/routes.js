@@ -8,6 +8,7 @@ const ReleaseManager = require('../core/release');
 const { annotateReleases } = require('../core/release-status');
 const { aggregateFeatureFlags, aggregateIntegrations } = require('../core/feature-aggregator');
 const { buildStandupData } = require('./standup');
+const { sendTicketNotification, sendStandupReminder, CANNED_MESSAGES } = require('./ticket-notify');
 
 /** Wrap async route handlers so rejected promises become proper error responses */
 const asyncHandler = (fn) => (req, res, next) => {
@@ -416,6 +417,71 @@ module.exports = function createRoutes(services, config) {
     _standupCache = { data, expiresAt: Date.now() + 30_000, key: cacheKey };
     res.json(data);
   });
+
+  // ── Ticket Notifications ──────────────────────────────────
+  // Canned messages for the notify dialog
+  router.get('/notify/canned-messages', (req, res) => {
+    res.json(CANNED_MESSAGES);
+  });
+
+  // Send notification about specific tickets
+  router.post('/notify/tickets', asyncHandler(async (req, res) => {
+    const { ticketKeys, recipientType, channel, message, version, senderName } = req.body;
+    if (!ticketKeys || !Array.isArray(ticketKeys) || ticketKeys.length === 0) {
+      return res.status(400).json({ error: 'ticketKeys required (array of JIRA keys)' });
+    }
+    if (!['dev', 'qa', 'both'].includes(recipientType)) {
+      return res.status(400).json({ error: 'recipientType must be dev, qa, or both' });
+    }
+    if (!['dm', 'release'].includes(channel)) {
+      return res.status(400).json({ error: 'channel must be dm or release' });
+    }
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: 'message required' });
+    }
+    const notifyServices = {
+      slack: services.slack,
+      releases,
+      peopleDirectory: services.peopleDirectory,
+      ticketStore,
+    };
+    const result = await sendTicketNotification(
+      { ticketKeys, recipientType, channel, message: message.trim(), version, senderName },
+      notifyServices
+    );
+    res.json(result);
+  }));
+
+  // Send standup reminder to a specific person
+  router.post('/notify/standup', asyncHandler(async (req, res) => {
+    const { personName, message, senderName } = req.body;
+    if (!personName) {
+      return res.status(400).json({ error: 'personName required' });
+    }
+    // Build standup data to get this person's buckets
+    const standupServices = {
+      releases,
+      ticketStore,
+      prStore,
+      availability: services.availability,
+      peopleDirectory: services.peopleDirectory,
+    };
+    const standupData = buildStandupData(standupServices);
+    const person = standupData.people.find(p => p.name === personName);
+    if (!person) {
+      return res.status(404).json({ error: `Person not found: ${personName}` });
+    }
+    const notifyServices = {
+      slack: services.slack,
+      peopleDirectory: services.peopleDirectory,
+    };
+    const result = await sendStandupReminder(
+      { personName, message, senderName },
+      person,
+      notifyServices
+    );
+    res.json(result);
+  }));
 
   router.get('/releases/:version', (req, res) => {
     const release = releases.get(req.params.version);
