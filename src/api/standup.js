@@ -217,22 +217,32 @@ function buildStandupData(services, opts = {}) {
       buckets.reviewApproved.length * URGENCY_WEIGHTS.reviewApproved +
       buckets.inDev.length * URGENCY_WEIGHTS.inDev;
 
-    const totalItems = Object.values(buckets).reduce((sum, b) => sum + b.length, 0);
+    // Count unique tickets (not double-counted across roles or release-critical duplication)
+    const uniqueTicketKeys = new Set();
+    for (const bucketKey of ['awaitingCherryPick', 'blocked', 'pendingTesting', 'inDev']) {
+      for (const item of buckets[bucketKey]) uniqueTicketKeys.add(item.key);
+    }
+    // PR review items are separate (not ticket-based)
+    const totalItems = uniqueTicketKeys.size +
+      buckets.reviewChangesRequested.length +
+      buckets.reviewApproved.length;
 
     // Collect which releases this person is involved in (for filter pills)
-    const releaseSet = new Map(); // version → { version, dueDate, state, ticketCount }
-    for (const { release } of allItems) {
+    // Count unique tickets per release (not duplicated across dev/qa roles)
+    const releaseSet = new Map(); // version → { version, dueDate, state, ticketKeys: Set }
+    for (const { ticket, release } of allItems) {
       if (!releaseSet.has(release.version)) {
         releaseSet.set(release.version, {
           version: release.version,
           dueDate: release.jiraReleaseDate,
           state: release.state,
-          ticketCount: 0,
+          _keys: new Set(),
         });
       }
-      releaseSet.get(release.version).ticketCount++;
+      releaseSet.get(release.version)._keys.add(ticket.key);
     }
     const personReleases = [...releaseSet.values()]
+      .map(r => ({ version: r.version, dueDate: r.dueDate, state: r.state, ticketCount: r._keys.size }))
       .sort((a, b) => (a.dueDate || 'zzzz').localeCompare(b.dueDate || 'zzzz'));
 
     // Determine default filter: show imminent (5 biz days) if they have
