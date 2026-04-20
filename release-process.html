@@ -1,0 +1,1856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Release Train — Operations Manual</title>
+<style>
+  :root {
+    --bg: #0a0c10;
+    --surface: #12151c;
+    --surface2: #1a1e28;
+    --surface3: #222835;
+    --border: #2a2f3e;
+    --border-bright: #3a4055;
+    --text: #e2e4ed;
+    --text-muted: #7a7f94;
+    --text-dim: #555a6e;
+    --red: #ef4444;
+    --red-bg: rgba(239,68,68,0.1);
+    --red-border: rgba(239,68,68,0.25);
+    --orange: #f59e0b;
+    --orange-bg: rgba(245,158,11,0.1);
+    --orange-border: rgba(245,158,11,0.25);
+    --yellow: #eab308;
+    --yellow-bg: rgba(234,179,8,0.1);
+    --green: #22c55e;
+    --green-bg: rgba(34,197,94,0.1);
+    --green-border: rgba(34,197,94,0.25);
+    --blue: #3b82f6;
+    --blue-bg: rgba(59,130,246,0.1);
+    --blue-border: rgba(59,130,246,0.25);
+    --cyan: #06b6d4;
+    --cyan-bg: rgba(6,182,212,0.1);
+    --cyan-border: rgba(6,182,212,0.25);
+    --purple: #8b5cf6;
+    --purple-bg: rgba(139,92,246,0.1);
+    --purple-border: rgba(139,92,246,0.25);
+    --hot: #f43f5e;
+    --hot-bg: rgba(244,63,94,0.1);
+    --hot-border: rgba(244,63,94,0.25);
+    --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Display', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.55;
+  }
+
+  .shell {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    min-height: 100vh;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 24px 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+
+  .sidebar-logo {
+    padding: 0 20px 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+
+  .sidebar-logo h1 {
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .sidebar-logo .ver {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    margin-top: 2px;
+  }
+
+  .nav-group { padding: 8px 12px; }
+
+  .nav-group-title {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding: 8px 8px 4px;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    transition: all 0.15s;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+  }
+
+  .nav-item:hover { background: var(--surface2); color: var(--text); }
+  .nav-item.active { background: var(--blue-bg); color: var(--blue); font-weight: 600; }
+
+  .nav-item .nav-icon {
+    width: 18px;
+    text-align: center;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+  }
+
+  /* ── Main content ── */
+  .main {
+    padding: 40px 48px;
+    max-width: 1100px;
+  }
+
+  .section { display: none; }
+  .section.active { display: block; animation: fadeIn 0.2s ease; }
+
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+  .page-header { margin-bottom: 36px; }
+  .page-header h2 { font-size: 1.6rem; font-weight: 700; margin-bottom: 6px; }
+  .page-header p { color: var(--text-muted); font-size: 0.9rem; }
+
+  /* ── T-minus runway ── */
+  .runway { position: relative; margin: 24px 0 40px; }
+
+  .runway-track {
+    position: absolute;
+    top: 0; left: 44px; bottom: 0;
+    width: 2px;
+    background: var(--border);
+  }
+
+  .runway-node {
+    position: relative;
+    padding-left: 80px;
+    padding-bottom: 0;
+    margin-bottom: 4px;
+  }
+
+  .runway-node:last-child { margin-bottom: 0; }
+
+  .t-badge {
+    position: absolute;
+    left: 0; top: 0;
+    width: 88px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .t-label {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 3px 0;
+    width: 52px;
+    text-align: center;
+    border-radius: 4px;
+    position: relative;
+    z-index: 1;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .t-connector { width: 2px; flex: 1; min-height: 8px; }
+
+  .t-label.t-red { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-border); }
+  .t-label.t-orange { background: var(--orange-bg); color: var(--orange); border: 1px solid var(--orange-border); }
+  .t-label.t-blue { background: var(--blue-bg); color: var(--blue); border: 1px solid var(--blue-border); }
+  .t-label.t-green { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+  .t-label.t-purple { background: var(--purple-bg); color: var(--purple); border: 1px solid var(--purple-border); }
+  .t-label.t-cyan { background: var(--cyan-bg); color: var(--cyan); border: 1px solid var(--cyan-border); }
+  .t-label.t-hot { background: var(--hot-bg); color: var(--hot); border: 1px solid var(--hot-border); }
+  .t-connector.t-red { background: var(--red-border); }
+  .t-connector.t-orange { background: var(--orange-border); }
+  .t-connector.t-blue { background: var(--blue-border); }
+  .t-connector.t-green { background: var(--green-border); }
+  .t-connector.t-purple { background: var(--purple-border); }
+  .t-connector.t-cyan { background: var(--cyan-border); }
+  .t-connector.t-hot { background: var(--hot-border); }
+
+  .node-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 22px;
+    margin-left: 8px;
+  }
+
+  .node-card.highlight-red { border-color: var(--red-border); }
+  .node-card.highlight-orange { border-color: var(--orange-border); }
+  .node-card.highlight-green { border-color: var(--green-border); }
+  .node-card.highlight-blue { border-color: var(--blue-border); }
+  .node-card.highlight-purple { border-color: var(--purple-border); }
+  .node-card.highlight-cyan { border-color: var(--cyan-border); }
+  .node-card.highlight-hot { border-color: var(--hot-border); }
+
+  .node-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  .node-title { font-size: 0.95rem; font-weight: 700; }
+
+  .node-day {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+
+  .node-body { font-size: 0.82rem; color: var(--text-muted); }
+  .node-body ul { list-style: none; padding: 0; }
+
+  .node-body li {
+    padding: 3px 0;
+    padding-left: 16px;
+    position: relative;
+  }
+
+  .node-body li::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 10px;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--border-bright);
+  }
+
+  .node-owner {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-top: 8px;
+  }
+
+  .owner-pm { background: var(--purple-bg); color: var(--purple); }
+  .owner-dev { background: var(--blue-bg); color: var(--blue); }
+  .owner-qa { background: var(--green-bg); color: var(--green); }
+  .owner-rl { background: var(--orange-bg); color: var(--orange); }
+  .owner-dba { background: var(--cyan-bg); color: var(--cyan); }
+
+  .consequence {
+    background: var(--red-bg);
+    border: 1px solid var(--red-border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-top: 10px;
+    font-size: 0.78rem;
+    color: var(--red);
+    font-weight: 500;
+  }
+
+  .consequence::before {
+    content: 'MISS THIS \2192 ';
+    font-weight: 700;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+  }
+
+  /* ── Calendar strip ── */
+  .cal-strip {
+    display: grid;
+    gap: 2px;
+    margin: 20px 0 32px;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .cal-strip.five { grid-template-columns: repeat(5, 1fr); }
+
+  .cal-day {
+    background: var(--surface);
+    padding: 14px 12px;
+    text-align: center;
+    position: relative;
+  }
+
+  .cal-day .cal-dow {
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }
+
+  .cal-day .cal-t {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  .cal-day .cal-event {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .cal-day.phase-scope { border-top: 3px solid var(--purple); }
+  .cal-day.phase-scope .cal-t { color: var(--purple); }
+  .cal-day.phase-dev { border-top: 3px solid var(--blue); }
+  .cal-day.phase-dev .cal-t { color: var(--blue); }
+  .cal-day.phase-qa { border-top: 3px solid var(--orange); }
+  .cal-day.phase-qa .cal-t { color: var(--orange); }
+  .cal-day.phase-cert { border-top: 3px solid var(--green); }
+  .cal-day.phase-cert .cal-t { color: var(--green); }
+  .cal-day.phase-ship { border-top: 3px solid var(--red); }
+  .cal-day.phase-ship .cal-t { color: var(--red); }
+  .cal-day.phase-data { border-top: 3px solid var(--cyan); }
+  .cal-day.phase-data .cal-t { color: var(--cyan); }
+  .cal-day.phase-review { border-top: 3px solid var(--green); }
+  .cal-day.phase-review .cal-t { color: var(--green); }
+
+  /* ── Rules grid ── */
+  .rules-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin: 24px 0;
+  }
+
+  .rule-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+  }
+
+  .rule-card h4 {
+    font-size: 0.85rem;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .rule-card p { font-size: 0.8rem; color: var(--text-muted); }
+
+  .rule-card .rule-number {
+    width: 22px; height: 22px;
+    border-radius: 5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.7rem;
+    font-weight: 800;
+    font-family: var(--mono);
+    flex-shrink: 0;
+  }
+
+  /* ── Escalation matrix ── */
+  .esc-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    margin: 20px 0;
+    font-size: 0.82rem;
+  }
+
+  .esc-table th {
+    background: var(--surface2);
+    padding: 10px 16px;
+    text-align: left;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+  }
+
+  .esc-table th:first-child { border-radius: 8px 0 0 0; }
+  .esc-table th:last-child { border-radius: 0 8px 0 0; }
+
+  .esc-table td {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  .esc-table tr:last-child td:first-child { border-radius: 0 0 0 8px; }
+  .esc-table tr:last-child td:last-child { border-radius: 0 0 8px 0; }
+  .esc-table td:first-child { font-weight: 600; }
+
+  .severity {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    font-family: var(--mono);
+  }
+
+  .severity.s1 { background: var(--red-bg); color: var(--red); }
+  .severity.s2 { background: var(--orange-bg); color: var(--orange); }
+  .severity.s3 { background: var(--blue-bg); color: var(--blue); }
+
+  /* ── Track comparison ── */
+  .tracks-compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin: 24px 0;
+  }
+
+  .track-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .track-box-header {
+    padding: 14px 16px;
+    font-weight: 700;
+    font-size: 0.85rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .track-box-header .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+  }
+
+  .track-box-body { padding: 14px 16px; }
+  .track-box-body table { width: 100%; font-size: 0.78rem; }
+
+  .track-box-body td {
+    padding: 5px 0;
+    vertical-align: top;
+  }
+
+  .track-box-body td:first-child {
+    font-family: var(--mono);
+    font-weight: 600;
+    width: 50px;
+    color: var(--text-dim);
+    font-size: 0.72rem;
+  }
+
+  /* ── Nectar enforcement ── */
+  .enforce-list { margin: 20px 0; }
+
+  .enforce-row {
+    display: grid;
+    grid-template-columns: 200px 1fr 200px;
+    gap: 16px;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.82rem;
+    align-items: start;
+  }
+
+  .enforce-row:last-child { border-bottom: none; }
+  .enforce-signal { font-weight: 700; display: flex; align-items: center; gap: 6px; }
+  .enforce-action { color: var(--text-muted); }
+
+  .enforce-auto {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    text-align: right;
+  }
+
+  .auto-yes { color: var(--green); }
+  .auto-manual { color: var(--orange); }
+
+  /* ── Hotfix pulse ── */
+  @keyframes pulse-hot {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(244,63,94,0.3); }
+    50% { box-shadow: 0 0 12px 4px rgba(244,63,94,0.15); }
+  }
+
+  .hotfix-header-bar {
+    background: linear-gradient(135deg, var(--hot-bg), rgba(239,68,68,0.08));
+    border: 1px solid var(--hot-border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    animation: pulse-hot 3s ease infinite;
+  }
+
+  .hotfix-header-bar .hf-icon {
+    font-size: 1.4rem;
+    flex-shrink: 0;
+  }
+
+  .hotfix-header-bar .hf-text {
+    font-weight: 700;
+    color: var(--hot);
+    font-size: 0.9rem;
+  }
+
+  .hotfix-header-bar .hf-sub {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+
+  /* ── Hour markers for hotfix ── */
+  .hour-flow {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 2px;
+    margin: 20px 0;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .hour-cell {
+    background: var(--surface);
+    padding: 14px 10px;
+    text-align: center;
+  }
+
+  .hour-cell .hour-label {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+
+  .hour-cell .hour-event {
+    font-size: 0.72rem;
+    font-weight: 600;
+  }
+
+  .hour-cell .hour-owner {
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  /* ── Misc ── */
+  .divider { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+
+  .badge-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+
+  .tag {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-family: var(--mono);
+  }
+
+  .tag-hard { background: var(--red-bg); color: var(--red); }
+  .tag-soft { background: var(--orange-bg); color: var(--orange); }
+  .tag-info { background: var(--blue-bg); color: var(--blue); }
+  .tag-new { background: var(--cyan-bg); color: var(--cyan); }
+
+  .callout {
+    background: var(--surface2);
+    border-left: 3px solid var(--blue);
+    border-radius: 0 8px 8px 0;
+    padding: 14px 18px;
+    margin: 20px 0;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+
+  .callout strong { color: var(--text); }
+  .callout.callout-red { border-left-color: var(--red); }
+  .callout.callout-green { border-left-color: var(--green); }
+  .callout.callout-cyan { border-left-color: var(--cyan); }
+  .callout.callout-hot { border-left-color: var(--hot); }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <!-- ══ Sidebar ══ -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <h1>Release Ops</h1>
+      <div class="ver">v2.0 &mdash; Apr 2026</div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-title">Overview</div>
+      <button class="nav-item active" onclick="go('overview')">
+        <span class="nav-icon">&#9670;</span> Three Tracks
+      </button>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-title">Hotfix</div>
+      <button class="nav-item" onclick="go('hotfix')">
+        <span class="nav-icon" style="color:var(--hot);">&#9888;</span> Same-Day Process
+      </button>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-title">Point Release</div>
+      <button class="nav-item" onclick="go('point-calendar')">
+        <span class="nav-icon">&#9711;</span> Calendar &amp; Cutoffs
+      </button>
+      <button class="nav-item" onclick="go('point-runway')">
+        <span class="nav-icon">&#9660;</span> T-Minus Runway
+      </button>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-title">Monthly Release</div>
+      <button class="nav-item" onclick="go('monthly-calendar')">
+        <span class="nav-icon">&#9711;</span> Calendar &amp; Cutoffs
+      </button>
+      <button class="nav-item" onclick="go('monthly-runway')">
+        <span class="nav-icon">&#9660;</span> T-Minus Runway
+      </button>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-group-title">Discipline</div>
+      <button class="nav-item" onclick="go('rules')">
+        <span class="nav-icon">&#9632;</span> Hard Rules
+      </button>
+      <button class="nav-item" onclick="go('escalation')">
+        <span class="nav-icon">&#9650;</span> Escalation Matrix
+      </button>
+      <button class="nav-item" onclick="go('nectar')">
+        <span class="nav-icon">&#9733;</span> Nectar Enforcement
+      </button>
+    </div>
+  </nav>
+
+  <!-- ══ Main ══ -->
+  <div class="main">
+
+    <!-- ════════════ OVERVIEW ════════════ -->
+    <div id="overview" class="section active">
+      <div class="page-header">
+        <h2>Three Release Tracks</h2>
+        <p>Every release follows the same discipline. Only the timeline and urgency differ.</p>
+      </div>
+
+      <div class="tracks-compare">
+        <div class="track-box" style="border-top: 2px solid var(--hot);">
+          <div class="track-box-header">
+            <div class="dot" style="background:var(--hot)"></div>
+            Hotfix
+          </div>
+          <div class="track-box-body">
+            <table>
+              <tr><td style="color:var(--hot);">H+0</td><td><strong>Incident declared</strong></td></tr>
+              <tr><td>H+1h</td><td>Fix on master, PR reviewed</td></tr>
+              <tr><td>H+2h</td><td>Cherry-pick to release branch</td></tr>
+              <tr><td>H+3h</td><td>QA targeted verification</td></tr>
+              <tr><td>H+EOD</td><td>Decision: deploy tonight or next morning</td></tr>
+              <tr><td style="color:var(--hot);">H+48h</td><td><strong>RCA due</strong></td></tr>
+            </table>
+          </div>
+        </div>
+        <div class="track-box" style="border-top: 2px solid var(--orange);">
+          <div class="track-box-header">
+            <div class="dot" style="background:var(--orange)"></div>
+            Point Release &mdash; 4.x.0.y
+          </div>
+          <div class="track-box-body">
+            <table>
+              <tr><td>T-6</td><td><strong>Scope cutoff</strong> &mdash; Friday</td></tr>
+              <tr><td>T-3</td><td><strong>Dev complete</strong> + QA scope review</td></tr>
+              <tr><td>T-2</td><td>QA cycle + data migration check</td></tr>
+              <tr><td>T-1</td><td><strong>Certification</strong> &mdash; Friday EOD</td></tr>
+              <tr><td style="color:var(--red);">T-0</td><td><strong style="color:var(--red)">SHIP</strong> &mdash; Tuesday</td></tr>
+            </table>
+          </div>
+        </div>
+        <div class="track-box" style="border-top: 2px solid var(--blue);">
+          <div class="track-box-header">
+            <div class="dot" style="background:var(--blue)"></div>
+            Monthly &mdash; 4.x.0
+          </div>
+          <div class="track-box-body">
+            <table>
+              <tr><td>T-25</td><td><strong>Scope lock</strong> &mdash; Monday</td></tr>
+              <tr><td>T-13</td><td><strong>Dev complete</strong> + QA scope review</td></tr>
+              <tr><td>T-12</td><td>Branch cut &amp; code freeze</td></tr>
+              <tr><td>T-6</td><td><strong>Cherry-pick freeze</strong></td></tr>
+              <tr><td>T-2</td><td><strong>Certification</strong> + data migration</td></tr>
+              <tr><td style="color:var(--red);">T-0</td><td><strong style="color:var(--red)">SHIP</strong> &mdash; Wednesday</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout">
+        <strong>The universal constants:</strong> T-2 is always certification. Ship day always has 2+ business day runway after it. QA reviews scope at dev complete. Data migrations are locked at T-2. Hotfixes bypass the train but pay the RCA tax.
+      </div>
+
+      <hr class="divider">
+
+      <h3 style="margin-bottom:12px;font-size:0.95rem;">The Non-Negotiables</h3>
+      <div class="rules-grid">
+        <div class="rule-card">
+          <h4><span class="rule-number" style="background:var(--red-bg);color:var(--red);">1</span> Cutoffs are hard walls</h4>
+          <p>Miss a cutoff, your ticket rolls. No exceptions. No "just one more." The release ships without it.</p>
+        </div>
+        <div class="rule-card">
+          <h4><span class="rule-number" style="background:var(--orange-bg);color:var(--orange);">2</span> Master first, always</h4>
+          <p>Every fix lands on master before cherry-pick. No direct commits to release branches. Ever.</p>
+        </div>
+        <div class="rule-card">
+          <h4><span class="rule-number" style="background:var(--blue-bg);color:var(--blue);">3</span> QA reviews scope at dev complete</h4>
+          <p>QA must confirm they understand what to test, have acceptance criteria, and have estimated effort. No blind handoffs.</p>
+        </div>
+        <div class="rule-card">
+          <h4><span class="rule-number" style="background:var(--cyan-bg);color:var(--cyan);">4</span> Data migrations locked at T-2</h4>
+          <p>All migrations documented, staging-tested, rollback-planned, and DBA-approved before certification. No surprise migrations at ship time.</p>
+        </div>
+        <div class="rule-card">
+          <h4><span class="rule-number" style="background:var(--green-bg);color:var(--green);">5</span> Certification = done done done</h4>
+          <p>QA signed off + Nectar green + migrations approved + release notes final. All four. Not three of four.</p>
+        </div>
+        <div class="rule-card">
+          <h4><span class="rule-number" style="background:var(--hot-bg);color:var(--hot);">6</span> Every release requires an RCA</h4>
+          <p>Every product release (hotfix, point, monthly) requires a Root Cause Analysis. Hotfix RCA due within 48h. Same root cause triggers 2 hotfixes = P0 process issue.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════════ HOTFIX ════════════ -->
+    <div id="hotfix" class="section">
+      <div class="page-header">
+        <h2>Hotfix &mdash; Same-Day Process</h2>
+        <p>Production is on fire. This is the emergency lane. Fast, surgical, accountable.</p>
+      </div>
+
+      <div class="hotfix-header-bar">
+        <span class="hf-icon">&#x1F6A8;</span>
+        <div>
+          <div class="hf-text">HOTFIX PROTOCOL &mdash; P0/S1 Production Incidents Only</div>
+          <div class="hf-sub">This track exists for customer-impacting production issues that cannot wait for the next point release.</div>
+        </div>
+      </div>
+
+      <h3 style="font-size:0.9rem;margin-bottom:12px;">Hour-by-Hour Runway</h3>
+
+      <div class="hour-flow">
+        <div class="hour-cell" style="border-top:3px solid var(--hot);">
+          <div class="hour-label" style="color:var(--hot);">H + 0</div>
+          <div class="hour-event" style="color:var(--hot);">Incident<br>Declared</div>
+          <div class="hour-owner">Release Lead</div>
+        </div>
+        <div class="hour-cell" style="border-top:3px solid var(--blue);">
+          <div class="hour-label">H + 1h</div>
+          <div class="hour-event" style="color:var(--blue);">Fix on Master<br>PR Reviewed</div>
+          <div class="hour-owner">Dev + Reviewer</div>
+        </div>
+        <div class="hour-cell" style="border-top:3px solid var(--orange);">
+          <div class="hour-label">H + 2h</div>
+          <div class="hour-event" style="color:var(--orange);">Cherry-pick<br>to Release</div>
+          <div class="hour-owner">Dev</div>
+        </div>
+        <div class="hour-cell" style="border-top:3px solid var(--green);">
+          <div class="hour-label">H + 3h</div>
+          <div class="hour-event" style="color:var(--green);">QA Targeted<br>Verification</div>
+          <div class="hour-owner">QA</div>
+        </div>
+        <div class="hour-cell" style="border-top:3px solid var(--red);">
+          <div class="hour-label" style="color:var(--red);">H + EOD</div>
+          <div class="hour-event" style="color:var(--red);">Deploy Decision<br>Tonight / Next AM</div>
+          <div class="hour-owner">Release Lead</div>
+        </div>
+        <div class="hour-cell" style="border-top:3px solid var(--purple);">
+          <div class="hour-label">H + 48h</div>
+          <div class="hour-event" style="color:var(--purple);">RCA<br>Due</div>
+          <div class="hour-owner">Release Lead</div>
+        </div>
+      </div>
+
+      <hr class="divider">
+
+      <div class="runway">
+        <div class="runway-track"></div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-hot">H + 0</span><div class="t-connector t-hot"></div></div>
+          <div class="node-card highlight-hot">
+            <div class="node-head">
+              <span class="node-title">Incident Declared</span>
+              <span class="node-day">Immediately</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>Release lead or on-call declares P0/S1 incident</li>
+                <li>Slack #incidents channel notified with customer impact statement</li>
+                <li>JIRA ticket created with <code style="color:var(--hot);">HOTFIX</code> label and affected version</li>
+                <li>Single developer assigned &mdash; one owner, no committee</li>
+                <li>Decision: hotfix the current release or wait for next point release?</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-rl">Release Lead</span>
+                <span class="tag tag-hard">IMMEDIATE</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-blue">H + 1h</span><div class="t-connector t-blue"></div></div>
+          <div class="node-card highlight-blue">
+            <div class="node-head">
+              <span class="node-title">Fix on Master</span>
+              <span class="node-day">1 hour SLA</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>Fix developed and PR opened against master</li>
+                <li>Expedited review &mdash; one reviewer, no queue jumping the PR</li>
+                <li>PR description must include: root cause, fix description, blast radius assessment</li>
+                <li>If fix requires data migration: DBA must approve inline, no deferral</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-dev">Dev</span>
+                <span class="tag tag-hard">1H SLA</span>
+              </div>
+              <div class="consequence">If not fixable in 1h, release lead escalates. Consider rollback instead.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-orange">H + 2h</span><div class="t-connector t-orange"></div></div>
+          <div class="node-card highlight-orange">
+            <div class="node-head">
+              <span class="node-title">Cherry-pick to Release Branch</span>
+              <span class="node-day">2 hours from incident</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>PR merged to master &rarr; immediately cherry-pick to release branch</li>
+                <li>Cherry-pick PR labeled <code style="color:var(--hot);">HOTFIX</code> + <code>CHERRY_PICK</code></li>
+                <li>Nectar auto-detects and flags as hotfix cherry-pick</li>
+                <li>If cherry-pick has conflicts: fix on the spot, do not defer</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-dev">Dev</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-green">H + 3h</span><div class="t-connector t-green"></div></div>
+          <div class="node-card highlight-green">
+            <div class="node-head">
+              <span class="node-title">Targeted QA Verification</span>
+              <span class="node-day">3 hours from incident</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>QA tests the specific fix + immediate regression area only</li>
+                <li>NOT a full regression &mdash; that's the point/monthly release's job</li>
+                <li>Verify: the bug is fixed, the fix doesn't break the happy path</li>
+                <li>QA verbal sign-off to release lead (Slack message, not JIRA ceremony)</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-qa">QA</span>
+                <span class="tag tag-soft">TARGETED ONLY</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-red">H + EOD</span><div class="t-connector t-red"></div></div>
+          <div class="node-card highlight-red">
+            <div class="node-head">
+              <span class="node-title">Deploy Decision</span>
+              <span class="node-day">End of day / next morning</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>Release lead decides: deploy tonight or first thing next morning</li>
+                <li>Deploy to affected customer environment(s) first</li>
+                <li>Verify fix in production (check Datadog, logs, customer confirmation)</li>
+                <li>Roll to remaining customers within 24h if applicable</li>
+                <li>Update JIRA ticket: deployed versions, customer environments</li>
+                <li>Notify #incidents channel: resolved</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-rl">Release Lead</span>
+                <span class="tag tag-hard">SHIP</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-purple">H + 48h</span></div>
+          <div class="node-card highlight-purple">
+            <div class="node-head">
+              <span class="node-title">RCA (Root Cause Analysis)</span>
+              <span class="node-day">48 hours from incident</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>Written RCA: timeline, root cause, blast radius, fix, prevention</li>
+                <li>Action items with owners and due dates &mdash; not "we'll try harder"</li>
+                <li>If same root cause triggered 2+ hotfixes &rarr; escalate to P0 process issue</li>
+                <li>RCA shared in #engineering</li>
+                <li>Retrospective: should this have been caught in QA? Add test coverage.</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-rl">Release Lead</span>
+                <span class="node-owner owner-dev">Dev</span>
+                <span class="tag tag-hard">MANDATORY</span>
+              </div>
+              <div class="consequence">No RCA in 48h = release lead escalates to CTO. Non-negotiable.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout callout-hot">
+        <strong>Hotfix vs. Point Release decision tree:</strong> Can it wait 1 week? &rarr; Point release. Is a customer blocked right now? &rarr; Hotfix. Is it annoying but not blocking? &rarr; Point release. When in doubt, point release. Hotfixes are expensive (they bypass QA rigor and cost a RCA).
+      </div>
+    </div>
+
+    <!-- ════════════ POINT RELEASE: CALENDAR ════════════ -->
+    <div id="point-calendar" class="section">
+      <div class="page-header">
+        <h2>Point Release &mdash; Calendar View</h2>
+        <p>8 business days from scope to ship. Friday to Tuesday.</p>
+      </div>
+
+      <h3 style="font-size:0.85rem;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">Week 1 &mdash; Scope &amp; Build</h3>
+      <div class="cal-strip five">
+        <div class="cal-day phase-scope" style="border-top-color:var(--red);">
+          <div class="cal-dow">Friday</div>
+          <div class="cal-t" style="color:var(--red);">T-6</div>
+          <div class="cal-event" style="color:var(--red);font-weight:700;">SCOPE CUTOFF</div>
+        </div>
+        <div class="cal-day phase-dev">
+          <div class="cal-dow">Monday</div>
+          <div class="cal-t">T-5</div>
+          <div class="cal-event">Dev begins</div>
+        </div>
+        <div class="cal-day phase-dev">
+          <div class="cal-dow">Tuesday</div>
+          <div class="cal-t">T-4</div>
+          <div class="cal-event">Dev + PR reviews</div>
+        </div>
+        <div class="cal-day phase-dev" style="border-top-color:var(--blue);">
+          <div class="cal-dow">Wednesday</div>
+          <div class="cal-t" style="color:var(--blue);">T-3</div>
+          <div class="cal-event" style="color:var(--blue);font-weight:700;">DEV COMPLETE<br><span style="color:var(--green);">+ QA SCOPE REVIEW</span></div>
+        </div>
+        <div class="cal-day phase-qa" style="border-top-color:var(--cyan);">
+          <div class="cal-dow">Thursday</div>
+          <div class="cal-t" style="color:var(--cyan);">T-2</div>
+          <div class="cal-event" style="font-weight:600;"><span style="color:var(--orange);">QA testing</span><br><span style="color:var(--cyan);">+ DATA MIGRATION</span></div>
+        </div>
+      </div>
+
+      <h3 style="font-size:0.85rem;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">Week 2 &mdash; Certify &amp; Ship</h3>
+      <div class="cal-strip five">
+        <div class="cal-day phase-cert" style="border-top-color:var(--green);">
+          <div class="cal-dow">Friday</div>
+          <div class="cal-t" style="color:var(--green);">T-1</div>
+          <div class="cal-event" style="color:var(--green);font-weight:700;">CERTIFICATION EOD</div>
+        </div>
+        <div class="cal-day phase-ship" style="border-top-color:var(--orange);">
+          <div class="cal-dow">Monday</div>
+          <div class="cal-t" style="color:var(--orange);">T-0.5</div>
+          <div class="cal-event" style="color:var(--orange);font-weight:600;">Staging smoke<br>Go/no-go</div>
+        </div>
+        <div class="cal-day phase-ship">
+          <div class="cal-dow">Tuesday</div>
+          <div class="cal-t" style="color:var(--red);">T-0</div>
+          <div class="cal-event" style="color:var(--red);font-weight:800;">SHIP</div>
+        </div>
+        <div class="cal-day" style="opacity:0.3;">
+          <div class="cal-dow">Wednesday</div>
+          <div class="cal-t">&nbsp;</div>
+          <div class="cal-event">Runway buffer</div>
+        </div>
+        <div class="cal-day" style="opacity:0.3;">
+          <div class="cal-dow">Thursday</div>
+          <div class="cal-t">&nbsp;</div>
+          <div class="cal-event">Runway buffer</div>
+        </div>
+      </div>
+
+      <div class="callout callout-cyan">
+        <strong>New steps highlighted:</strong> QA Scope Review happens at T-3 (dev complete) &mdash; QA confirms they know what to test before the cycle begins. Data Migration check happens at T-2 &mdash; all migrations must be documented, staging-tested, and DBA-approved before certification.
+      </div>
+    </div>
+
+    <!-- ════════════ POINT RELEASE: RUNWAY ════════════ -->
+    <div id="point-runway" class="section">
+      <div class="page-header">
+        <h2>Point Release &mdash; T-Minus Runway</h2>
+        <p>Every milestone, who owns it, what happens if you miss it.</p>
+      </div>
+
+      <div class="runway">
+        <div class="runway-track"></div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-purple">T &minus; 6</span><div class="t-connector t-purple"></div></div>
+          <div class="node-card highlight-purple">
+            <div class="node-head">
+              <span class="node-title">Scope Cutoff</span>
+              <span class="node-day">Friday EOD</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>Release lead publishes approved ticket list</li>
+                <li>All tickets have Target Fix Version set in JIRA</li>
+                <li>Scope is frozen &mdash; additions require CTO-level approval</li>
+                <li>Nectar release view shows committed scope</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-rl">Release Lead</span>
+                <span class="node-owner owner-pm">PM</span>
+                <span class="tag tag-hard">HARD CUTOFF</span>
+              </div>
+              <div class="consequence">Ticket rolls to next release. No negotiation.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-blue">T &minus; 3</span><div class="t-connector t-blue"></div></div>
+          <div class="node-card highlight-blue">
+            <div class="node-head">
+              <span class="node-title">Dev Complete</span>
+              <span class="node-day">Wednesday EOD</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>All PRs merged to master</li>
+                <li>Cherry-pick PRs opened to release branch</li>
+                <li>Nectar truth engine confirms branch presence</li>
+                <li>Any ticket not merged &rarr; auto-deferred</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-dev">Dev Lead</span>
+                <span class="tag tag-hard">HARD CUTOFF</span>
+              </div>
+              <div class="consequence">Un-merged work is out. Release branch is the source of truth.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- NEW: QA Scope Review -->
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-green">T &minus; 3</span><div class="t-connector t-green"></div></div>
+          <div class="node-card highlight-green">
+            <div class="node-head">
+              <span class="node-title">QA Scope Review</span>
+              <span class="node-day">Wednesday EOD (at dev complete)</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>QA reviews every ticket that made it to the release branch</li>
+                <li>For each ticket: QA confirms acceptance criteria exist and are testable</li>
+                <li>QA flags any ticket missing test guidance &mdash; dev must provide before QA cycle</li>
+                <li>QA estimates total testing effort and confirms capacity for the window</li>
+                <li>QA identifies tickets with data migration impact &rarr; flags for DBA review</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-qa">QA Lead</span>
+                <span class="node-owner owner-dev">Dev Lead</span>
+                <span class="tag tag-new">GATE</span>
+              </div>
+              <div class="consequence">QA cycle cannot begin until scope review is complete. Untestable tickets are deferred.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- NEW: Data Migration -->
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-cyan">T &minus; 2</span><div class="t-connector t-cyan"></div></div>
+          <div class="node-card highlight-cyan">
+            <div class="node-head">
+              <span class="node-title">Data Migration Checkpoint</span>
+              <span class="node-day">Thursday</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>All data migrations identified and documented in release manifest</li>
+                <li>Each migration has: script, expected impact, rollback procedure</li>
+                <li>Migrations tested on staging environment with production-like data</li>
+                <li>DBA/data lead reviews and signs off on every migration</li>
+                <li>Estimated downtime (if any) communicated to customer success</li>
+                <li>No undocumented migrations ship &mdash; Nectar flags any schema changes without migration entry</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-dev">Dev</span>
+                <span class="node-owner owner-dba">DBA</span>
+                <span class="tag tag-hard">HARD GATE</span>
+              </div>
+              <div class="consequence">Unapproved migration blocks certification. Ticket deferred or migration reverted.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-orange">T &minus; 2</span><div class="t-connector t-orange"></div></div>
+          <div class="node-card highlight-orange">
+            <div class="node-head">
+              <span class="node-title">QA Cycle</span>
+              <span class="node-day">Thursday &ndash; Friday</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>QA tests every ticket per scope review plan</li>
+                <li>Bug found &rarr; fix on master &rarr; cherry-pick (same day turnaround)</li>
+                <li>Failed QA: fix-or-revert decision by EOD Thursday</li>
+                <li>No new cherry-picks after Friday noon without release lead approval</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-qa">QA Lead</span>
+                <span class="node-owner owner-dev">Dev</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-green">T &minus; 1</span><div class="t-connector t-green"></div></div>
+          <div class="node-card highlight-green">
+            <div class="node-head">
+              <span class="node-title">Certification</span>
+              <span class="node-day">Friday EOD</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>Every ticket status = Certified in JIRA</li>
+                <li>Nectar truth: zero mismatches, all cherry-picks merged</li>
+                <li>All data migrations approved by DBA</li>
+                <li>QA lead signs off in release channel</li>
+                <li>Release notes finalized</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-qa">QA Lead</span>
+                <span class="node-owner owner-rl">Release Lead</span>
+                <span class="tag tag-hard">HARD GATE</span>
+              </div>
+              <div class="consequence">Release is delayed. Escalation to CTO. RCA required.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-red">T &minus; 0</span></div>
+          <div class="node-card highlight-red">
+            <div class="node-head">
+              <span class="node-title">SHIP</span>
+              <span class="node-day">Tuesday</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>Monday AM: staging deploy + smoke test + run migrations on staging</li>
+                <li>Monday PM: go/no-go call (release lead + PM + DBA)</li>
+                <li>Tuesday AM: production deploy + run migrations</li>
+                <li>Tuesday PM: verify prod, Nectar truth refresh</li>
+                <li>JIRA version marked "Released"</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-rl">Release Lead</span>
+                <span class="tag tag-hard">SHIP DAY</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════════ MONTHLY RELEASE: CALENDAR ════════════ -->
+    <div id="monthly-calendar" class="section">
+      <div class="page-header">
+        <h2>Monthly Release &mdash; Calendar View</h2>
+        <p>5 business weeks. Same anchor: certification Monday, ship Wednesday.</p>
+      </div>
+
+      <h3 style="font-size:0.85rem;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">Week 1 &mdash; Scope</h3>
+      <div class="cal-strip five">
+        <div class="cal-day phase-scope" style="border-top-color:var(--red);">
+          <div class="cal-dow">Monday</div>
+          <div class="cal-t" style="color:var(--red);">T-25</div>
+          <div class="cal-event" style="color:var(--red);font-weight:700;">SCOPE LOCK</div>
+        </div>
+        <div class="cal-day phase-scope">
+          <div class="cal-dow">Tuesday</div>
+          <div class="cal-t">T-24</div>
+          <div class="cal-event">Planning finalize</div>
+        </div>
+        <div class="cal-day phase-dev">
+          <div class="cal-dow">Wednesday</div>
+          <div class="cal-t">T-23</div>
+          <div class="cal-event">Dev begins</div>
+        </div>
+        <div class="cal-day phase-dev">
+          <div class="cal-dow">Thursday</div>
+          <div class="cal-t">T-22</div>
+          <div class="cal-event">Dev sprint</div>
+        </div>
+        <div class="cal-day phase-dev">
+          <div class="cal-dow">Friday</div>
+          <div class="cal-t">T-21</div>
+          <div class="cal-event">Dev sprint</div>
+        </div>
+      </div>
+
+      <h3 style="font-size:0.85rem;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">Week 2 &mdash; Development</h3>
+      <div class="cal-strip five">
+        <div class="cal-day phase-dev">
+          <div class="cal-dow">Monday</div>
+          <div class="cal-t">T-20</div>
+          <div class="cal-event">Dev sprint</div>
+        </div>
+        <div class="cal-day phase-dev">
+          <div class="cal-dow">Tuesday</div>
+          <div class="cal-t">T-19</div>
+          <div class="cal-event">Dev sprint</div>
+        </div>
+        <div class="cal-day phase-dev">
+          <div class="cal-dow">Wednesday</div>
+          <div class="cal-t">T-18</div>
+          <div class="cal-event">Mid-sprint check-in</div>
+        </div>
+        <div class="cal-day phase-dev">
+          <div class="cal-dow">Thursday</div>
+          <div class="cal-t">T-17</div>
+          <div class="cal-event">Dev sprint</div>
+        </div>
+        <div class="cal-day phase-dev">
+          <div class="cal-dow">Friday</div>
+          <div class="cal-t">T-16</div>
+          <div class="cal-event">Dev sprint</div>
+        </div>
+      </div>
+
+      <h3 style="font-size:0.85rem;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">Week 3 &mdash; Dev Complete + Branch Cut</h3>
+      <div class="cal-strip five">
+        <div class="cal-day phase-dev">
+          <div class="cal-dow">Monday</div>
+          <div class="cal-t">T-15</div>
+          <div class="cal-event">Final PRs</div>
+        </div>
+        <div class="cal-day phase-dev">
+          <div class="cal-dow">Tuesday</div>
+          <div class="cal-t">T-14</div>
+          <div class="cal-event">Final PRs</div>
+        </div>
+        <div class="cal-day phase-dev" style="border-top-color:var(--blue);">
+          <div class="cal-dow">Wednesday</div>
+          <div class="cal-t" style="color:var(--blue);">T-13</div>
+          <div class="cal-event" style="font-weight:700;"><span style="color:var(--blue);">DEV COMPLETE</span><br><span style="color:var(--green);">+ QA SCOPE REVIEW</span></div>
+        </div>
+        <div class="cal-day phase-qa" style="border-top-color:var(--orange);">
+          <div class="cal-dow">Thursday</div>
+          <div class="cal-t" style="color:var(--orange);">T-12</div>
+          <div class="cal-event" style="color:var(--orange);font-weight:700;">BRANCH CUT<br>CODE FREEZE</div>
+        </div>
+        <div class="cal-day phase-qa">
+          <div class="cal-dow">Friday</div>
+          <div class="cal-t">T-11</div>
+          <div class="cal-event">QA begins</div>
+        </div>
+      </div>
+
+      <h3 style="font-size:0.85rem;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">Week 4 &mdash; QA Cycle</h3>
+      <div class="cal-strip five">
+        <div class="cal-day phase-qa">
+          <div class="cal-dow">Monday</div>
+          <div class="cal-t">T-10</div>
+          <div class="cal-event">QA testing</div>
+        </div>
+        <div class="cal-day phase-qa">
+          <div class="cal-dow">Tuesday</div>
+          <div class="cal-t">T-9</div>
+          <div class="cal-event">QA testing</div>
+        </div>
+        <div class="cal-day phase-qa">
+          <div class="cal-dow">Wednesday</div>
+          <div class="cal-t">T-8</div>
+          <div class="cal-event">QA testing</div>
+        </div>
+        <div class="cal-day phase-qa">
+          <div class="cal-dow">Thursday</div>
+          <div class="cal-t">T-7</div>
+          <div class="cal-event">QA testing</div>
+        </div>
+        <div class="cal-day phase-qa" style="border-top-color:var(--red);">
+          <div class="cal-dow">Friday</div>
+          <div class="cal-t" style="color:var(--red);">T-6</div>
+          <div class="cal-event" style="color:var(--red);font-weight:700;">CHERRY-PICK FREEZE</div>
+        </div>
+      </div>
+
+      <h3 style="font-size:0.85rem;color:var(--text-dim);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">Week 5 &mdash; Data Migration, Certification &amp; Ship</h3>
+      <div class="cal-strip five">
+        <div class="cal-day phase-data">
+          <div class="cal-dow">Monday</div>
+          <div class="cal-t" style="color:var(--cyan);">T-2</div>
+          <div class="cal-event" style="font-weight:700;"><span style="color:var(--green);">CERTIFICATION EOD</span><br><span style="color:var(--cyan);">+ DATA MIGRATION</span></div>
+        </div>
+        <div class="cal-day phase-ship" style="border-top-color:var(--orange);">
+          <div class="cal-dow">Tuesday</div>
+          <div class="cal-t" style="color:var(--orange);">T-1</div>
+          <div class="cal-event" style="color:var(--orange);font-weight:600;">Staging smoke<br>Go/no-go call</div>
+        </div>
+        <div class="cal-day phase-ship">
+          <div class="cal-dow">Wednesday</div>
+          <div class="cal-t" style="color:var(--red);">T-0</div>
+          <div class="cal-event" style="color:var(--red);font-weight:800;">SHIP</div>
+        </div>
+        <div class="cal-day" style="opacity:0.3;">
+          <div class="cal-dow">Thursday</div>
+          <div class="cal-t">&nbsp;</div>
+          <div class="cal-event">Runway buffer</div>
+        </div>
+        <div class="cal-day" style="opacity:0.3;">
+          <div class="cal-dow">Friday</div>
+          <div class="cal-t">&nbsp;</div>
+          <div class="cal-event">Runway buffer</div>
+        </div>
+      </div>
+
+      <div class="callout callout-green">
+        <strong>Mobile alignment:</strong> iOS + Android submit to App Store / Play Store on T-6 (cherry-pick freeze Friday). 3+ business days for store review before Wednesday ship.
+      </div>
+    </div>
+
+    <!-- ════════════ MONTHLY RELEASE: RUNWAY ════════════ -->
+    <div id="monthly-runway" class="section">
+      <div class="page-header">
+        <h2>Monthly Release &mdash; T-Minus Runway</h2>
+        <p>Every gate, every owner, every consequence.</p>
+      </div>
+
+      <div class="runway">
+        <div class="runway-track"></div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-purple">T &minus; 25</span><div class="t-connector t-purple"></div></div>
+          <div class="node-card highlight-purple">
+            <div class="node-head">
+              <span class="node-title">Scope Lock</span>
+              <span class="node-day">Monday, Week 1</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>PM + Dev Lead finalize ticket list</li>
+                <li>Every ticket has Target Fix Version, estimate, and owner</li>
+                <li>Nectar roadmap view reviewed and confirmed</li>
+                <li>Scope is frozen &mdash; additions require CTO-level sign-off</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-pm">PM</span>
+                <span class="node-owner owner-dev">Dev Lead</span>
+                <span class="tag tag-hard">HARD CUTOFF</span>
+              </div>
+              <div class="consequence">Un-scoped ticket cannot enter this release. Period.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-blue">T &minus; 13</span><div class="t-connector t-blue"></div></div>
+          <div class="node-card highlight-blue">
+            <div class="node-head">
+              <span class="node-title">Dev Complete</span>
+              <span class="node-day">Wednesday EOD, Week 3</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>All PRs merged to master and reviewed</li>
+                <li>Any ticket not merged &rarr; auto-deferred with JIRA comment</li>
+                <li>Dev lead confirms readiness for branch cut</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-dev">Dev Lead</span>
+                <span class="tag tag-hard">HARD CUTOFF</span>
+              </div>
+              <div class="consequence">Un-merged work is out. No "almost done." Deferred to next version.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- NEW: QA Scope Review -->
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-green">T &minus; 13</span><div class="t-connector t-green"></div></div>
+          <div class="node-card highlight-green">
+            <div class="node-head">
+              <span class="node-title">QA Scope Review</span>
+              <span class="node-day">Wednesday EOD, Week 3 (at dev complete)</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>QA reviews every ticket that made it to the release</li>
+                <li>For each ticket: confirm acceptance criteria exist and are testable</li>
+                <li>Flag tickets missing test guidance &mdash; dev must provide before QA cycle starts</li>
+                <li>Estimate total testing effort and confirm QA has capacity</li>
+                <li>Identify tickets requiring data migration &rarr; flag for DBA review</li>
+                <li>Output: QA test plan document shared in release channel</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-qa">QA Lead</span>
+                <span class="node-owner owner-dev">Dev Lead</span>
+                <span class="tag tag-new">GATE</span>
+              </div>
+              <div class="consequence">QA cycle cannot begin until scope review is complete. Untestable tickets are deferred or blocked until criteria are provided.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-orange">T &minus; 12</span><div class="t-connector t-orange"></div></div>
+          <div class="node-card highlight-orange">
+            <div class="node-head">
+              <span class="node-title">Branch Cut &amp; Code Freeze</span>
+              <span class="node-day">Thursday, Week 3</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>Release branch created: <code style="color:var(--orange);">releases/4.x.0</code></li>
+                <li>Master reopens for next version work</li>
+                <li>Only cherry-picks with CHERRY_PICK label land on release branch</li>
+                <li>Nectar CherryPickWatcher begins monitoring</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-rl">Release Lead</span>
+                <span class="tag tag-hard">HARD GATE</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-orange">T-12 &rarr; T-6</span><div class="t-connector t-orange"></div></div>
+          <div class="node-card">
+            <div class="node-head">
+              <span class="node-title">QA Cycle</span>
+              <span class="node-day">Week 3 Thu &ndash; Week 4 Fri</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>QA tests every ticket per scope review plan</li>
+                <li>Bugs: fix on master &rarr; cherry-pick. 24h turnaround SLA</li>
+                <li>Failed QA: fix-or-revert decision within 48h</li>
+                <li>Daily: Nectar truth engine status in standup</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-qa">QA Lead</span>
+                <span class="node-owner owner-dev">Dev</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-red">T &minus; 6</span><div class="t-connector t-red"></div></div>
+          <div class="node-card highlight-red">
+            <div class="node-head">
+              <span class="node-title">Cherry-Pick Freeze</span>
+              <span class="node-day">Friday EOD, Week 4</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>No more cherry-picks without release lead + CTO approval</li>
+                <li>Only P0/S1 production-down fixes bypass this gate</li>
+                <li>Mobile apps submit to App Store (iOS) + Play Store (Android)</li>
+                <li>Release branch enters hardening mode</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-rl">Release Lead</span>
+                <span class="tag tag-hard">HARD FREEZE</span>
+              </div>
+              <div class="consequence">Unapproved cherry-pick after freeze = revert + RCA.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- NEW: Data Migration -->
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-cyan">T &minus; 2</span><div class="t-connector t-cyan"></div></div>
+          <div class="node-card highlight-cyan">
+            <div class="node-head">
+              <span class="node-title">Data Migration Checkpoint</span>
+              <span class="node-day">Monday, Week 5</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>All data migrations identified and documented in release manifest</li>
+                <li>Each migration has: script, expected row/document impact, rollback procedure</li>
+                <li>Migrations tested on staging with production-like data volume</li>
+                <li>DBA/data lead reviews and signs off on every migration</li>
+                <li>Estimated execution time documented (blocking vs. background)</li>
+                <li>Downtime windows (if any) communicated to customer success</li>
+                <li>No undocumented schema changes or data transforms ship</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-dev">Dev</span>
+                <span class="node-owner owner-dba">DBA</span>
+                <span class="tag tag-hard">HARD GATE</span>
+              </div>
+              <div class="consequence">Unapproved migration blocks certification. Ticket deferred or migration reverted from release branch.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-green">T &minus; 2</span><div class="t-connector t-green"></div></div>
+          <div class="node-card highlight-green">
+            <div class="node-head">
+              <span class="node-title">Certification</span>
+              <span class="node-day">Monday EOD, Week 5</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>100% tickets = Certified in JIRA</li>
+                <li>Nectar truth: zero mismatches, zero stale cherry-picks</li>
+                <li>All data migrations DBA-approved</li>
+                <li>QA lead posts sign-off in #releases channel</li>
+                <li>Release notes finalized and reviewed by PM</li>
+                <li>Regression suite green</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-qa">QA Lead</span>
+                <span class="node-owner owner-rl">Release Lead</span>
+                <span class="tag tag-hard">HARD GATE</span>
+              </div>
+              <div class="consequence">Release delayed. CTO escalation. RCA within 48h.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="runway-node">
+          <div class="t-badge"><span class="t-label t-red">T &minus; 0</span></div>
+          <div class="node-card highlight-red">
+            <div class="node-head">
+              <span class="node-title">SHIP</span>
+              <span class="node-day">Wednesday, Week 5</span>
+            </div>
+            <div class="node-body">
+              <ul>
+                <li>T-1 (Tuesday): staging deploy + run migrations on staging + smoke test</li>
+                <li>T-1 PM: go/no-go call (release lead + PM + DBA)</li>
+                <li>T-0 AM: production deploy + run migrations</li>
+                <li>T-0 PM: verify prod via Nectar truth refresh</li>
+                <li>JIRA version &rarr; "Released"</li>
+                <li>Thu/Fri = runway buffer with full team</li>
+              </ul>
+              <div class="badge-row">
+                <span class="node-owner owner-rl">Release Lead</span>
+                <span class="tag tag-hard">SHIP DAY</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════════ HARD RULES ════════════ -->
+    <div id="rules" class="section">
+      <div class="page-header">
+        <h2>Hard Rules</h2>
+        <p>These are not guidelines. They are laws. Violations trigger escalation.</p>
+      </div>
+
+      <div class="rules-grid" style="grid-template-columns: 1fr;">
+        <div class="rule-card" style="border-left: 3px solid var(--red);">
+          <h4><span class="rule-number" style="background:var(--red-bg);color:var(--red);">1</span> Cutoffs are walls, not suggestions</h4>
+          <p>If your ticket isn't ready by the cutoff, it rolls to the next release. There is no "just this once." The release ships without you.</p>
+        </div>
+        <div class="rule-card" style="border-left: 3px solid var(--red);">
+          <h4><span class="rule-number" style="background:var(--red-bg);color:var(--red);">2</span> Master first, cherry-pick second</h4>
+          <p>Every line of code lands on master before it touches a release branch. No direct commits to release branches. No "quick fix" shortcuts.</p>
+        </div>
+        <div class="rule-card" style="border-left: 3px solid var(--red);">
+          <h4><span class="rule-number" style="background:var(--red-bg);color:var(--red);">3</span> Wednesday/Tuesday ship days only</h4>
+          <p>Monthly ships Wednesday, point ships Tuesday. Thu/Fri/Wed are runway to catch fire. Never ship Friday. Never ship Monday.</p>
+        </div>
+        <div class="rule-card" style="border-left: 3px solid var(--orange);">
+          <h4><span class="rule-number" style="background:var(--orange-bg);color:var(--orange);">4</span> QA scope review at dev complete &mdash; no blind handoffs</h4>
+          <p>QA must review every ticket at dev complete, confirm acceptance criteria are testable, and estimate effort. If QA says "I don't know how to test this," dev provides guidance or the ticket is deferred. QA doesn't start testing until scope review is done.</p>
+        </div>
+        <div class="rule-card" style="border-left: 3px solid var(--cyan);">
+          <h4><span class="rule-number" style="background:var(--cyan-bg);color:var(--cyan);">5</span> Data migrations locked at T-2</h4>
+          <p>Every migration must be documented (script + impact + rollback), tested on staging, and DBA-approved before certification. No surprise migrations. No "we'll run it manually." Nectar flags any schema change without a migration entry.</p>
+        </div>
+        <div class="rule-card" style="border-left: 3px solid var(--green);">
+          <h4><span class="rule-number" style="background:var(--green-bg);color:var(--green);">6</span> Certification = QA + Nectar + migrations + notes</h4>
+          <p>Four things must be true: (a) QA signed off every ticket, (b) Nectar truth shows zero mismatches, (c) all migrations DBA-approved, (d) release notes final. All four. Not three of four.</p>
+        </div>
+        <div class="rule-card" style="border-left: 3px solid var(--orange);">
+          <h4><span class="rule-number" style="background:var(--orange-bg);color:var(--orange);">7</span> Post-freeze cherry-picks need two approvals</h4>
+          <p>After cherry-pick freeze, any cherry-pick requires release lead AND CTO approval. Must be P0/S1. PR description includes justification.</p>
+        </div>
+        <div class="rule-card" style="border-left: 3px solid var(--orange);">
+          <h4><span class="rule-number" style="background:var(--orange-bg);color:var(--orange);">8</span> Bug fix SLAs during QA &mdash; 24h or defer</h4>
+          <p>QA finds a bug &rarr; dev has 24h to fix on master and open cherry-pick PR. Not fixed in 24h? Ticket deferred or feature reverted.</p>
+        </div>
+        <div class="rule-card" style="border-left: 3px solid var(--hot);">
+          <h4><span class="rule-number" style="background:var(--hot-bg);color:var(--hot);">9</span> Every product release requires an RCA</h4>
+          <p>Every release (hotfix, point, monthly) requires a Root Cause Analysis documenting what changed and why. Hotfix RCA due within 48h. Same root cause triggers 2+ hotfixes = P0 process failure.</p>
+        </div>
+        <div class="rule-card" style="border-left: 3px solid var(--blue);">
+          <h4><span class="rule-number" style="background:var(--blue-bg);color:var(--blue);">10</span> Every missed gate gets a RCA</h4>
+          <p>Certification missed or release delayed? RCA within 48h. Output is concrete action items with owners, not "we'll try harder."</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════════ ESCALATION MATRIX ════════════ -->
+    <div id="escalation" class="section">
+      <div class="page-header">
+        <h2>Escalation Matrix</h2>
+        <p>What happens when things go wrong. Clear owners, clear actions, clear SLAs.</p>
+      </div>
+
+      <table class="esc-table">
+        <thead>
+          <tr>
+            <th>Situation</th>
+            <th>Severity</th>
+            <th>Immediate Action</th>
+            <th>Escalation</th>
+            <th>SLA</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Ticket not ready by scope cutoff</td>
+            <td><span class="severity s3">LOW</span></td>
+            <td>Auto-defer to next release. JIRA comment.</td>
+            <td>PM notified.</td>
+            <td>Immediate</td>
+          </tr>
+          <tr>
+            <td>PR not merged by dev complete</td>
+            <td><span class="severity s3">LOW</span></td>
+            <td>Ticket auto-deferred. Dev lead notified.</td>
+            <td>Dev lead reviews with developer.</td>
+            <td>Immediate</td>
+          </tr>
+          <tr>
+            <td>QA scope review flags untestable ticket</td>
+            <td><span class="severity s2">MED</span></td>
+            <td>Ticket blocked until dev provides acceptance criteria.</td>
+            <td>Dev lead + QA lead resolve. 24h to provide criteria or defer.</td>
+            <td>24h</td>
+          </tr>
+          <tr>
+            <td>Scope addition requested post-lock</td>
+            <td><span class="severity s2">MED</span></td>
+            <td>Block until CTO approval in writing (JIRA comment).</td>
+            <td>PM &rarr; CTO with impact assessment.</td>
+            <td>24h decision</td>
+          </tr>
+          <tr>
+            <td>QA bug not fixed within 24h</td>
+            <td><span class="severity s2">MED</span></td>
+            <td>Release lead decides: defer ticket or revert feature.</td>
+            <td>Dev lead + Release lead call.</td>
+            <td>4h decision</td>
+          </tr>
+          <tr>
+            <td>Data migration not DBA-approved at T-2</td>
+            <td><span class="severity s1">HIGH</span></td>
+            <td>Migration blocked from release. Ticket deferred.</td>
+            <td>Dev + DBA war room. Release lead decides path.</td>
+            <td>Same-day</td>
+          </tr>
+          <tr>
+            <td>Undocumented migration discovered</td>
+            <td><span class="severity s1">HIGH</span></td>
+            <td>Block certification. Migration must be documented + approved.</td>
+            <td>Dev lead + DBA. RCA on how it was missed.</td>
+            <td>Same-day</td>
+          </tr>
+          <tr>
+            <td>Cherry-pick requested post-freeze</td>
+            <td><span class="severity s1">HIGH</span></td>
+            <td>Block. Requires release lead + CTO dual approval.</td>
+            <td>Must be P0/S1. PR includes justification.</td>
+            <td>2h decision</td>
+          </tr>
+          <tr>
+            <td>Certification not met by Monday EOD</td>
+            <td><span class="severity s1">HIGH</span></td>
+            <td>Release delayed. War room convened.</td>
+            <td>CTO notified. RCA within 48h.</td>
+            <td>Same-day triage</td>
+          </tr>
+          <tr>
+            <td>P0 production incident (hotfix trigger)</td>
+            <td><span class="severity s1">HIGH</span></td>
+            <td>Hotfix protocol activated. Deploy decision by EOD or next AM.</td>
+            <td>Release lead declares. RCA in 48h.</td>
+            <td>EOD / next AM</td>
+          </tr>
+          <tr>
+            <td>Hotfix fix not achievable in 1h</td>
+            <td><span class="severity s1">HIGH</span></td>
+            <td>Evaluate rollback vs. extended fix window.</td>
+            <td>Release lead + CTO decision.</td>
+            <td>30min decision</td>
+          </tr>
+          <tr>
+            <td>Direct commit to release branch</td>
+            <td><span class="severity s1">HIGH</span></td>
+            <td>Immediate revert.</td>
+            <td>Dev lead reviews. Process retrain.</td>
+            <td>1h revert</td>
+          </tr>
+          <tr>
+            <td>Same root cause triggers 2+ hotfixes</td>
+            <td><span class="severity s1">HIGH</span></td>
+            <td>Escalate to P0 process issue.</td>
+            <td>VP + Engineering leads. Systemic fix required.</td>
+            <td>1 week plan</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ════════════ NECTAR ENFORCEMENT ════════════ -->
+    <div id="nectar" class="section">
+      <div class="page-header">
+        <h2>Nectar Enforcement</h2>
+        <p>What Nectar detects, flags, and blocks. Humans decide. Nectar ensures nothing slips.</p>
+      </div>
+
+      <div class="enforce-list">
+        <div class="enforce-row" style="border-bottom: 1px solid var(--border); padding-bottom:8px; margin-bottom:4px;">
+          <div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);">Signal</div>
+          <div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);">Action Taken</div>
+          <div style="font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);text-align:right;">Automation</div>
+        </div>
+
+        <div class="enforce-row">
+          <div class="enforce-signal" style="color:var(--orange);">&#x26A0; Scope Creep</div>
+          <div class="enforce-action">Ticket added to version after scope lock date. Flags ticket in release view, Slack alert to PM + release lead.</div>
+          <div class="enforce-auto auto-yes">AUTO-DETECT<br>AUTO-ALERT</div>
+        </div>
+
+        <div class="enforce-row">
+          <div class="enforce-signal" style="color:var(--red);">&#x1F6AB; Freeze Violation</div>
+          <div class="enforce-action">PR merged to release branch without CHERRY_PICK label. Immediate Slack alert. Release lead approves or reverts.</div>
+          <div class="enforce-auto auto-yes">AUTO-DETECT<br>AUTO-ALERT</div>
+        </div>
+
+        <div class="enforce-row">
+          <div class="enforce-signal" style="color:var(--blue);">&#x23F3; Stale Cherry-pick</div>
+          <div class="enforce-action">Ticket marked "cherry-picked" in JIRA but PR not merged after 24h. Alerts dev + release lead.</div>
+          <div class="enforce-auto auto-yes">AUTO-DETECT<br>AUTO-ALERT</div>
+        </div>
+
+        <div class="enforce-row">
+          <div class="enforce-signal" style="color:var(--green);">&#x1F50D; QA Scope Gap</div>
+          <div class="enforce-action">At dev complete: ticket on release without acceptance criteria or QA assignment. Blocks QA cycle start for that ticket.</div>
+          <div class="enforce-auto auto-yes">AUTO-DETECT<br>BLOCKS QA</div>
+        </div>
+
+        <div class="enforce-row">
+          <div class="enforce-signal" style="color:var(--purple);">&#x1F50D; QA Coverage Gap</div>
+          <div class="enforce-action">Ticket on release branch but never entered "In QA" status. QA lead alerted. Blocks certification.</div>
+          <div class="enforce-auto auto-yes">AUTO-DETECT<br>BLOCKS GATE</div>
+        </div>
+
+        <div class="enforce-row">
+          <div class="enforce-signal" style="color:var(--cyan);">&#x1F4BE; Migration Unreviewed</div>
+          <div class="enforce-action">Schema change or migration script detected on release branch without DBA sign-off entry. Blocks certification until DBA approves.</div>
+          <div class="enforce-auto auto-yes">AUTO-DETECT<br>BLOCKS GATE</div>
+        </div>
+
+        <div class="enforce-row">
+          <div class="enforce-signal" style="color:var(--cyan);">&#x1F4CA; Migration No Rollback</div>
+          <div class="enforce-action">Migration documented but missing rollback procedure. Flags in release manifest. DBA must add rollback plan before approval.</div>
+          <div class="enforce-auto auto-yes">AUTO-DETECT<br>BLOCKS APPROVAL</div>
+        </div>
+
+        <div class="enforce-row">
+          <div class="enforce-signal" style="color:var(--cyan);">&#x1F4CA; Truth Mismatch</div>
+          <div class="enforce-action">JIRA says X, branch says Y. Blocks certification, dev must reconcile.</div>
+          <div class="enforce-auto auto-yes">AUTO-DETECT<br>BLOCKS GATE</div>
+        </div>
+
+        <div class="enforce-row">
+          <div class="enforce-signal" style="color:var(--hot);">&#x1F6A8; Hotfix Tracker</div>
+          <div class="enforce-action">Hotfix cherry-pick detected. Starts 48h RCA countdown. Alerts release lead if RCA not filed by deadline.</div>
+          <div class="enforce-auto auto-yes">AUTO-TRACK<br>AUTO-ESCALATE</div>
+        </div>
+
+        <div class="enforce-row">
+          <div class="enforce-signal" style="color:var(--orange);">&#x23F1; Bug Fix SLA</div>
+          <div class="enforce-action">QA bug opened during QA cycle. 24h countdown. If no fix PR by deadline, auto-flagged for defer-or-revert.</div>
+          <div class="enforce-auto auto-yes">AUTO-TRACK<br>AUTO-ESCALATE</div>
+        </div>
+
+        <div class="enforce-row">
+          <div class="enforce-signal" style="color:var(--green);">&#x2705; Gate Readiness</div>
+          <div class="enforce-action">Per-gate dashboard: scope lock ready? QA scope reviewed? Migrations approved? Certified? Green/red with blockers listed.</div>
+          <div class="enforce-auto auto-manual">DASHBOARD<br>MANUAL GO/NO-GO</div>
+        </div>
+
+      </div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /shell -->
+
+<script>
+function go(id) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  event.currentTarget.classList.add('active');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+</script>
+
+</body>
+</html>
