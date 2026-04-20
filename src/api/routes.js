@@ -1238,7 +1238,8 @@ module.exports = function createRoutes(services, config) {
     const releaseKey = req.params.version;
     const releaseForecast = result.releases?.get(releaseKey);
     // Return the per-release forecast with risk assessment
-    res.json(releaseForecast || { error: 'Release not found in forecast' });
+    if (!releaseForecast) return res.status(404).json({ error: 'Release not found in forecast' });
+    res.json(releaseForecast);
   });
 
   // ── JIRA Sync ──────────────────────────────────────────
