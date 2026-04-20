@@ -284,12 +284,19 @@ export function StandupPage() {
                   <span className={cn('truncate flex-1', person.isOoo && 'italic text-amber-300/70')}>
                     {person.name}
                   </span>
-                  <span className={cn(
-                    'shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded',
-                    person.totalItems > 0 ? 'bg-muted text-muted-foreground' : 'text-muted-foreground/30'
-                  )}>
-                    {person.totalItems}
-                  </span>
+                  <div className="shrink-0 flex items-center gap-1">
+                    {person.buckets.releaseCritical.length > 0 && (
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">
+                        {person.buckets.releaseCritical.length}
+                      </span>
+                    )}
+                    <span className={cn(
+                      'text-[10px] font-mono px-1.5 py-0.5 rounded',
+                      person.totalItems > 0 ? 'bg-muted text-muted-foreground' : 'text-muted-foreground/30'
+                    )}>
+                      {person.totalItems}
+                    </span>
+                  </div>
                 </button>
               </div>
             )
