@@ -220,7 +220,7 @@ class Simulator {
         let remaining = 0;
         for (const key of relInfo.tickets) {
           const sim = simulatedTickets.get(key);
-          if (sim && !sim.done) remaining++;
+          if (!sim || !sim.done) remaining++;
         }
         remainingByRelease[version] = remaining;
         if (remaining === 0 && !relInfo.projectedDate) {
@@ -311,8 +311,15 @@ class Simulator {
       const doneKeys = new Set();
       for (const key of relInfo.tickets) {
         const sim = simulatedTickets.get(key);
-        if (sim && !sim.done) remaining++;
-        else doneKeys.add(key);
+        if (!sim) {
+          // Ticket not in any person's queue (e.g., unassigned or status not in queues)
+          // Still counts as remaining work
+          remaining++;
+        } else if (!sim.done) {
+          remaining++;
+        } else {
+          doneKeys.add(key);
+        }
       }
 
       let daysLate = 0;
