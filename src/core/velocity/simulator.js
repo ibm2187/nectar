@@ -244,10 +244,22 @@ class Simulator {
       currentDate = addDay(currentDate);
     }
 
+    // Compute global velocity before building results (needed for fallback projections)
+    let totalDevVelocity = 0;
+    let totalQaVelocity = 0;
+    for (const vel of personVelocities.values()) {
+      if (vel.dev) totalDevVelocity += vel.dev.ticketsPerDay;
+      if (vel.qa) totalQaVelocity += vel.qa.ticketsPerDay;
+    }
+    const globalVel = {
+      dev: Math.round(totalDevVelocity * 100) / 100,
+      qa: Math.round(totalQaVelocity * 100) / 100,
+    };
+
     // Build results
     return this._buildResults(
       releaseMap, simulatedTickets, personVelocities, workQueues,
-      initialBreakdowns, teamAvgDev, teamAvgQa, dayLog, simulationDays, todayStr,
+      initialBreakdowns, teamAvgDev, teamAvgQa, dayLog, simulationDays, todayStr, globalVel,
     );
   }
 
@@ -308,7 +320,7 @@ class Simulator {
   /**
    * Build the final SimulationResult from simulation state.
    */
-  _buildResults(releaseMap, simulatedTickets, personVelocities, workQueues, initialBreakdowns, teamAvgDev, teamAvgQa, dayLog, simulationDays, todayStr) {
+  _buildResults(releaseMap, simulatedTickets, personVelocities, workQueues, initialBreakdowns, teamAvgDev, teamAvgQa, dayLog, simulationDays, todayStr, globalVel) {
     // Release results
     const releaseResults = new Map();
     for (const [version, relInfo] of releaseMap) {
@@ -328,16 +340,27 @@ class Simulator {
         }
       }
 
+      // If simulation didn't project (unqueued tickets prevented completion),
+      // fall back to remaining / global velocity
+      let projectedDate = relInfo.projectedDate;
+      if (!projectedDate && relInfo.tickets.size > 0) {
+        const totalVelocity = (globalVel.dev + globalVel.qa) / 2; // conservative estimate
+        if (totalVelocity > 0) {
+          const daysNeeded = Math.ceil(relInfo.tickets.size / totalVelocity);
+          projectedDate = this._addBusinessDays(todayStr, daysNeeded);
+        }
+      }
+
       let daysLate = 0;
-      if (relInfo.projectedDate && relInfo.deadlineDate) {
-        const proj = new Date(relInfo.projectedDate + 'T00:00:00Z');
+      if (projectedDate && relInfo.deadlineDate) {
+        const proj = new Date(projectedDate + 'T00:00:00Z');
         const dead = new Date(relInfo.deadlineDate + 'T00:00:00Z');
         daysLate = Math.round((proj - dead) / (1000 * 60 * 60 * 24));
       }
 
       releaseResults.set(version, {
         remaining: relInfo.tickets.size,  // total not-done at start
-        projectedDate: relInfo.projectedDate,
+        projectedDate,
         deadlineDate: relInfo.deadlineDate,
         daysLate,
         bottleneck: this._findBottleneck(relInfo, personVelocities, workQueues, teamAvgDev, teamAvgQa),
@@ -398,19 +421,7 @@ class Simulator {
       });
     }
 
-    // Global velocity
-    let totalDevVelocity = 0;
-    let totalQaVelocity = 0;
-    for (const vel of personVelocities.values()) {
-      if (vel.dev) totalDevVelocity += vel.dev.ticketsPerDay;
-      if (vel.qa) totalQaVelocity += vel.qa.ticketsPerDay;
-    }
-
     // Attach global velocity to each release so the frontend can display it
-    const globalVel = {
-      dev: Math.round(totalDevVelocity * 100) / 100,
-      qa: Math.round(totalQaVelocity * 100) / 100,
-    };
     for (const [, relResult] of releaseResults) {
       relResult.velocity = { devTotal: globalVel.dev, qaTotal: globalVel.qa };
     }

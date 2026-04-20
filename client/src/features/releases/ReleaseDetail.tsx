@@ -556,15 +556,19 @@ export function ReleaseDetail() {
               </div>
 
               {/* Bottlenecks — dev and QA */}
-              {forecast.bottleneck?.devBottleneck && forecast.bottleneck.devBottleneck.queueSize > 0 && (
-                <span className="text-xs text-orange-400">
-                  Dev bottleneck: {forecast.bottleneck.devBottleneck.person} — {forecast.bottleneck.devBottleneck.queueSize} tickets at {forecast.bottleneck.devBottleneck.velocity}/day
-                </span>
-              )}
-              {forecast.bottleneck?.qaBottleneck && forecast.bottleneck.qaBottleneck.queueSize > 0 && (
-                <span className="text-xs text-purple-400">
-                  QA bottleneck: {forecast.bottleneck.qaBottleneck.person} — {forecast.bottleneck.qaBottleneck.queueSize} tickets at {forecast.bottleneck.qaBottleneck.velocity}/day
-                </span>
+              {/* Bottlenecks — dev and QA */}
+              {forecast.bottleneck && (forecast.bottleneck.devBottleneck || forecast.bottleneck.qaBottleneck) && (
+                <div className="flex items-center gap-2 text-xs text-red-400 flex-wrap">
+                  {forecast.bottleneck.devBottleneck && (forecast.bottleneck.devBottleneck.queueSize ?? 0) > 0 && (
+                    <span>Dev: {forecast.bottleneck.devBottleneck.person} — {forecast.bottleneck.devBottleneck.queueSize} tickets at {forecast.bottleneck.devBottleneck.velocity}/day</span>
+                  )}
+                  {forecast.bottleneck.devBottleneck && (forecast.bottleneck.devBottleneck.queueSize ?? 0) > 0 && forecast.bottleneck.qaBottleneck && (forecast.bottleneck.qaBottleneck.queueSize ?? 0) > 0 && (
+                    <span className="text-muted-foreground">|</span>
+                  )}
+                  {forecast.bottleneck.qaBottleneck && (forecast.bottleneck.qaBottleneck.queueSize ?? 0) > 0 && (
+                    <span>QA: {forecast.bottleneck.qaBottleneck.person} — {forecast.bottleneck.qaBottleneck.queueSize} tickets at {forecast.bottleneck.qaBottleneck.velocity}/day</span>
+                  )}
+                </div>
               )}
 
               {/* Suggestions — compact, show first 2 with +N more */}
