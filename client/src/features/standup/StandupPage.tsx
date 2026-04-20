@@ -430,13 +430,14 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
           </span>
         </div>
 
-        {/* Release filter pills */}
+        {/* Release filters */}
         {person.releases.length > 0 && (
-          <div className="flex gap-1.5 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-muted-foreground font-medium">Filter:</span>
             {/* Imminent pill (only if they have imminent tickets) */}
             {person.imminentVersions.length > 0 && (
               <FilterPill
-                label="This Week"
+                label="Next 5 days"
                 count={countForFilter(person, 'imminent')}
                 active={filter === 'imminent'}
                 onClick={() => setFilter('imminent')}
@@ -444,7 +445,7 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
             )}
             {/* All pill */}
             <FilterPill
-              label="All"
+              label="All releases"
               count={person.totalItems}
               active={filter === 'all'}
               onClick={() => setFilter('all')}

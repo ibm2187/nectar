@@ -394,7 +394,15 @@ module.exports = function createRoutes(services, config) {
   // Aggregates per-person data with priority buckets for the wizard-style standup page.
   // Default horizon: 5 business days (skips weekends + holidays via availability service).
   // Override with ?horizon=YYYY-MM-DD if needed.
+  // Cached for 30s — standup data doesn't change mid-meeting.
+  let _standupCache = { data: null, expiresAt: 0, key: null };
+
   router.get('/standup', (req, res) => {
+    const cacheKey = req.query.horizon || 'default';
+    if (_standupCache.key === cacheKey && Date.now() < _standupCache.expiresAt) {
+      return res.json(_standupCache.data);
+    }
+
     const opts = {};
     if (req.query.horizon) opts.horizon = req.query.horizon;
     const standupServices = {
@@ -405,6 +413,7 @@ module.exports = function createRoutes(services, config) {
       peopleDirectory: services.peopleDirectory,
     };
     const data = buildStandupData(standupServices, opts);
+    _standupCache = { data, expiresAt: Date.now() + 30_000, key: cacheKey };
     res.json(data);
   });
 

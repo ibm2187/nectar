@@ -336,15 +336,29 @@ describe('buildStandupData', () => {
       expect(alice.buckets.releaseCritical[0].key).toBe('DEV-1');
     });
 
-    it('does not mark tickets on distant releases as critical', () => {
-      const releases = [makeRelease('4.2.0', { jiraReleaseDate: '2026-04-28' })];
+    it('does not mark tickets on releases beyond horizon as critical', () => {
+      // Release is May 15, horizon is Apr 27 — well beyond 5 biz days
+      const releases = [makeRelease('4.2.0', { jiraReleaseDate: '2026-05-15' })];
       const tickets = [makeTicket('DEV-1', { assignee: 'Alice Dev', jiraStatus: 'Blocked' })];
       const truthMap = new Map([['DEV-1', [{ version: '4.2.0', health: 'blocked', healthCategory: 'attention' }]]]);
       const services = createMockServices(releases, { '4.2.0': tickets }, new Map(), truthMap);
 
-      const result = buildStandupData(services, { horizon: '2026-04-30' });
+      const result = buildStandupData(services, { horizon: '2026-04-27' });
       const alice = result.people.find(p => p.name === 'Alice Dev');
       expect(alice.buckets.releaseCritical).toHaveLength(0);
+    });
+
+    it('marks tickets within horizon as release-critical (5 biz days)', () => {
+      // Release is Apr 24, horizon is Apr 27 — within window
+      const releases = [makeRelease('4.2.0', { jiraReleaseDate: '2026-04-24' })];
+      const tickets = [makeTicket('DEV-1', { assignee: 'Alice Dev', jiraStatus: 'In Progress' })];
+      const truthMap = new Map([['DEV-1', [{ version: '4.2.0', health: 'in-dev', healthCategory: 'in-dev' }]]]);
+      const services = createMockServices(releases, { '4.2.0': tickets }, new Map(), truthMap);
+
+      const result = buildStandupData(services, { horizon: '2026-04-27' });
+      const alice = result.people.find(p => p.name === 'Alice Dev');
+      expect(alice.buckets.releaseCritical).toHaveLength(1);
+      expect(alice.buckets.releaseCritical[0].key).toBe('DEV-1');
     });
   });
 

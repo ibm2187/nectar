@@ -196,13 +196,11 @@ function buildStandupData(services, opts = {}) {
       }
     }
 
-    // Also mark tickets on imminent releases as release-critical
-    // (due today or tomorrow, and in attention/awaiting-cp/in-dev state)
-    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    // Release-critical = any ticket on a release due within 5 business days
     const critical = [];
-    for (const bucketName of ['blocked', 'awaitingCherryPick', 'inDev']) {
+    for (const bucketName of ['blocked', 'awaitingCherryPick', 'inDev', 'pendingTesting']) {
       for (const item of buckets[bucketName]) {
-        if (item.release.dueDate && item.release.dueDate <= tomorrow) {
+        if (item.release.dueDate && item.release.dueDate <= horizon) {
           critical.push({ ...item, originalBucket: bucketName });
         }
       }
