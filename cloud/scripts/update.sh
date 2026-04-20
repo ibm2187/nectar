@@ -38,8 +38,23 @@ log "Current HEAD: ${OLD_HEAD:0:7}"
 log "Fetching..."
 sudo -u ubuntu git fetch origin
 
+# Stash any runtime-generated files that dirty the worktree
+# (e.g. cache files written by the app). Without this, --ff-only
+# aborts and auto-updates silently stop.
+STASHED=false
+if ! sudo -u ubuntu git diff --quiet 2>/dev/null; then
+  log "Stashing dirty worktree..."
+  sudo -u ubuntu git stash --quiet
+  STASHED=true
+fi
+
 log "Pulling..."
 sudo -u ubuntu git pull --ff-only
+
+if [ "${STASHED}" = true ]; then
+  log "Reapplying stash..."
+  sudo -u ubuntu git stash pop --quiet 2>/dev/null || log "Stash pop conflict (discarding stale runtime files)"
+fi
 
 NEW_HEAD=$(sudo -u ubuntu git rev-parse HEAD)
 

@@ -3100,7 +3100,7 @@ module.exports = function createRoutes(services, config) {
     res.json({ ok: true, message: 'Restarting...' });
     // Give the response time to flush before exiting
     setTimeout(() => {
-      process.exit(0);
+      process.exit(1);
     }, 500);
   });
 

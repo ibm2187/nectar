@@ -6,6 +6,7 @@ client/node_modules/
 .env
 .env.local
 .nectar-state.json
+.nectar-build-status-cache.json
 .nectar-customers.json
 .nectar-themes.json
 .nectar-api-keys.json
