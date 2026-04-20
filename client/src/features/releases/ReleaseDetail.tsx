@@ -520,6 +520,7 @@ export function ReleaseDetail() {
             </div>
 
             {/* Velocity summary */}
+            {forecast.velocity && (
             <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap mb-2">
               <span>
                 Dev: <span className="text-foreground font-medium">{forecast.velocity.devTotal}</span>/day total
@@ -529,6 +530,7 @@ export function ReleaseDetail() {
                 QA: <span className="text-foreground font-medium">{forecast.velocity.qaTotal}</span>/day total
               </span>
             </div>
+            )}
 
             {/* Risk message */}
             <div className="text-xs text-muted-foreground mb-2">

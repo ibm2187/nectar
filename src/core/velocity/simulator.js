@@ -394,6 +394,15 @@ class Simulator {
       if (vel.qa) totalQaVelocity += vel.qa.ticketsPerDay;
     }
 
+    // Attach global velocity to each release so the frontend can display it
+    const globalVel = {
+      dev: Math.round(totalDevVelocity * 100) / 100,
+      qa: Math.round(totalQaVelocity * 100) / 100,
+    };
+    for (const [, relResult] of releaseResults) {
+      relResult.velocity = { devTotal: globalVel.dev, qaTotal: globalVel.qa };
+    }
+
     return {
       releases: releaseResults,
       people: personResults,
@@ -401,10 +410,7 @@ class Simulator {
         days: dayLog,
         totalDays: simulationDays,
       },
-      globalVelocity: {
-        dev: Math.round(totalDevVelocity * 100) / 100,
-        qa: Math.round(totalQaVelocity * 100) / 100,
-      },
+      globalVelocity: globalVel,
     };
   }
 
