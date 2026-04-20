@@ -45,6 +45,13 @@ interface PersonBuckets {
   inDev: StandupTicketItem[]
 }
 
+interface PersonRelease {
+  version: string
+  dueDate: string | null
+  state: string
+  ticketCount: number
+}
+
 interface StandupPerson {
   name: string
   slackId: string | null
@@ -53,6 +60,9 @@ interface StandupPerson {
   buckets: PersonBuckets
   urgencyScore: number
   totalItems: number
+  releases: PersonRelease[]
+  defaultFilter: 'imminent' | 'all'
+  imminentVersions: string[]
 }
 
 interface ReleaseSummary {
@@ -361,7 +371,43 @@ export function StandupPage() {
 // ── Sub-components ──────────────────────────────────────────
 
 function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceExpanded: boolean | null }) {
-  const hasBuckets = BUCKET_ORDER.some(k => (person.buckets[k] || []).length > 0)
+  // Release filter: 'imminent' = only tickets on releases due within 5 biz days,
+  // 'all' = everything, or a specific version string
+  const [filter, setFilter] = useState<string>(person.defaultFilter)
+
+  // Reset filter when person changes
+  useEffect(() => {
+    setFilter(person.defaultFilter)
+  }, [person.name, person.defaultFilter])
+
+  // Apply filter to buckets
+  const filteredBuckets = useMemo(() => {
+    if (filter === 'all') return person.buckets
+
+    // Determine which versions to show
+    const allowedVersions = new Set<string>(
+      filter === 'imminent' ? person.imminentVersions : [filter]
+    )
+
+    const filterTickets = (items: StandupTicketItem[]) =>
+      items.filter(t => allowedVersions.has(t.release.version))
+
+    const filterPrs = (items: StandupPrItem[]) =>
+      items.filter(pr => !pr.linkedTicket || true) // PRs always shown (they're cross-release)
+
+    return {
+      releaseCritical: filterTickets(person.buckets.releaseCritical),
+      awaitingCherryPick: filterTickets(person.buckets.awaitingCherryPick),
+      reviewChangesRequested: filterPrs(person.buckets.reviewChangesRequested),
+      reviewApproved: filterPrs(person.buckets.reviewApproved),
+      blocked: filterTickets(person.buckets.blocked),
+      pendingTesting: filterTickets(person.buckets.pendingTesting),
+      inDev: filterTickets(person.buckets.inDev),
+    }
+  }, [person, filter])
+
+  const filteredTotal = Object.values(filteredBuckets).reduce((sum, b) => sum + b.length, 0)
+  const hasBuckets = filteredTotal > 0
 
   return (
     <Card className={cn('transition-all', person.isOoo && 'opacity-60 border-amber-500/30')}>
@@ -380,15 +426,48 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
             )}
           </div>
           <span className="text-xs text-muted-foreground">
-            {person.totalItems} item{person.totalItems !== 1 ? 's' : ''}
+            {filteredTotal} item{filteredTotal !== 1 ? 's' : ''}
           </span>
         </div>
+
+        {/* Release filter pills */}
+        {person.releases.length > 0 && (
+          <div className="flex gap-1.5 flex-wrap">
+            {/* Imminent pill (only if they have imminent tickets) */}
+            {person.imminentVersions.length > 0 && (
+              <FilterPill
+                label="This Week"
+                count={countForFilter(person, 'imminent')}
+                active={filter === 'imminent'}
+                onClick={() => setFilter('imminent')}
+              />
+            )}
+            {/* All pill */}
+            <FilterPill
+              label="All"
+              count={person.totalItems}
+              active={filter === 'all'}
+              onClick={() => setFilter('all')}
+            />
+            {/* Per-release pills */}
+            {person.releases.slice(0, 5).map(r => (
+              <FilterPill
+                key={r.version}
+                label={r.version}
+                count={r.ticketCount}
+                active={filter === r.version}
+                onClick={() => setFilter(r.version)}
+                dimmed={!person.imminentVersions.includes(r.version)}
+              />
+            ))}
+          </div>
+        )}
 
         {/* Priority buckets */}
         {hasBuckets ? (
           <div className="space-y-2">
             {BUCKET_ORDER.map(bucketKey => {
-              const items = person.buckets[bucketKey]
+              const items = filteredBuckets[bucketKey]
               const config = BUCKET_CONFIG[bucketKey]
               if (!items || items.length === 0) return null
               return (
@@ -404,12 +483,54 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
           </div>
         ) : (
           <div className="text-center py-8 text-muted-foreground">
-            All clear — no action items this week
+            {person.totalItems === 0
+              ? 'All clear — no action items'
+              : 'No items for this filter'
+            }
           </div>
         )}
       </CardContent>
     </Card>
   )
+}
+
+function FilterPill({ label, count, active, onClick, dimmed }: {
+  label: string
+  count: number
+  active: boolean
+  onClick: () => void
+  dimmed?: boolean
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'px-2.5 py-1 rounded-md text-xs font-medium transition-colors border',
+        active
+          ? 'bg-primary text-primary-foreground border-primary'
+          : dimmed
+            ? 'border-border/50 text-muted-foreground/60 hover:text-muted-foreground hover:border-border'
+            : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/30'
+      )}
+    >
+      {label} <span className="opacity-70">({count})</span>
+    </button>
+  )
+}
+
+function countForFilter(person: StandupPerson, filter: string): number {
+  if (filter === 'all') return person.totalItems
+  const versions = new Set(filter === 'imminent' ? person.imminentVersions : [filter])
+  let count = 0
+  for (const bucketKey of BUCKET_ORDER) {
+    const items = person.buckets[bucketKey]
+    if (!items) continue
+    for (const item of items) {
+      if ('release' in item && versions.has((item as StandupTicketItem).release.version)) count++
+      else if (!('release' in item)) count++ // PRs count in imminent
+    }
+  }
+  return count
 }
 
 function CollapsibleBucket({ bucketKey, items, config, forceExpanded }: {

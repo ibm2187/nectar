@@ -221,6 +221,30 @@ function buildStandupData(services, opts = {}) {
 
     const totalItems = Object.values(buckets).reduce((sum, b) => sum + b.length, 0);
 
+    // Collect which releases this person is involved in (for filter pills)
+    const releaseSet = new Map(); // version → { version, dueDate, state, ticketCount }
+    for (const { release } of allItems) {
+      if (!releaseSet.has(release.version)) {
+        releaseSet.set(release.version, {
+          version: release.version,
+          dueDate: release.jiraReleaseDate,
+          state: release.state,
+          ticketCount: 0,
+        });
+      }
+      releaseSet.get(release.version).ticketCount++;
+    }
+    const personReleases = [...releaseSet.values()]
+      .sort((a, b) => (a.dueDate || 'zzzz').localeCompare(b.dueDate || 'zzzz'));
+
+    // Determine default filter: show imminent (5 biz days) if they have
+    // tickets in that window, otherwise show all.
+    const imminentVersions = new Set(
+      imminentReleases.map(r => r.version)
+    );
+    const hasImminentTickets = allItems.some(i => imminentVersions.has(i.release.version));
+    const defaultFilter = hasImminentTickets ? 'imminent' : 'all';
+
     people.push({
       name: personName,
       slackId,
@@ -229,6 +253,9 @@ function buildStandupData(services, opts = {}) {
       buckets,
       urgencyScore,
       totalItems,
+      releases: personReleases,
+      defaultFilter,
+      imminentVersions: [...imminentVersions],
     });
   }
 
@@ -261,6 +288,9 @@ function buildStandupData(services, opts = {}) {
         },
         urgencyScore: 0,
         totalItems: 0,
+        releases: [],
+        defaultFilter: 'all',
+        imminentVersions: [],
       });
     }
   }
