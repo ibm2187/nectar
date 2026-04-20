@@ -31,6 +31,35 @@ module.exports = function createRoutes(services, config) {
   const NECTAR_REPO = 'mavencare/nectar';
   const router = Router();
 
+  // ── Response cache for expensive endpoints ────────────────
+  // Short TTL (10s) cache for /releases/home. Keyed by query string.
+  // Invalidated when releases change (SQLite updatedAt check).
+  const _homeCache = new Map(); // key → { data, expiresAt }
+  const HOME_CACHE_TTL = 10_000; // 10 seconds
+
+  function getHomeCached(cacheKey) {
+    const entry = _homeCache.get(cacheKey);
+    if (entry && Date.now() < entry.expiresAt) return entry.data;
+    return null;
+  }
+
+  function setHomeCached(cacheKey, data) {
+    _homeCache.set(cacheKey, { data, expiresAt: Date.now() + HOME_CACHE_TTL });
+    // Prevent unbounded growth — evict stale entries periodically
+    if (_homeCache.size > 100) {
+      const now = Date.now();
+      for (const [k, v] of _homeCache) {
+        if (now >= v.expiresAt) _homeCache.delete(k);
+      }
+    }
+  }
+
+  // Invalidate when releases are modified by user actions
+  releases.on('release:updated', () => _homeCache.clear());
+  releases.on('release:created', () => _homeCache.clear());
+  releases.on('release:transition', () => _homeCache.clear());
+  releases.on('release:deleted', () => _homeCache.clear());
+
   // ── Ticket helpers — get tickets from normalized TicketStore ──
 
   /**
@@ -162,6 +191,11 @@ module.exports = function createRoutes(services, config) {
   }
 
   router.get('/releases/home', (req, res) => {
+    // Check cache first
+    const cacheKey = `${req.query.view || ''}:${req.query.person || ''}:${req.query.range || req.query.days || ''}`;
+    const cached = getHomeCached(cacheKey);
+    if (cached) return res.json(cached);
+
     const { view, person } = req.query;
     const today = new Date().toISOString().slice(0, 10);
     const horizon = computeHorizon(req.query);
@@ -201,23 +235,24 @@ module.exports = function createRoutes(services, config) {
       return availability.getPersonOutInRange(name, today, releaseDate);
     };
 
-    // Pre-fetch truth for all ticket keys across all releases (one batch query).
-    let allTicketKeys = [];
+    // Pre-fetch tickets, PRs, and truth for ALL releases in batch queries
+    // instead of N queries per release.
+    const ticketsByVersion = new Map();
+    const allTicketKeys = new Set();
     for (const release of annotated) {
-      for (const t of getTicketsForRelease(release)) {
-        allTicketKeys.push(t.key);
-      }
+      const tickets = getTicketsForRelease(release);
+      ticketsByVersion.set(release.version, tickets);
+      for (const t of tickets) allTicketKeys.add(t.key);
     }
-    // Dedupe for the batch query
-    const uniqueKeys = [...new Set(allTicketKeys)];
-    const truthMap = ticketStore ? ticketStore.getTruthForTickets(uniqueKeys) : new Map();
+    const uniqueKeys = [...allTicketKeys];
+    const truthMap = ticketStore ? ticketStore.getTruthForTicketsSlim(uniqueKeys) : new Map();
+    const prLookup = prStore ? prStore.findByJiraKeysSlim(uniqueKeys) : new Map();
 
     let result = annotated.map(release => {
-      let tickets = getTicketsForRelease(release);
+      let tickets = ticketsByVersion.get(release.version) || [];
 
       // Enrich tickets with PR data + build status + OOO annotations + truth
       const ticketKeys = tickets.map(t => t.key);
-      const prLookup = prStore ? prStore.findByJiraKeys(ticketKeys) : new Map();
       const buildByJiraKey = release.buildByJiraKey || {};
       const releaseDate = release.jiraReleaseDate;
       const isImminentRelease = releaseDate && releaseDate <= tomorrow && release.state !== 'done';
@@ -332,6 +367,7 @@ module.exports = function createRoutes(services, config) {
       result = result.filter(r => r.ticketCount > 0);
     }
 
+    setHomeCached(cacheKey, result);
     res.json(result);
   });
 
@@ -1256,43 +1292,17 @@ module.exports = function createRoutes(services, config) {
   // ── People (extracted from synced JIRA tickets) ──────
 
   router.get('/people', (req, res) => {
-    const people = new Map(); // name → { name, roles: Set }
-    const allReleases = releases.list();
-    for (const release of allReleases) {
-      for (const ticket of getTicketsForRelease(release)) {
-        if (ticket.assignee) {
-          const p = people.get(ticket.assignee) || { name: ticket.assignee, roles: new Set() };
-          p.roles.add('dev');
-          people.set(ticket.assignee, p);
-        }
-        if (ticket.reporter) {
-          const p = people.get(ticket.reporter) || { name: ticket.reporter, roles: new Set() };
-          p.roles.add('reporter');
-          people.set(ticket.reporter, p);
-        }
-        if (ticket.qaAssignee) {
-          const p = people.get(ticket.qaAssignee) || { name: ticket.qaAssignee, roles: new Set() };
-          p.roles.add('qa');
-          people.set(ticket.qaAssignee, p);
-        }
-        if (ticket.productAssignee) {
-          const p = people.get(ticket.productAssignee) || { name: ticket.productAssignee, roles: new Set() };
-          p.roles.add('pm');
-          people.set(ticket.productAssignee, p);
-        }
-      }
-    }
+    if (!ticketStore) return res.json([]);
+    const people = ticketStore.getDistinctPeople();
     const availability = services.availability;
-    const result = Array.from(people.values())
-      .map(p => {
-        const out = availability ? availability.getPersonOut(p.name) : null;
-        return {
-          name: p.name,
-          roles: Array.from(p.roles),
-          out: out ? { startDate: out.startDate, endDate: out.endDate, summary: out.summary } : null,
-        };
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const result = people.map(p => {
+      const out = availability ? availability.getPersonOut(p.name) : null;
+      return {
+        name: p.name,
+        roles: p.roles,
+        out: out ? { startDate: out.startDate, endDate: out.endDate, summary: out.summary } : null,
+      };
+    });
     res.json(result);
   });
 

@@ -138,6 +138,39 @@ class PrStore extends EventEmitter {
     return result;
   }
 
+  /**
+   * Batch lookup returning only the fields the home page needs.
+   * Single SQL query instead of N+1. Returns Map<jiraKey, SlimPR[]>.
+   */
+  findByJiraKeysSlim(jiraKeys) {
+    if (!jiraKeys || jiraKeys.length === 0) return new Map();
+
+    // Batch in chunks of 500 to stay within SQLite variable limits
+    const result = new Map();
+    for (let i = 0; i < jiraKeys.length; i += 500) {
+      const chunk = jiraKeys.slice(i, i + 500);
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = this.db.prepare(`
+        SELECT j.jiraKey, p.prNumber, p.repo, p.prUrl, p.status, p.baseBranch
+        FROM pr_jira_keys j
+        JOIN github_prs p ON p.repo = j.repo AND p.prNumber = j.prNumber
+        WHERE j.jiraKey IN (${placeholders})
+        ORDER BY p.prUpdatedAt DESC
+      `).all(...chunk);
+      for (const row of rows) {
+        if (!result.has(row.jiraKey)) result.set(row.jiraKey, []);
+        result.get(row.jiraKey).push({
+          prNumber: row.prNumber,
+          repo: row.repo,
+          prUrl: row.prUrl,
+          status: row.status,
+          baseBranch: row.baseBranch,
+        });
+      }
+    }
+    return result;
+  }
+
   // ── Search / filter ───────────────────────────────
 
   search(query, opts = {}) {

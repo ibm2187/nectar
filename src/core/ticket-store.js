@@ -330,6 +330,35 @@ class TicketStore extends EventEmitter {
     return { tickets, total, hasMore, offset, limit };
   }
 
+  // ── People (distinct names across all tickets) ────
+
+  /**
+   * Get all distinct people from tickets in a single SQL query.
+   * Returns an array of { name, roles: string[] } objects sorted by name.
+   * Replaces the O(N) release loop that ran 1011 individual queries.
+   */
+  getDistinctPeople() {
+    // Union all person columns, tag each with a role
+    const rows = this.db.prepare(`
+      SELECT name, GROUP_CONCAT(DISTINCT role) AS roles FROM (
+        SELECT assignee AS name, 'dev' AS role FROM jira_tickets WHERE assignee IS NOT NULL AND assignee != ''
+        UNION ALL
+        SELECT reporter AS name, 'reporter' AS role FROM jira_tickets WHERE reporter IS NOT NULL AND reporter != ''
+        UNION ALL
+        SELECT qaAssignee AS name, 'qa' AS role FROM jira_tickets WHERE qaAssignee IS NOT NULL AND qaAssignee != ''
+        UNION ALL
+        SELECT productAssignee AS name, 'pm' AS role FROM jira_tickets WHERE productAssignee IS NOT NULL AND productAssignee != ''
+      )
+      GROUP BY name
+      ORDER BY name COLLATE NOCASE ASC
+    `).all();
+
+    return rows.map(r => ({
+      name: r.name,
+      roles: r.roles.split(','),
+    }));
+  }
+
   // ── Analytical views ──────────────────────────────
 
   getQAScope(opts = {}) {
@@ -882,6 +911,36 @@ class TicketStore extends EventEmitter {
           result.set(truth.jiraKey, []);
         }
         result.get(truth.jiraKey).push(truth);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Slim truth for home page — only health, healthCategory, version per ticket.
+   * Returns Map<jiraKey, { health, healthCategory, version }[]>.
+   */
+  getTruthForTicketsSlim(jiraKeys) {
+    const result = new Map();
+    if (!jiraKeys || jiraKeys.length === 0) return result;
+
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < jiraKeys.length; i += CHUNK_SIZE) {
+      const chunk = jiraKeys.slice(i, i + CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = this.db.prepare(
+        `SELECT jiraKey, version, health, healthCategory FROM ticket_truth
+         WHERE jiraKey IN (${placeholders}) ORDER BY jiraKey ASC, version ASC`
+      ).all(...chunk);
+
+      for (const row of rows) {
+        if (!result.has(row.jiraKey)) result.set(row.jiraKey, []);
+        result.get(row.jiraKey).push({
+          version: row.version,
+          health: row.health,
+          healthCategory: row.healthCategory,
+        });
       }
     }
 
