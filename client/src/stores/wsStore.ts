@@ -13,6 +13,7 @@ interface WsState {
   environments: Environment[]
   config: AppConfig
   pipelineSyncTick: number
+  syncTick: number
   setConnected: (v: boolean) => void
   setReleases: (r: Release[]) => void
   setCustomers: (c: Customer[]) => void
@@ -23,6 +24,7 @@ interface WsState {
   upsertCustomer: (c: Customer) => void
   upsertEnvironment: (e: Environment) => void
   bumpPipelineSyncTick: () => void
+  bumpSyncTick: () => void
 }
 
 export const useWsStore = create<WsState>((set) => ({
@@ -32,7 +34,9 @@ export const useWsStore = create<WsState>((set) => ({
   environments: [],
   config: { jiraBaseUrl: '' },
   pipelineSyncTick: 0,
+  syncTick: 0,
   bumpPipelineSyncTick: () => set((state) => ({ pipelineSyncTick: state.pipelineSyncTick + 1 })),
+  bumpSyncTick: () => set((state) => ({ syncTick: state.syncTick + 1 })),
   setConnected: (connected) => set({ connected }),
   setReleases: (releases) => set({ releases }),
   setCustomers: (customers) => set({ customers }),
@@ -153,14 +157,17 @@ export function connectWebSocket() {
       case 'webplatform:scan-completed':
         if (msg.customers) s.setCustomers(msg.customers)
         if (msg.environments) s.setEnvironments(msg.environments)
+        s.bumpSyncTick()
         break
       case 'discovery:completed':
       case 'jira:sync-completed':
         if (msg.releases) s.setReleases(msg.releases)
+        s.bumpSyncTick()
         break
       case 'pipeline:sync-completed':
         if (msg.releases) s.setReleases(msg.releases)
         s.bumpPipelineSyncTick()
+        s.bumpSyncTick()
         break
     }
   }
