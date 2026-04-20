@@ -278,7 +278,13 @@ class Simulator {
 
     for (const key of ticketKeys) {
       const sim = simulatedTickets.get(key);
-      if (!sim || sim.done) continue;
+      if (sim && sim.done) continue;
+
+      if (!sim) {
+        // Ticket not in any queue — count as not started
+        breakdown.notStarted++;
+        continue;
+      }
 
       const status = sim.status;
       if (BLOCKED_STATUSES.has(status)) {
