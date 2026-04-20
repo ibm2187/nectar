@@ -602,7 +602,7 @@ function ReleaseCardCell({
   isWeekly: boolean
 }) {
   const isDone = card.progress === 100
-  const isOverdue = !isDone && card.jiraReleaseDate && new Date(card.jiraReleaseDate) < new Date()
+  const isOverdue = !isDone && card.jiraReleaseDate && new Date(card.jiraReleaseDate + 'T00:00:00') < new Date()
   const breakdown = card.ticketBreakdown
   const hasBreakdown = breakdown && (breakdown.features > 0 || breakdown.tasks > 0 || breakdown.bugs > 0)
 
