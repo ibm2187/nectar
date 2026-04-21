@@ -1,29 +1,9 @@
 import { cn, timeAgo, formatDuration } from '../../lib/utils'
 import { Card, CardContent } from '../../components/ui/card'
 import { JiraLink } from '../../components/JiraLink'
+import type { BuildInfo, PipelineData } from '../../api/client'
 
-// ── Types ────────────────────────────────────────────────
-
-interface BuildInfo {
-  buildNumber: number
-  status: string // SUCCEEDED, FAILED, IN_PROGRESS, STOPPED
-  startTime: string | null
-  endTime: string | null
-  durationSec: number | null
-  commitSha: string | null
-  initiator?: string | null
-}
-
-interface PipelineData {
-  projectName?: string
-  builds?: BuildInfo[]
-  latest?: BuildInfo
-  newCommits?: Array<{ sha: string; message: string }>
-  jiraKeys?: string[]
-  deploys?: unknown[]
-  syncedAt?: string
-  deploySyncedAt?: string
-}
+export type { PipelineData }
 
 // ── Build status styling ─────────────────────────────────
 

@@ -486,7 +486,10 @@ module.exports = function createRoutes(services, config) {
   router.get('/releases/:version', (req, res) => {
     const release = releases.get(req.params.version);
     if (!release) return res.status(404).json({ error: 'Release not found' });
-    res.json({ ...release, tickets: getTicketsForRelease(release) });
+    const pipeline = services.pipelineSync
+      ? services.pipelineSync.getPipelineForRelease(release)
+      : null;
+    res.json({ ...release, tickets: getTicketsForRelease(release), pipeline });
   });
 
   // PR data for a release — returns prsByJiraKey for all tickets in the release.

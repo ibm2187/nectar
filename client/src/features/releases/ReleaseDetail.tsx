@@ -3,7 +3,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useWsStore } from '../../stores/wsStore'
 import { useAuthStore } from '../../stores/authStore'
 import { apiFetch } from '../../api/client'
-import type { AuditEntry, ValidationReport, DatadogImpactResponse, ReleaseComment, DeliveryForecast } from '../../api/client'
+import type { AuditEntry, ValidationReport, DatadogImpactResponse, ReleaseComment, DeliveryForecast, Ticket, Release, PipelineData } from '../../api/client'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Card, CardContent } from '../../components/ui/card'
@@ -95,19 +95,11 @@ export function ReleaseDetail() {
   const [commentText, setCommentText] = useState('')
   const [commentPosting, setCommentPosting] = useState(false)
   const [commentPanel, setCommentPanel] = useState(false)
+  const [tickets, setTickets] = useState<Ticket[]>([])
+  const [pipeline, setPipeline] = useState<PipelineData | null>(null)
   const authUser = useAuthStore(s => s.user)
   const ssoEnabled = useAuthStore(s => s.ssoEnabled)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  // Fetch tickets from API (WS releases don't include tickets to keep init small)
-  const [apiTickets, setApiTickets] = useState<Array<{ key: string; state: string }>>([])
-  useEffect(() => {
-    if (version) {
-      apiFetch<{ tickets: Array<{ key: string; state: string }> }>(`/releases/${version}`)
-        .then(data => setApiTickets(data.tickets || []))
-        .catch(() => {})
-    }
-  }, [version, release?.updatedAt])
 
   useEffect(() => {
     if (version) {
@@ -122,6 +114,27 @@ export function ReleaseDetail() {
       .then(setComments)
       .catch(() => {})
   }, [version, release?.updatedAt])
+
+  // WS slimRelease drops tickets + pipeline to avoid OOM on broadcast, so the
+  // detail page fetches them per-release. pipelineSyncTick keeps the card
+  // fresh when new builds land without a navigation refresh.
+  const pipelineSyncTick = useWsStore(s => s.pipelineSyncTick)
+  useEffect(() => {
+    if (!version) return
+    let cancelled = false
+    apiFetch<Release>(`/releases/${version}`)
+      .then(r => {
+        if (cancelled) return
+        setTickets(r.tickets || [])
+        setPipeline(r.pipeline ?? null)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setTickets([])
+        setPipeline(null)
+      })
+    return () => { cancelled = true }
+  }, [version, release?.updatedAt, pipelineSyncTick])
 
   const postComment = useCallback(async () => {
     if (!version || !commentText.trim() || commentPosting) return
@@ -281,10 +294,8 @@ export function ReleaseDetail() {
   })()
 
   // Ticket health distribution for the timeline bar
-  // Uses API-fetched tickets (WS release.tickets is empty to keep init small)
-  const tickets = apiTickets.length > 0 ? apiTickets : (release.tickets || [])
   const ticketCounts = tickets.reduce(
-    (acc: { done: number; inProgress: number; pending: number }, t: { state?: string }) => {
+    (acc, t) => {
       const s = (t.state || '').toLowerCase()
       if (s === 'done' || s === 'cherry-picked' || s === 'ready-for-testing') acc.done++
       else if (s === 'in-progress') acc.inProgress++
@@ -627,11 +638,11 @@ export function ReleaseDetail() {
               className="w-full flex items-center justify-between px-4 py-3 text-left"
             >
               <span className="text-sm font-semibold">
-                {`Pipeline${(release as any).pipeline?.latest ? ` — Build #${(release as any).pipeline.latest.buildNumber} ${(release as any).pipeline.latest.status}` : ''}`}
+                {`Pipeline${pipeline?.latest ? ` — Build #${pipeline.latest.buildNumber} ${pipeline.latest.status}` : ''}`}
               </span>
             </button>
             <CardContent className="pt-0">
-              <PipelineView pipeline={(release as any).pipeline || null} />
+              <PipelineView pipeline={pipeline} />
             </CardContent>
           </Card>
         )}

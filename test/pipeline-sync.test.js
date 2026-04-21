@@ -758,4 +758,144 @@ describe('PipelineSync', () => {
       expect(targets['4.3.0']).toBeTruthy();
     });
   });
+
+  describe('getCardForRelease', () => {
+    function card(overrides) {
+      return {
+        projectName: 'ECR-Build_viv-release-viv-4_1_4',
+        version: '4.1.4',
+        repo: 'webplatform',
+        account: 'viv',
+        latestStartTime: '2026-04-19T10:00:00Z',
+        latestStatus: 'SUCCEEDED',
+        builds: [{ buildNumber: 1, status: 'SUCCEEDED' }],
+        ...overrides,
+      };
+    }
+
+    it('returns null when version is missing', () => {
+      sync.buildProjects = [card()];
+      expect(sync.getCardForRelease(null, 'webplatform')).toBeNull();
+      expect(sync.getCardForRelease('', 'webplatform')).toBeNull();
+    });
+
+    it('returns null when no card matches the version', () => {
+      sync.buildProjects = [card({ version: '4.2.0' })];
+      expect(sync.getCardForRelease('4.1.4', 'webplatform')).toBeNull();
+    });
+
+    it('returns the only matching card when one exists', () => {
+      const only = card({ projectName: 'only' });
+      sync.buildProjects = [only, card({ version: '4.2.0', projectName: 'other' })];
+      expect(sync.getCardForRelease('4.1.4', 'webplatform')).toBe(only);
+    });
+
+    it('filters out cards from a different repo', () => {
+      const ios = card({ repo: 'ios', projectName: 'ios-card' });
+      sync.buildProjects = [ios];
+      expect(sync.getCardForRelease('4.1.4', 'webplatform')).toBeNull();
+    });
+
+    it('ignores the repo filter when repo is falsy', () => {
+      const ios = card({ repo: 'ios', projectName: 'ios-card' });
+      sync.buildProjects = [ios];
+      expect(sync.getCardForRelease('4.1.4', null)).toBe(ios);
+    });
+
+    it('falls back to the most recent card when targetCustomers is empty', () => {
+      const older = card({ projectName: 'older', latestStartTime: '2026-04-18T10:00:00Z' });
+      const newer = card({ projectName: 'newer', latestStartTime: '2026-04-20T10:00:00Z' });
+      sync.buildProjects = [older, newer];
+      expect(sync.getCardForRelease('4.1.4', 'webplatform', [])).toBe(newer);
+      expect(sync.getCardForRelease('4.1.4', 'webplatform', null)).toBe(newer);
+    });
+
+    it('prefers a card whose account matches targetCustomers over a newer non-matching one', () => {
+      const tributeNewer = card({
+        projectName: 'tribute-newer', account: 'tribute',
+        latestStartTime: '2026-04-20T10:00:00Z',
+      });
+      const bayadaOlder = card({
+        projectName: 'bayada-older', account: 'bayada',
+        latestStartTime: '2026-04-18T10:00:00Z',
+      });
+      sync.buildProjects = [tributeNewer, bayadaOlder];
+      expect(sync.getCardForRelease('4.1.4', 'webplatform', ['bayada'])).toBe(bayadaOlder);
+    });
+
+    it('matches targetCustomers case-insensitively', () => {
+      const bayada = card({ projectName: 'bayada', account: 'Bayada' });
+      sync.buildProjects = [bayada];
+      expect(sync.getCardForRelease('4.1.4', 'webplatform', ['BAYADA'])).toBe(bayada);
+    });
+
+    it('returns the newest preferred card when multiple accounts match', () => {
+      const bayadaOlder = card({
+        projectName: 'bayada-old', account: 'bayada',
+        latestStartTime: '2026-04-18T10:00:00Z',
+      });
+      const bayadaNewer = card({
+        projectName: 'bayada-new', account: 'bayada',
+        latestStartTime: '2026-04-20T10:00:00Z',
+      });
+      sync.buildProjects = [bayadaOlder, bayadaNewer];
+      expect(sync.getCardForRelease('4.1.4', 'webplatform', ['bayada'])).toBe(bayadaNewer);
+    });
+
+    it('falls back to most-recent when targetCustomers has no matching account', () => {
+      const tribute = card({ projectName: 'tribute', account: 'tribute' });
+      sync.buildProjects = [tribute];
+      expect(sync.getCardForRelease('4.1.4', 'webplatform', ['bayada'])).toBe(tribute);
+    });
+  });
+
+  describe('getPipelineForRelease', () => {
+    it('returns null when release is falsy', () => {
+      expect(sync.getPipelineForRelease(null)).toBeNull();
+      expect(sync.getPipelineForRelease(undefined)).toBeNull();
+    });
+
+    it('returns null when no card matches', () => {
+      sync.buildProjects = [];
+      expect(sync.getPipelineForRelease({ version: '4.1.4', repo: 'webplatform' })).toBeNull();
+    });
+
+    it('returns PipelineData with latest = builds[0] and syncedAt from lastRun', () => {
+      sync.lastRun = '2026-04-20T12:00:00Z';
+      sync.buildProjects = [{
+        projectName: 'proj', version: '4.1.4', repo: 'webplatform', account: 'bayada',
+        latestStartTime: '2026-04-20T10:00:00Z',
+        builds: [
+          { buildNumber: 14, status: 'SUCCEEDED' },
+          { buildNumber: 13, status: 'SUCCEEDED' },
+        ],
+        newCommits: [{ sha: 'abc', message: 'x' }],
+        jiraKeys: ['DEV-1'],
+      }];
+      const p = sync.getPipelineForRelease({
+        version: '4.1.4', repo: 'webplatform', targetCustomers: ['bayada'],
+      });
+      expect(p).toMatchObject({
+        projectName: 'proj',
+        latest: { buildNumber: 14 },
+        newCommits: [{ sha: 'abc', message: 'x' }],
+        jiraKeys: ['DEV-1'],
+        syncedAt: '2026-04-20T12:00:00Z',
+      });
+      expect(p.builds).toHaveLength(2);
+    });
+
+    it('passes targetCustomers through to card selection', () => {
+      sync.buildProjects = [
+        { projectName: 'tribute', version: '4.1.4', repo: 'webplatform', account: 'tribute',
+          latestStartTime: '2026-04-20T10:00:00Z', builds: [{ buildNumber: 1, status: 'SUCCEEDED' }] },
+        { projectName: 'bayada', version: '4.1.4', repo: 'webplatform', account: 'bayada',
+          latestStartTime: '2026-04-18T10:00:00Z', builds: [{ buildNumber: 2, status: 'SUCCEEDED' }] },
+      ];
+      const p = sync.getPipelineForRelease({
+        version: '4.1.4', repo: 'webplatform', targetCustomers: ['bayada'],
+      });
+      expect(p.projectName).toBe('bayada');
+    });
+  });
 });

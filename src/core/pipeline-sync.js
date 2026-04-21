@@ -10,6 +10,10 @@ const { getDb } = require('./db');
 // Mirrors client/src/features/builds/shared.ts.
 const TAG_ALIASES = { master: ['master', 'latest'] };
 
+// Most-recent-first comparator on card.latestStartTime (ISO strings).
+const BY_LATEST_START_DESC = (a, b) =>
+  (b.latestStartTime || '').localeCompare(a.latestStartTime || '');
+
 /**
  * AWS Pipeline sync — polls CodeBuild + CodePipeline and builds a unified
  * view of all CI/CD activity for the Builds page.
@@ -644,7 +648,7 @@ class PipelineSync extends EventEmitter {
       const ao = statusOrder[a.latestStatus] ?? 4;
       const bo = statusOrder[b.latestStatus] ?? 4;
       if (ao !== bo) return ao - bo;
-      return (b.latestStartTime || '').localeCompare(a.latestStartTime || '');
+      return BY_LATEST_START_DESC(a, b);
     });
   }
 
@@ -907,6 +911,48 @@ class PipelineSync extends EventEmitter {
     };
   }
 
+  /**
+   * Resolve the pipeline card for a release on demand (release.pipeline is
+   * never persisted). Prefers cards whose account matches the release's
+   * targetCustomers so a Bayada-only release doesn't show a more recent
+   * Tribute card; falls back to the newest matching card otherwise.
+   */
+  getCardForRelease(version, repo, targetCustomers = null) {
+    if (!version) return null;
+    const wanted = Array.isArray(targetCustomers) && targetCustomers.length
+      ? new Set(targetCustomers.map(x => String(x).toLowerCase()))
+      : null;
+
+    let preferred = null;
+    let fallback = null;
+    for (const c of this.buildProjects || []) {
+      if (c.version !== version) continue;
+      if (repo && c.repo !== repo) continue;
+      if (!fallback || BY_LATEST_START_DESC(c, fallback) < 0) fallback = c;
+      if (wanted && wanted.has(this._normalizeAccount(c))) {
+        if (!preferred || BY_LATEST_START_DESC(c, preferred) < 0) preferred = c;
+      }
+    }
+    return preferred || fallback;
+  }
+
+  /**
+   * PipelineData-shaped response for GET /api/releases/:version.
+   */
+  getPipelineForRelease(release) {
+    if (!release) return null;
+    const card = this.getCardForRelease(release.version, release.repo, release.targetCustomers);
+    if (!card) return null;
+    return {
+      projectName: card.projectName,
+      builds: card.builds || [],
+      latest: card.builds?.[0] || null,
+      newCommits: card.newCommits || [],
+      jiraKeys: card.jiraKeys || [],
+      syncedAt: this.lastRun || null,
+    };
+  }
+
   _pickPinned(customerKey, cards) {
     if (customerKey === 'viv') {
       return cards.find(c => c.ecrRepo === 'viv-master' || c.branch === 'master') || null;
@@ -914,9 +960,7 @@ class PipelineSync extends EventEmitter {
     const repo = `viv-release-${customerKey}`;
     const candidates = cards.filter(c => c.ecrRepo === repo);
     if (candidates.length === 0) return null;
-    return candidates.slice().sort((a, b) =>
-      (b.latestStartTime || '').localeCompare(a.latestStartTime || '')
-    )[0] || null;
+    return candidates.slice().sort(BY_LATEST_START_DESC)[0] || null;
   }
 
   _pickRecent(pinned, cards) {
@@ -924,7 +968,7 @@ class PipelineSync extends EventEmitter {
     return cards
       .filter(c => c.projectName !== pinnedName)
       .slice()
-      .sort((a, b) => (b.latestStartTime || '').localeCompare(a.latestStartTime || ''))
+      .sort(BY_LATEST_START_DESC)
       .slice(0, 4);
   }
 

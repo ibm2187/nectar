@@ -148,6 +148,36 @@ describe('API Routes', () => {
       const res = await request(app, 'GET', '/api/releases/nonexistent');
       expect(res.status).toBe(404);
     });
+
+    it('returns pipeline=null when pipelineSync is unavailable', async () => {
+      const { app, services } = createTestApp();
+      services.releases.create({ version: '4.2.0' });
+      const res = await request(app, 'GET', '/api/releases/4.2.0');
+      expect(res.status).toBe(200);
+      expect(res.body.pipeline).toBeNull();
+    });
+
+    it('includes pipeline data from pipelineSync.getPipelineForRelease', async () => {
+      const services = createMockServices();
+      const pipelineData = {
+        projectName: 'ECR-Build_viv-release-bayada-4_1_4',
+        latest: { buildNumber: 14, status: 'SUCCEEDED' },
+        builds: [{ buildNumber: 14, status: 'SUCCEEDED' }],
+        newCommits: [],
+        jiraKeys: ['DEV-46002'],
+        syncedAt: '2026-04-20T12:00:00Z',
+      };
+      services.pipelineSync = {
+        getPipelineForRelease: vi.fn(() => pipelineData),
+      };
+      const { app } = createTestApp(services);
+      services.releases.create({ version: '4.1.4', repo: 'webplatform' });
+      const res = await request(app, 'GET', '/api/releases/4.1.4');
+      expect(res.status).toBe(200);
+      expect(res.body.pipeline).toEqual(pipelineData);
+      expect(services.pipelineSync.getPipelineForRelease).toHaveBeenCalledTimes(1);
+      expect(services.pipelineSync.getPipelineForRelease.mock.calls[0][0].version).toBe('4.1.4');
+    });
   });
 
   describe('PATCH /api/releases/:version', () => {

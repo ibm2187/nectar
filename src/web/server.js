@@ -237,6 +237,8 @@ function createWebServer(services, config) {
       cherryPicks: r.cherryPicks || [], deployments: r.deployments || [],
       approvals: r.approvals || [], comments: r.comments || [],
       tickets: r.tickets || [], risk: r.risk || null, ci: r.ci || null,
+      targetCustomers: r.targetCustomers,
+      targetCustomerSource: r.targetCustomerSource,
     };
   }
 

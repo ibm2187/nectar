@@ -77,6 +77,29 @@ export interface Release {
   targetCustomerSource?: 'description' | 'suffix' | 'default'
   // Set by backend when releases are returned via /api/releases or /api/releases/calendar
   effectiveStatus?: EffectiveStatus
+  // Only populated by GET /api/releases/:version.
+  pipeline?: PipelineData | null
+}
+
+export interface BuildInfo {
+  buildNumber: number
+  status: string
+  startTime: string | null
+  endTime: string | null
+  durationSec: number | null
+  commitSha: string | null
+  initiator?: string | null
+}
+
+export interface PipelineData {
+  projectName?: string
+  builds?: BuildInfo[]
+  latest?: BuildInfo
+  newCommits?: Array<{ sha: string; message: string }>
+  jiraKeys?: string[]
+  deploys?: unknown[]
+  syncedAt?: string | null
+  deploySyncedAt?: string
 }
 
 export interface DeliveryForecast {
