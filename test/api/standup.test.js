@@ -476,15 +476,14 @@ describe('buildStandupData', () => {
   });
 
   describe('team classification', () => {
-    it('tags QA role with qa team', () => {
+    it('tags QA role with qa team only, not platform teams', () => {
       const releases = [makeRelease('4.2.0', { repo: 'webplatform' })];
       const tickets = [makeTicket('DEV-1', { qaAssignee: 'Bob QA' })];
       const services = createMockServices(releases, { '4.2.0': tickets });
       const result = buildStandupData(services, { horizon: '2026-04-27' });
 
       const bob = result.people.find(p => p.name === 'Bob QA');
-      expect(bob.teams).toContain('qa');
-      expect(bob.teams).toContain('web');
+      expect(bob.teams).toEqual(['qa']);
     });
 
     it('tags devs on android/ios repos as mobile', () => {
@@ -535,14 +534,14 @@ describe('buildStandupData', () => {
       expect(alice.teams.sort()).toEqual(['mobile', 'web']);
     });
 
-    it('tags QA on mobile repo with both qa and mobile', () => {
+    it('QA on mobile repo stays qa-only (does not join platform team)', () => {
       const releases = [makeRelease('ios-2026.4.0', { repo: 'ios' })];
       const tickets = [makeTicket('DEV-1', { qaAssignee: 'Bob QA' })];
       const services = createMockServices(releases, { '4.2.0': tickets, 'ios-2026.4.0': tickets });
       const result = buildStandupData(services, { horizon: '2026-04-27' });
 
       const bob = result.people.find(p => p.name === 'Bob QA');
-      expect(bob.teams.sort()).toEqual(['mobile', 'qa']);
+      expect(bob.teams).toEqual(['qa']);
     });
 
     it('includes release.repo on ticket items', () => {

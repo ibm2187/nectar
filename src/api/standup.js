@@ -263,12 +263,15 @@ function buildStandupData(services, opts = {}) {
     const hasImminentTickets = allItems.some(i => imminentVersions.has(i.release.version));
     const defaultFilter = hasImminentTickets ? 'imminent' : 'all';
 
-    // Derive teams: QA role → qa; any ticket in mobile/web repo → those teams.
+    // Derive teams: QA role → qa only. Non-QA → platform team by ticket repo.
     const teams = new Set();
-    if (roles.includes('qa')) teams.add('qa');
-    for (const { release } of allItems) {
-      const t = teamForRepo(release.repo);
-      if (t) teams.add(t);
+    if (roles.includes('qa')) {
+      teams.add('qa');
+    } else {
+      for (const { release } of allItems) {
+        const t = teamForRepo(release.repo);
+        if (t) teams.add(t);
+      }
     }
 
     people.push({
