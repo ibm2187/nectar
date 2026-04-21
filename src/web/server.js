@@ -239,6 +239,10 @@ function createWebServer(services, config) {
       tickets: r.tickets || [], risk: r.risk || null, ci: r.ci || null,
       targetCustomers: r.targetCustomers,
       targetCustomerSource: r.targetCustomerSource,
+      releaseType: r.releaseType,
+      shipDate: r.shipDate,
+      milestones: r.milestones || [],
+      templateVersion: r.templateVersion,
     };
   }
 

@@ -9,6 +9,59 @@ const { annotateReleases } = require('../core/release-status');
 const { aggregateFeatureFlags, aggregateIntegrations } = require('../core/feature-aggregator');
 const { buildStandupData } = require('./standup');
 const { sendTicketNotification, sendStandupReminder, CANNED_MESSAGES } = require('./ticket-notify');
+const { computeMilestones, recomputeMilestones, autoComputeForRelease, inferReleaseType } = require('../core/milestone-engine');
+
+/**
+ * Evaluate a gate's auto-check function against live release data.
+ * Returns { passed: boolean, detail: string } or null if no auto-check.
+ */
+function evaluateAutoCheck(gate, release, services) {
+  if (!gate.autoCheck) return null;
+
+  const today = new Date().toISOString().split('T')[0];
+
+  switch (gate.autoCheck) {
+    case 'branch-exists':
+      return {
+        passed: !!(release.branch && release.cutAt),
+        detail: release.branch ? `Branch: ${release.branch}` : 'No branch set',
+      };
+
+    case 'time-based':
+      return {
+        passed: gate.effectiveDate ? today >= gate.effectiveDate : false,
+        detail: gate.effectiveDate ? `Due: ${gate.effectiveDate}` : 'No date set',
+      };
+
+    case 'state-is-done':
+      return {
+        passed: release.state === 'done',
+        detail: `State: ${release.state}`,
+      };
+
+    case 'all-prs-merged':
+      // Check via truth engine if available
+      return {
+        passed: false,
+        detail: 'Requires truth engine evaluation',
+      };
+
+    case 'truth-all-certified':
+      return {
+        passed: false,
+        detail: 'Requires truth engine evaluation',
+      };
+
+    case 'migrations-approved':
+      return {
+        passed: true,
+        detail: 'No migration tracking yet',
+      };
+
+    default:
+      return null;
+  }
+}
 
 /** Wrap async route handlers so rejected promises become proper error responses */
 const asyncHandler = (fn) => (req, res, next) => {
@@ -486,6 +539,16 @@ module.exports = function createRoutes(services, config) {
   router.get('/releases/:version', (req, res) => {
     const release = releases.get(req.params.version);
     if (!release) return res.status(404).json({ error: 'Release not found' });
+
+    // Auto-compute milestones if missing but inferrable from version + JIRA date
+    if ((!release.milestones || release.milestones.length === 0) && services.templateStore) {
+      const auto = autoComputeForRelease(release, services.templateStore);
+      if (auto) {
+        releases.update(req.params.version, auto);
+        Object.assign(release, auto);
+      }
+    }
+
     const pipeline = services.pipelineSync
       ? services.pipelineSync.getPipelineForRelease(release)
       : null;
@@ -632,8 +695,91 @@ module.exports = function createRoutes(services, config) {
 
   router.post('/releases', (req, res) => {
     try {
-      const release = releases.create(req.body);
+      const body = { ...req.body };
+
+      // Auto-compute milestones when releaseType + shipDate are provided
+      if (body.releaseType && body.shipDate && services.templateStore) {
+        const template = services.templateStore.get(body.releaseType);
+        if (template) {
+          body.milestones = computeMilestones(body.shipDate, template);
+          body.templateVersion = template.version;
+        }
+      }
+
+      const release = releases.create(body);
       res.status(201).json(release);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Set up or update release train — inline edits of type and/or shipDate.
+  // Accepts partial updates; recomputes milestones preserving existing overrides.
+  router.patch('/releases/:version/train', (req, res) => {
+    try {
+      const release = releases.get(req.params.version);
+      if (!release) return res.status(404).json({ error: 'Release not found' });
+
+      const { templateStore } = services;
+      if (!templateStore) return res.status(501).json({ error: 'Template store not initialized' });
+
+      const newType = req.body.releaseType ?? release.releaseType;
+      const newShipDate = req.body.shipDate ?? release.shipDate;
+
+      if (!newType || !newShipDate) {
+        return res.status(400).json({ error: 'releaseType and shipDate required to compute milestones' });
+      }
+
+      const template = templateStore.get(newType);
+      if (!template) return res.status(400).json({ error: `Unknown release type: ${newType}` });
+
+      const typeChanged = newType !== release.releaseType;
+      let milestones;
+      if (typeChanged || !release.milestones || release.milestones.length === 0) {
+        // Type changed → start fresh from template
+        milestones = computeMilestones(newShipDate, template);
+      } else {
+        // Only ship date changed → recompute preserving overrides + status
+        milestones = recomputeMilestones(newShipDate, release.milestones, template);
+      }
+
+      releases.update(req.params.version, {
+        releaseType: newType,
+        shipDate: newShipDate,
+        milestones,
+        templateVersion: template.version,
+      });
+      res.json(releases.get(req.params.version));
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Legacy endpoint — kept for backwards compat
+  router.post('/releases/:version/setup-train', (req, res) => {
+    try {
+      const release = releases.get(req.params.version);
+      if (!release) return res.status(404).json({ error: 'Release not found' });
+
+      const { releaseType, shipDate } = req.body;
+      if (!releaseType || !shipDate) {
+        return res.status(400).json({ error: 'releaseType and shipDate are required' });
+      }
+
+      const { templateStore } = services;
+      if (!templateStore) return res.status(501).json({ error: 'Template store not initialized' });
+
+      const template = templateStore.get(releaseType);
+      if (!template) return res.status(400).json({ error: `Unknown release type: ${releaseType}` });
+
+      const milestones = computeMilestones(shipDate, template);
+      releases.update(req.params.version, {
+        releaseType,
+        shipDate,
+        milestones,
+        templateVersion: template.version,
+      });
+      res.json(releases.get(req.params.version));
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -3415,6 +3561,259 @@ module.exports = function createRoutes(services, config) {
       results: results.slice(0, MAX_TOTAL),
       total,
     });
+  });
+
+  // ── Release Train Process ─────────────────────────────
+
+  // Templates
+  router.get('/settings/release-templates', (req, res) => {
+    const { templateStore } = services;
+    if (!templateStore) return res.status(501).json({ error: 'Template store not initialized' });
+    res.json(templateStore.list());
+  });
+
+  router.get('/settings/release-templates/:key', (req, res) => {
+    const { templateStore } = services;
+    if (!templateStore) return res.status(501).json({ error: 'Template store not initialized' });
+    const tmpl = templateStore.get(req.params.key);
+    if (!tmpl) return res.status(404).json({ error: `Template not found: ${req.params.key}` });
+    res.json(tmpl);
+  });
+
+  router.put('/settings/release-templates/:key', (req, res) => {
+    const { templateStore } = services;
+    if (!templateStore) return res.status(501).json({ error: 'Template store not initialized' });
+    try {
+      const updated = templateStore.update(req.params.key, req.body, req.body.updatedBy || 'api');
+      res.json(updated);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Milestones on a release
+  router.get('/releases/:version/milestones', (req, res) => {
+    try {
+      const release = releases.get(req.params.version);
+      if (!release) return res.status(404).json({ error: 'Release not found' });
+      res.json({
+        version: release.version,
+        releaseType: release.releaseType,
+        shipDate: release.shipDate,
+        templateVersion: release.templateVersion,
+        milestones: release.milestones || [],
+      });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.patch('/releases/:version/milestones/:milestoneKey', (req, res) => {
+    try {
+      const release = releases.get(req.params.version);
+      if (!release) return res.status(404).json({ error: 'Release not found' });
+
+      const milestones = [...(release.milestones || [])];
+      const idx = milestones.findIndex(m => m.key === req.params.milestoneKey);
+      if (idx === -1) return res.status(404).json({ error: `Milestone not found: ${req.params.milestoneKey}` });
+
+      const { overrideDate, status } = req.body;
+
+      if (overrideDate !== undefined) {
+        milestones[idx] = {
+          ...milestones[idx],
+          overrideDate: overrideDate || null,
+          effectiveDate: overrideDate || milestones[idx].computedDate,
+        };
+      }
+
+      if (status !== undefined) {
+        milestones[idx] = {
+          ...milestones[idx],
+          status,
+          // Reset completion metadata when reopening
+          ...(status === 'pending' ? { completedAt: null, completedBy: null } : {}),
+        };
+      }
+
+      releases.update(req.params.version, { milestones });
+      const updated = releases.get(req.params.version);
+      res.json({ milestones: updated.milestones });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.post('/releases/:version/milestones/:milestoneKey/complete', (req, res) => {
+    try {
+      const release = releases.get(req.params.version);
+      if (!release) return res.status(404).json({ error: 'Release not found' });
+
+      const milestones = [...(release.milestones || [])];
+      const idx = milestones.findIndex(m => m.key === req.params.milestoneKey);
+      if (idx === -1) return res.status(404).json({ error: `Milestone not found: ${req.params.milestoneKey}` });
+
+      milestones[idx] = {
+        ...milestones[idx],
+        status: 'met',
+        completedAt: new Date().toISOString(),
+        completedBy: req.body.user || 'unknown',
+      };
+
+      releases.update(req.params.version, { milestones });
+      const updated = releases.get(req.params.version);
+      res.json({ milestone: updated.milestones[idx] });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.post('/releases/:version/milestones/:milestoneKey/skip', (req, res) => {
+    try {
+      const release = releases.get(req.params.version);
+      if (!release) return res.status(404).json({ error: 'Release not found' });
+
+      const milestones = [...(release.milestones || [])];
+      const idx = milestones.findIndex(m => m.key === req.params.milestoneKey);
+      if (idx === -1) return res.status(404).json({ error: `Milestone not found: ${req.params.milestoneKey}` });
+
+      milestones[idx] = {
+        ...milestones[idx],
+        status: 'skipped',
+        completedAt: new Date().toISOString(),
+        completedBy: req.body.user || 'unknown',
+      };
+
+      releases.update(req.params.version, { milestones });
+      const updated = releases.get(req.params.version);
+      res.json({ milestone: updated.milestones[idx] });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Gates — milestones with live auto-check status
+  router.get('/releases/:version/gates', asyncHandler(async (req, res) => {
+    const release = releases.get(req.params.version);
+    if (!release) return res.status(404).json({ error: 'Release not found' });
+
+    const milestones = release.milestones || [];
+    const gates = milestones.filter(m => m.gate);
+
+    // Evaluate auto-checks
+    const evaluated = gates.map(gate => {
+      const autoResult = evaluateAutoCheck(gate, release, services);
+      const now = new Date().toISOString().split('T')[0];
+      const overdue = gate.status === 'pending' && gate.effectiveDate && gate.effectiveDate < now;
+
+      return {
+        ...gate,
+        autoCheckResult: autoResult,
+        overdue,
+      };
+    });
+
+    res.json({ version: release.version, gates: evaluated });
+  }));
+
+  // Scorecard
+  router.get('/releases/:version/scorecard', (req, res) => {
+    const release = releases.get(req.params.version);
+    if (!release) return res.status(404).json({ error: 'Release not found' });
+
+    const milestones = release.milestones || [];
+    const gates = milestones.filter(m => m.gate);
+    const met = gates.filter(g => g.status === 'met');
+    const missed = gates.filter(g => g.status === 'missed');
+    const skipped = gates.filter(g => g.status === 'skipped');
+    const gateHitRate = gates.length > 0 ? met.length / (gates.length - skipped.length) : null;
+
+    const scorecard = {
+      version: release.version,
+      releaseType: release.releaseType,
+      shipDate: release.shipDate,
+      state: release.state,
+      gateHitRate,
+      totalGates: gates.length,
+      gatesMet: met.length,
+      gatesMissed: missed.length,
+      gatesSkipped: skipped.length,
+      onTimeShip: release.state === 'done' && release.shipDate ? release.updatedAt.split('T')[0] <= release.shipDate : null,
+      milestones: milestones.map(m => ({
+        key: m.key,
+        label: m.label,
+        effectiveDate: m.effectiveDate,
+        status: m.status,
+        completedAt: m.completedAt,
+        gate: m.gate,
+      })),
+    };
+
+    res.json(scorecard);
+  });
+
+  // Process health — cross-release trends
+  router.get('/reports/process-health', (req, res) => {
+    const limit = parseInt(req.query.releases) || 10;
+    const allReleases = releases.list()
+      .filter(r => r.milestones && r.milestones.length > 0)
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+      .slice(0, limit);
+
+    const trends = allReleases.map(r => {
+      const gates = (r.milestones || []).filter(m => m.gate);
+      const met = gates.filter(g => g.status === 'met').length;
+      const skipped = gates.filter(g => g.status === 'skipped').length;
+      const scorable = gates.length - skipped;
+
+      return {
+        version: r.version,
+        releaseType: r.releaseType,
+        shipDate: r.shipDate,
+        state: r.state,
+        gateHitRate: scorable > 0 ? met / scorable : null,
+        totalGates: gates.length,
+        gatesMet: met,
+        gatesMissed: gates.filter(g => g.status === 'missed').length,
+        onTimeShip: r.state === 'done' && r.shipDate ? r.updatedAt.split('T')[0] <= r.shipDate : null,
+        createdAt: r.createdAt,
+      };
+    });
+
+    res.json({ releases: trends });
+  });
+
+  // Upcoming milestones across all active releases
+  router.get('/reports/upcoming-milestones', (req, res) => {
+    const today = new Date().toISOString().split('T')[0];
+    const daysAhead = parseInt(req.query.days) || 14;
+    const futureDate = new Date();
+    futureDate.setDate(futureDate.getDate() + daysAhead);
+    const maxDate = futureDate.toISOString().split('T')[0];
+
+    const activeReleases = releases.list().filter(r =>
+      r.state !== 'done' && r.milestones && r.milestones.length > 0
+    );
+
+    const upcoming = [];
+    for (const r of activeReleases) {
+      for (const m of r.milestones) {
+        if (m.status === 'pending' && m.effectiveDate && m.effectiveDate >= today && m.effectiveDate <= maxDate) {
+          upcoming.push({
+            version: r.version,
+            releaseType: r.releaseType,
+            milestone: m.key,
+            label: m.label,
+            date: m.effectiveDate,
+            owner: m.owner,
+            gate: m.gate,
+          });
+        }
+      }
+    }
+
+    upcoming.sort((a, b) => a.date.localeCompare(b.date));
+    res.json({ upcoming });
   });
 
   // ── Meta ──────────────────────────────────────────────

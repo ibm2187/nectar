@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Release Train UX v2 — Mockups</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+    background: #0a0d14;
+    color: #e2e6ef;
+    padding: 40px 32px;
+    line-height: 1.5;
+  }
+
+  .container { max-width: 1200px; margin: 0 auto; }
+
+  h1 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #a29bfe, #74b9ff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .subtitle {
+    color: #7a8297;
+    margin-bottom: 40px;
+    font-size: 0.95rem;
+  }
+
+  h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #a29bfe;
+    margin-top: 40px;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.8rem;
+  }
+
+  h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .caption {
+    color: #7a8297;
+    font-size: 0.85rem;
+    margin-bottom: 16px;
+  }
+
+  .principle {
+    background: rgba(116, 185, 255, 0.08);
+    border-left: 3px solid #74b9ff;
+    padding: 12px 16px;
+    border-radius: 0 6px 6px 0;
+    margin-bottom: 32px;
+    font-size: 0.9rem;
+    color: #bcc2d1;
+  }
+
+  .principle strong { color: #fff; }
+
+  /* ══ Nectar-styled mockup ══ */
+  .mock {
+    background: #12171f;
+    border: 1px solid #1f2530;
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 20px;
+    font-size: 0.82rem;
+  }
+
+  /* ── Release header ── */
+  .rel-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+  }
+
+  .badge-sm {
+    background: #1c2230;
+    color: #bcc2d1;
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+
+  .rel-version {
+    font-family: 'SF Mono', monospace;
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .state-badge {
+    background: rgba(139, 92, 246, 0.15);
+    color: #a78bfa;
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+
+  .jira-link {
+    color: #60a5fa;
+    font-size: 0.75rem;
+  }
+
+  /* ── Pipeline card ── */
+  .pipeline-card {
+    background: #151b26;
+    border: 1px solid #1f2530;
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 16px;
+  }
+
+  .pipeline-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .pipeline-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.88rem;
+    font-weight: 600;
+  }
+
+  .type-pill {
+    background: #1c2230;
+    color: #bcc2d1;
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: capitalize;
+  }
+
+  .ship-info {
+    color: #7a8297;
+    font-size: 0.78rem;
+  }
+
+  .ship-info strong { color: #fff; font-weight: 500; }
+
+  .editable {
+    cursor: pointer;
+    border-bottom: 1px dashed #4a5468;
+    padding-bottom: 1px;
+    transition: color 0.15s;
+  }
+
+  .editable:hover { color: #74b9ff; border-bottom-color: #74b9ff; }
+
+  .gate-count {
+    color: #7a8297;
+    font-size: 0.75rem;
+  }
+
+  .gate-count .met { color: #22c55e; font-weight: 500; }
+
+  /* ── Gates (full width with arrows) ── */
+  .gates {
+    display: flex;
+    align-items: stretch;
+    width: 100%;
+    gap: 0;
+  }
+
+  .gate {
+    flex: 1 1 0;
+    min-width: 0;
+    background: #151b26;
+    border: 1px solid #1f2530;
+    border-radius: 6px;
+    padding: 10px 8px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .gate:hover { border-color: #3d4354; }
+
+  .gate-arrow {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 6px;
+    color: #3d4354;
+    font-size: 0.9rem;
+    user-select: none;
+  }
+
+  .gate-arrow.met-prev { color: #22c55e; }
+
+  .gate-icon {
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 4px;
+    color: #4a5468;
+  }
+
+  .gate-label {
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: #7a8297;
+    line-height: 1.1;
+    min-height: 20px;
+  }
+
+  .gate-date {
+    font-size: 0.65rem;
+    font-family: 'SF Mono', monospace;
+    color: #4a5468;
+    margin-top: 3px;
+  }
+
+  /* Gate states */
+  .gate.met {
+    background: rgba(34, 197, 94, 0.08);
+    border-color: rgba(34, 197, 94, 0.25);
+  }
+  .gate.met .gate-icon { color: #22c55e; }
+  .gate.met .gate-label { color: #e2e6ef; }
+  .gate.met .gate-date { color: #22c55e; }
+
+  .gate.active {
+    background: rgba(96, 165, 250, 0.1);
+    border-color: rgba(96, 165, 250, 0.4);
+    box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.2);
+  }
+  .gate.active .gate-icon { color: #60a5fa; }
+  .gate.active .gate-label { color: #fff; font-weight: 600; }
+  .gate.active .gate-date { color: #60a5fa; }
+
+  .gate.missed {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.3);
+  }
+  .gate.missed .gate-icon { color: #ef4444; }
+  .gate.missed .gate-label { color: #e2e6ef; }
+  .gate.missed .gate-date { color: #ef4444; }
+
+  .gate.expanded {
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.3);
+  }
+
+  /* ── Gate detail panel ── */
+  .detail-panel {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid #1f2530;
+  }
+
+  .detail-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+
+  .detail-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .detail-meta {
+    display: flex;
+    gap: 10px;
+    font-size: 0.72rem;
+    color: #7a8297;
+    flex-wrap: wrap;
+  }
+
+  .detail-meta .tag {
+    background: #1c2230;
+    padding: 2px 6px;
+    border-radius: 3px;
+    color: #bcc2d1;
+  }
+
+  .detail-date {
+    text-align: right;
+    font-size: 0.72rem;
+  }
+
+  .detail-date-label { color: #7a8297; }
+  .detail-date-value { font-weight: 500; }
+
+  .detail-desc {
+    color: #a3acc0;
+    font-size: 0.78rem;
+    margin-bottom: 10px;
+    line-height: 1.55;
+  }
+
+  .miss-box {
+    background: rgba(239, 68, 68, 0.06);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 0.72rem;
+    color: #ef4444;
+    margin-bottom: 10px;
+  }
+
+  .miss-box .miss-label {
+    font-family: 'SF Mono', monospace;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-right: 8px;
+  }
+
+  .actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    font-size: 0.72rem;
+    padding: 4px 10px;
+    border-radius: 5px;
+    border: none;
+    cursor: pointer;
+    background: #60a5fa;
+    color: #0a0d14;
+    font-weight: 500;
+  }
+
+  .btn.outline {
+    background: transparent;
+    color: #bcc2d1;
+    border: 1px solid #2f3649;
+  }
+
+  .btn.ghost {
+    background: transparent;
+    color: #7a8297;
+    border: none;
+    margin-left: auto;
+  }
+
+  /* ── Inline edit popover ── */
+  .inline-popover {
+    position: absolute;
+    background: #1c2230;
+    border: 1px solid #3d4354;
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 0.75rem;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    z-index: 10;
+  }
+
+  .inline-popover select, .inline-popover input[type="date"] {
+    background: #0f1419;
+    border: 1px solid #2f3649;
+    color: #e2e6ef;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-family: inherit;
+  }
+
+  /* ── Arrow annotations ── */
+  .annotation {
+    position: relative;
+    padding: 8px 12px;
+    background: #1a1f2d;
+    border: 1px dashed #3d4354;
+    border-radius: 6px;
+    color: #a3acc0;
+    font-size: 0.75rem;
+    margin-top: 8px;
+  }
+
+  .annotation::before {
+    content: '↑';
+    color: #74b9ff;
+    font-weight: 700;
+    margin-right: 6px;
+  }
+
+  .diff-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  .diff-col {
+    background: #12171f;
+    border: 1px solid #1f2530;
+    border-radius: 8px;
+    padding: 14px;
+  }
+
+  .diff-col.old { border-left: 3px solid #ef4444; }
+  .diff-col.new { border-left: 3px solid #22c55e; }
+
+  .diff-col h4 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 10px;
+    font-weight: 600;
+  }
+
+  .diff-col.old h4 { color: #ef4444; }
+  .diff-col.new h4 { color: #22c55e; }
+
+  .diff-col ul {
+    list-style: none;
+    font-size: 0.78rem;
+    color: #bcc2d1;
+  }
+
+  .diff-col li {
+    padding: 4px 0;
+    padding-left: 16px;
+    position: relative;
+  }
+
+  .diff-col.old li::before { content: '✗'; color: #ef4444; position: absolute; left: 0; }
+  .diff-col.new li::before { content: '✓'; color: #22c55e; position: absolute; left: 0; }
+
+  .flow-step {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: #151b26;
+    border-radius: 6px;
+    margin-bottom: 8px;
+    font-size: 0.82rem;
+  }
+
+  .flow-num {
+    width: 22px;
+    height: 22px;
+    background: #60a5fa;
+    color: #0a0d14;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.75rem;
+    flex-shrink: 0;
+  }
+
+  .flow-text { flex: 1; color: #bcc2d1; }
+  .flow-text strong { color: #fff; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h1>Release Train UX v2</h1>
+  <p class="subtitle">Zero-setup: milestones auto-compute, pipeline just shows up, configuration is inline.</p>
+
+  <!-- ══ Principle ══ -->
+  <div class="principle">
+    <strong>Core shift:</strong> Release trains are automatic, not opt-in. JIRA tells us the version (→ type) and release date (→ ship date). Nectar attaches milestones on every release with no user action. The pipeline is <em>always</em> visible. Editing is contextual — click the thing you want to change.
+  </div>
+
+  <!-- ══ Before / After ══ -->
+  <h2>Before vs After</h2>
+  <div class="diff-grid">
+    <div class="diff-col old">
+      <h4>Before — Opt-in setup</h4>
+      <ul>
+        <li>User sees big "Configure Release Train" card</li>
+        <li>Forced to pick type + ship date before anything shows</li>
+        <li>Setup is a prerequisite, not a byproduct</li>
+        <li>Manual step for every single release</li>
+        <li>Defaults buried behind a button click</li>
+      </ul>
+    </div>
+    <div class="diff-col new">
+      <h4>After — Auto-configured</h4>
+      <ul>
+        <li>JIRA sync auto-attaches milestones on create</li>
+        <li>Pipeline always renders when data allows</li>
+        <li>Release type + ship date inline-editable in header</li>
+        <li>Click any gate to adjust, complete, or override</li>
+        <li>Configuration only appears when needed</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ══ Flow ══ -->
+  <h2>How it works</h2>
+
+  <div class="flow-step">
+    <div class="flow-num">1</div>
+    <div class="flow-text"><strong>JIRA sync runs.</strong> Detects version "4.2.7-lumen" and releaseDate "2026-04-22".</div>
+  </div>
+  <div class="flow-step">
+    <div class="flow-num">2</div>
+    <div class="flow-text"><strong>Nectar infers release type.</strong> Patch > 0 → point release. Patch = 0 → monthly. Can't determine? leave blank.</div>
+  </div>
+  <div class="flow-step">
+    <div class="flow-num">3</div>
+    <div class="flow-text"><strong>Milestones auto-compute.</strong> From the template for that type, T-minus dates are calculated from ship date.</div>
+  </div>
+  <div class="flow-step">
+    <div class="flow-num">4</div>
+    <div class="flow-text"><strong>Release detail page renders the pipeline.</strong> No setup card. No button. Just the gate bar.</div>
+  </div>
+  <div class="flow-step">
+    <div class="flow-num">5</div>
+    <div class="flow-text"><strong>User edits inline.</strong> Click the ship date to change it. Click the type to change it. Click a gate to override or complete.</div>
+  </div>
+
+  <!-- ══ Mockup 1: Default state ══ -->
+  <h2>Mockup 1 — Default state (the 95% case)</h2>
+  <h3>Release 4.2.7-lumen</h3>
+  <p class="caption">Pipeline just appears. No setup. Ship date + type shown in header, both clickable.</p>
+
+  <div class="mock">
+    <div style="margin-bottom: 12px; color: #60a5fa; font-size: 0.75rem; cursor: pointer;">&larr; Back to releases</div>
+    <div class="rel-header">
+      <span class="badge-sm">webplatform</span>
+      <span class="rel-version">4.2.7-lumen</span>
+      <span class="state-badge">planning</span>
+      <span class="jira-link">JIRA ↗</span>
+    </div>
+    <div style="margin: 4px 0 8px;">
+      <span class="badge-sm" style="background: rgba(139, 92, 246, 0.1); color: #a78bfa;">● Lumen</span>
+    </div>
+
+    <div class="pipeline-card">
+      <div class="pipeline-header">
+        <div class="pipeline-title">
+          <span>Release Train</span>
+          <span class="type-pill editable">Point</span>
+          <span class="ship-info">Ship <span class="editable"><strong>Wed, Apr 22</strong></span></span>
+        </div>
+        <div class="gate-count">
+          <span class="met">2</span> / 7 gates
+        </div>
+      </div>
+
+      <div class="gates">
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">Scope Cutoff</div><div class="gate-date">Apr 13</div></div>
+        <div class="gate-arrow met-prev">→</div>
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">Dev Complete</div><div class="gate-date">Apr 16</div></div>
+        <div class="gate-arrow met-prev">→</div>
+        <div class="gate active"><div class="gate-icon">●</div><div class="gate-label">QA Scope Review</div><div class="gate-date">Apr 16</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Data Migration</div><div class="gate-date">Apr 17</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Certification</div><div class="gate-date">Apr 20</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Staging Smoke</div><div class="gate-date">Apr 21</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Ship</div><div class="gate-date">Apr 22</div></div>
+      </div>
+    </div>
+
+    <div class="annotation">
+      Full width. Arrows between gates show progression. Ship date and type are underlined-dashed — visual affordance that they're editable. Click any gate to manage it. No separate "Configure" button.
+    </div>
+  </div>
+
+  <!-- ══ Mockup 2: Gate clicked ══ -->
+  <h2>Mockup 2 — Click a gate to manage it</h2>
+  <p class="caption">Detail appears below the pipeline. All actions right there.</p>
+
+  <div class="mock">
+    <div class="pipeline-card">
+      <div class="pipeline-header">
+        <div class="pipeline-title">
+          <span>Release Train</span>
+          <span class="type-pill editable">Point</span>
+          <span class="ship-info">Ship <span class="editable"><strong>Wed, Apr 22</strong></span></span>
+        </div>
+        <div class="gate-count"><span class="met">2</span> / 7 gates</div>
+      </div>
+
+      <div class="gates">
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">Scope Cutoff</div><div class="gate-date">Apr 13</div></div>
+        <div class="gate-arrow met-prev">→</div>
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">Dev Complete</div><div class="gate-date">Apr 16</div></div>
+        <div class="gate-arrow met-prev">→</div>
+        <div class="gate active expanded"><div class="gate-icon">●</div><div class="gate-label">QA Scope Review</div><div class="gate-date">Apr 16</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Data Migration</div><div class="gate-date">Apr 17</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Certification</div><div class="gate-date">Apr 20</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Staging Smoke</div><div class="gate-date">Apr 21</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Ship</div><div class="gate-date">Apr 22</div></div>
+      </div>
+
+      <div class="detail-panel">
+        <div class="detail-head">
+          <div>
+            <div class="detail-title">QA Scope Review</div>
+            <div class="detail-meta">
+              <span class="tag" style="border: 1px solid rgba(96,165,250,0.4); color: #60a5fa; background: transparent;">In Progress</span>
+              <span>T-4</span>
+              <span>Owner: <span style="color:#fff;">QA Lead</span></span>
+            </div>
+          </div>
+          <div class="detail-date">
+            <div class="detail-date-label">Due</div>
+            <div class="detail-date-value">Apr 16</div>
+          </div>
+        </div>
+        <div class="detail-desc">
+          QA reviews every ticket that made it to the release. Confirms acceptance criteria exist and are testable. Estimates total testing effort and confirms capacity for the window.
+        </div>
+        <div class="miss-box">
+          <span class="miss-label">If missed</span>
+          QA cycle cannot begin. Untestable tickets deferred.
+        </div>
+        <div class="actions">
+          <button class="btn">Mark Complete</button>
+          <button class="btn outline">Skip</button>
+          <button class="btn outline">Override Date</button>
+          <button class="btn ghost">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Mockup 3: Inline edit ship date ══ -->
+  <h2>Mockup 3 — Inline editing the ship date</h2>
+  <p class="caption">Click the underlined date. A tiny popover appears. Change date, hit enter, done. All milestones recompute (non-overridden ones).</p>
+
+  <div class="mock">
+    <div class="pipeline-card">
+      <div class="pipeline-header">
+        <div class="pipeline-title">
+          <span>Release Train</span>
+          <span class="type-pill editable">Point</span>
+          <span class="ship-info">
+            Ship
+            <span style="position: relative; display: inline-block;">
+              <span class="editable" style="color: #74b9ff; border-bottom-color: #74b9ff;"><strong>Wed, Apr 22</strong></span>
+              <span class="inline-popover" style="top: 24px; left: 0; display: inline-flex; gap: 6px; align-items: center;">
+                <input type="date" value="2026-04-22" />
+                <button class="btn" style="padding: 3px 10px;">Save</button>
+              </span>
+            </span>
+          </span>
+        </div>
+        <div class="gate-count"><span class="met">2</span> / 7 gates</div>
+      </div>
+
+      <div class="gates" style="opacity: 0.6;">
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">Scope Cutoff</div><div class="gate-date">Apr 13</div></div>
+        <div class="gate-arrow met-prev">→</div>
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">Dev Complete</div><div class="gate-date">Apr 16</div></div>
+        <div class="gate-arrow met-prev">→</div>
+        <div class="gate active"><div class="gate-icon">●</div><div class="gate-label">QA Scope Review</div><div class="gate-date">Apr 16</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Data Migration</div><div class="gate-date">Apr 17</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Certification</div><div class="gate-date">Apr 20</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Staging Smoke</div><div class="gate-date">Apr 21</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Ship</div><div class="gate-date">Apr 22</div></div>
+      </div>
+    </div>
+
+    <div class="annotation">
+      Same story for clicking "Point" — a small dropdown shows Monthly / Point / Hotfix. Change and all milestones recompute from the new template.
+    </div>
+  </div>
+
+  <!-- ══ Mockup 4: Inline edit type ══ -->
+  <h2>Mockup 4 — Inline editing the release type</h2>
+  <p class="caption">Minimal interaction. No full-screen dialog, no separate screen. Just click → change → done.</p>
+
+  <div class="mock">
+    <div class="pipeline-card">
+      <div class="pipeline-header">
+        <div class="pipeline-title">
+          <span>Release Train</span>
+          <span style="position: relative; display: inline-block;">
+            <span class="type-pill editable" style="color: #74b9ff; border: 1px solid #74b9ff;">Point</span>
+            <span class="inline-popover" style="top: 28px; left: 0;">
+              <div style="font-size: 0.7rem; color: #7a8297; text-transform: uppercase; letter-spacing: 0.08em; padding: 4px 8px 6px;">Release Type</div>
+              <div style="padding: 4px 8px; border-radius: 4px; cursor: pointer;">Monthly</div>
+              <div style="padding: 4px 8px; border-radius: 4px; background: rgba(96,165,250,0.1); color: #74b9ff; cursor: pointer;">Point ✓</div>
+              <div style="padding: 4px 8px; border-radius: 4px; cursor: pointer;">Hotfix</div>
+            </span>
+          </span>
+          <span class="ship-info">Ship <span class="editable"><strong>Wed, Apr 22</strong></span></span>
+        </div>
+      </div>
+      <div class="gates">
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">Scope Cutoff</div><div class="gate-date">Apr 13</div></div>
+        <div class="gate-arrow met-prev">→</div>
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">Dev Complete</div><div class="gate-date">Apr 16</div></div>
+        <div class="gate-arrow met-prev">→</div>
+        <div class="gate active"><div class="gate-icon">●</div><div class="gate-label">QA Scope Review</div><div class="gate-date">Apr 16</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Data Migration</div><div class="gate-date">Apr 17</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Certification</div><div class="gate-date">Apr 20</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Staging Smoke</div><div class="gate-date">Apr 21</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate"><div class="gate-icon">○</div><div class="gate-label">Ship</div><div class="gate-date">Apr 22</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Mockup 5: Edge case - no ship date ══ -->
+  <h2>Mockup 5 — Release missing ship date (edge case)</h2>
+  <p class="caption">Can't compute milestones without a date. Quiet, compact prompt — no prominent UI block.</p>
+
+  <div class="mock">
+    <div class="rel-header">
+      <span class="badge-sm">webplatform</span>
+      <span class="rel-version">4.3.0</span>
+      <span class="state-badge">planning</span>
+    </div>
+
+    <div class="pipeline-card" style="padding: 10px 14px;">
+      <div class="pipeline-header" style="margin: 0;">
+        <div class="pipeline-title" style="font-size: 0.8rem;">
+          <span style="color: #7a8297; font-weight: 400;">Release Train</span>
+          <span class="type-pill editable">Monthly</span>
+          <span class="ship-info">
+            Ship <span class="editable" style="color: #fbbf24; border-bottom-color: #fbbf24;"><strong>Set ship date</strong></span>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="annotation">
+      When the ship date is missing, the pipeline collapses to a single compact line with a prompt in amber. One click opens the date picker and everything fills in.
+    </div>
+  </div>
+
+  <!-- ══ Mockup 6: Post-ship / scorecard ══ -->
+  <h2>Mockup 6 — After shipping (scorecard view)</h2>
+  <p class="caption">Release is done. Pipeline becomes the scorecard — shows what actually happened.</p>
+
+  <div class="mock">
+    <div class="rel-header">
+      <span class="badge-sm">webplatform</span>
+      <span class="rel-version">4.2.7-lumen</span>
+      <span class="state-badge" style="background: rgba(34,197,94,0.15); color: #22c55e;">done</span>
+      <span class="jira-link">JIRA ↗</span>
+    </div>
+
+    <div class="pipeline-card">
+      <div class="pipeline-header">
+        <div class="pipeline-title">
+          <span>Release Train</span>
+          <span class="type-pill">Point</span>
+          <span class="ship-info">Shipped <strong>Apr 22</strong> (on time)</span>
+        </div>
+        <div class="gate-count">
+          <span class="met">6</span> / 7 gates · <span style="color: #ef4444;">1 missed</span>
+        </div>
+      </div>
+
+      <div class="gates">
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">Scope Cutoff</div><div class="gate-date">Apr 13</div></div>
+        <div class="gate-arrow met-prev">→</div>
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">Dev Complete</div><div class="gate-date">Apr 16</div></div>
+        <div class="gate-arrow met-prev">→</div>
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">QA Scope Review</div><div class="gate-date">Apr 16</div></div>
+        <div class="gate-arrow met-prev">→</div>
+        <div class="gate missed"><div class="gate-icon">✗</div><div class="gate-label">Data Migration</div><div class="gate-date">Apr 18</div></div>
+        <div class="gate-arrow">→</div>
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">Certification</div><div class="gate-date">Apr 20</div></div>
+        <div class="gate-arrow met-prev">→</div>
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">Staging Smoke</div><div class="gate-date">Apr 21</div></div>
+        <div class="gate-arrow met-prev">→</div>
+        <div class="gate met"><div class="gate-icon">✓</div><div class="gate-label">Ship</div><div class="gate-date">Apr 22</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Summary ══ -->
+  <h2>What we remove</h2>
+  <ul style="list-style: none; color: #bcc2d1; font-size: 0.85rem;">
+    <li style="padding: 4px 0;">✗ The full-width "Configure Release Train" setup card</li>
+    <li style="padding: 4px 0;">✗ The separate /configure step and pre-setup state</li>
+    <li style="padding: 4px 0;">✗ The large "Set up as Point Release shipping..." prompt</li>
+    <li style="padding: 4px 0;">✗ Button-driven flows for edits (type, ship date)</li>
+  </ul>
+
+  <h2>What stays</h2>
+  <ul style="list-style: none; color: #bcc2d1; font-size: 0.85rem;">
+    <li style="padding: 4px 0;">✓ Gate pipeline with same states (met / active / pending / missed / skipped)</li>
+    <li style="padding: 4px 0;">✓ Click gate → detail panel with Mark Complete / Skip / Override Date</li>
+    <li style="padding: 4px 0;">✓ Per-milestone override preserves across ship date changes</li>
+    <li style="padding: 4px 0;">✓ Scorecard view after ship (gate hit rate, missed gates)</li>
+    <li style="padding: 4px 0;">✓ Template editor in /config (unchanged)</li>
+  </ul>
+</div>
+
+</body>
+</html>

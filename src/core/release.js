@@ -16,7 +16,7 @@ const TRANSITIONS = {
 };
 
 // Fields that the `update` method is allowed to touch.
-const UPDATABLE_FIELDS = ['branch', 'cutFrom', 'cutBy', 'ci', 'risk', 'notes', 'presentationUrl'];
+const UPDATABLE_FIELDS = ['branch', 'cutFrom', 'cutBy', 'ci', 'risk', 'notes', 'presentationUrl', 'releaseType', 'shipDate', 'milestones', 'templateVersion'];
 
 // Fields that are first-class columns in the `releases` table.
 // Anything outside this set (that we also preserve on load) is stashed in `extra`.
@@ -25,20 +25,20 @@ const KNOWN_COLUMNS = [
   'cherryPicks','ci','risk','comments','deployments','approvals',
   'notes','presentationUrl',
   'jiraVersionId','jiraVersionName','jiraReleased','jiraReleaseDate','jiraArchived',
+  'releaseType','shipDate','milestones','templateVersion',
   'createdAt','updatedAt',
 ];
 
-const JSON_COLUMNS = ['cherryPicks','ci','risk','comments','deployments','approvals'];
+const JSON_COLUMNS = ['cherryPicks','ci','risk','comments','deployments','approvals','milestones'];
 
 // ── Release factory ─────────────────────────────────────────────────────────
 
-function createRelease({ repo, version, branch, cutFrom, cutBy }) {
+function createRelease({ repo, version, branch, cutFrom, cutBy, releaseType, shipDate, milestones, templateVersion }) {
   return {
     id: repo ? `rel-${repo}-${version}` : `rel-${version}`,
     repo: repo || null,
     version,
     state: 'planning',
-    // branch is null until discovery confirms one exists in the repo
     branch: branch || null,
     cutFrom: cutFrom || null,
     cutAt: null,
@@ -53,6 +53,11 @@ function createRelease({ repo, version, branch, cutFrom, cutBy }) {
     deployments: [],
     approvals: [],
     notes: null,
+
+    releaseType: releaseType || null,
+    shipDate: shipDate || null,
+    milestones: milestones || [],
+    templateVersion: templateVersion || null,
 
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -178,12 +183,12 @@ class ReleaseManager extends EventEmitter {
 
   // ── Create ──────────────────────────────────────────────
 
-  create({ repo, version, branch, cutFrom, cutBy }) {
+  create({ repo, version, branch, cutFrom, cutBy, releaseType, shipDate, milestones, templateVersion }) {
     const key = this._key(repo, version);
     if (this.releases.has(key)) {
       throw new Error(`Release ${repo ? repo + ':' : ''}${version} already exists`);
     }
-    const release = createRelease({ repo, version, branch, cutFrom, cutBy });
+    const release = createRelease({ repo, version, branch, cutFrom, cutBy, releaseType, shipDate, milestones, templateVersion });
     this.releases.set(key, release);
     this._upsertRow(key, release);
 
@@ -475,11 +480,13 @@ class ReleaseManager extends EventEmitter {
                             cherryPicks, ci, risk, comments, deployments, approvals,
                             notes, presentationUrl,
                             jiraVersionId, jiraVersionName, jiraReleased, jiraReleaseDate, jiraArchived,
+                            releaseType, shipDate, milestones, templateVersion,
                             extra, createdAt, updatedAt)
       VALUES (@key, @id, @repo, @version, @state, @branch, @cutFrom, @cutAt, @cutBy,
               @cherryPicks, @ci, @risk, @comments, @deployments, @approvals,
               @notes, @presentationUrl,
               @jiraVersionId, @jiraVersionName, @jiraReleased, @jiraReleaseDate, @jiraArchived,
+              @releaseType, @shipDate, @milestones, @templateVersion,
               @extra, @createdAt, @updatedAt)
       ON CONFLICT(key) DO UPDATE SET
         id              = excluded.id,
@@ -503,6 +510,10 @@ class ReleaseManager extends EventEmitter {
         jiraReleased    = excluded.jiraReleased,
         jiraReleaseDate = excluded.jiraReleaseDate,
         jiraArchived    = excluded.jiraArchived,
+        releaseType     = excluded.releaseType,
+        shipDate        = excluded.shipDate,
+        milestones      = excluded.milestones,
+        templateVersion = excluded.templateVersion,
         extra           = excluded.extra,
         updatedAt       = excluded.updatedAt
     `).run(row);
@@ -541,6 +552,10 @@ function releaseToRow(key, release) {
     jiraReleased: release.jiraReleased == null ? null : (release.jiraReleased ? 1 : 0),
     jiraReleaseDate: release.jiraReleaseDate ?? null,
     jiraArchived: release.jiraArchived == null ? null : (release.jiraArchived ? 1 : 0),
+    releaseType: release.releaseType ?? null,
+    shipDate: release.shipDate ?? null,
+    milestones: JSON.stringify(release.milestones || []),
+    templateVersion: release.templateVersion ?? null,
     extra: Object.keys(extra).length ? JSON.stringify(extra) : null,
     createdAt: release.createdAt,
     updatedAt: release.updatedAt,
@@ -564,6 +579,9 @@ function rowToRelease(row) {
     jiraReleased: row.jiraReleased == null ? null : !!row.jiraReleased,
     jiraReleaseDate: row.jiraReleaseDate,
     jiraArchived: row.jiraArchived == null ? null : !!row.jiraArchived,
+    releaseType: row.releaseType ?? null,
+    shipDate: row.shipDate ?? null,
+    templateVersion: row.templateVersion ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

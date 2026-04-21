@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Release Train Process — Implementation Plan</title>
+<style>
+  @page { size: Letter; margin: 22mm 20mm; }
+  @page :first { margin-bottom: 0; }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.55;
+    color: #354052;
+    background: white;
+  }
+
+  /* ── Viv Cover ── */
+  .cover {
+    height: 235mm;
+    display: flex;
+    flex-direction: column;
+    page-break-after: always;
+  }
+
+  .cover-logo { width: 140px; height: auto; margin-bottom: 2em; }
+
+  .cover-body {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding-right: 20mm;
+  }
+
+  .cover-eyebrow {
+    font-size: 11pt;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: #7C16EE;
+    font-weight: 700;
+    margin-bottom: 0.6em;
+  }
+
+  .cover-title {
+    font-size: 42pt;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+    color: #1400F5;
+    margin: 0 0 0.25em;
+    border: none;
+  }
+
+  .cover-date {
+    font-size: 15pt;
+    color: #647CA1;
+    margin-bottom: 1.8em;
+  }
+
+  .cover-tagline {
+    font-size: 13pt;
+    line-height: 1.5;
+    color: #354052;
+    max-width: 85%;
+    padding-top: 1.2em;
+    border-top: 3px solid transparent;
+    border-image: linear-gradient(90deg, #FF00F2 0%, #7C16EE 65%, #1400F5 100%) 1;
+  }
+
+  .cover-footer {
+    font-size: 9pt;
+    color: #A0AEC0;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    font-weight: 600;
+    margin-top: 2em;
+  }
+
+  /* ── Headings ── */
+  h2 {
+    font-size: 20pt;
+    font-weight: 600;
+    color: #1400F5;
+    border-bottom: 1px solid #EEEEEE;
+    padding-bottom: 6px;
+    margin: 0 0 14px;
+    page-break-before: always;
+    page-break-after: avoid;
+    display: flex;
+    align-items: baseline;
+    gap: 0.55em;
+  }
+
+  h2::before {
+    content: "";
+    display: inline-block;
+    width: 5px;
+    height: 0.9em;
+    background: linear-gradient(180deg, #FF00F2 0%, #7C16EE 55%, #1400F5 100%);
+    border-radius: 2px;
+    flex: 0 0 auto;
+    align-self: center;
+  }
+
+  .cover + h2, h2:first-of-type { page-break-before: auto; margin-top: 0; }
+
+  h3 {
+    font-size: 13pt;
+    font-weight: 600;
+    color: #354052;
+    margin: 1.4em 0 0.4em;
+    page-break-after: avoid;
+  }
+
+  h4 {
+    font-size: 10.5pt;
+    font-weight: 600;
+    color: #647CA1;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 1.1em 0 0.3em;
+    page-break-after: avoid;
+  }
+
+  p { margin: 0 0 0.85em; }
+  ul, ol { margin: 0.3em 0 1.1em; padding-left: 1.5em; }
+  li { margin: 0.25em 0; line-height: 1.5; }
+  strong { color: #1400F5; font-weight: 600; }
+  code {
+    background: #F6F4FF;
+    padding: 0.1em 0.4em;
+    border-radius: 3px;
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 0.88em;
+    border: 1px solid #EEEEEE;
+  }
+  hr { border: none; border-top: 1px solid #EEEEEE; margin: 2em 0; }
+
+  /* ── Tables ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1em 0 1.5em;
+    font-size: 9.5pt;
+    page-break-inside: avoid;
+    border: 1px solid #EEEEEE;
+  }
+
+  thead { background: #1400F5; color: #fff; }
+
+  thead th {
+    text-align: left;
+    padding: 0.7em 0.9em;
+    font-weight: 600;
+    font-size: 8.5pt;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    border: none;
+  }
+
+  tbody td {
+    padding: 0.65em 0.9em;
+    border-bottom: 1px solid #EEEEEE;
+    vertical-align: top;
+  }
+
+  tbody tr:nth-child(even) td { background: #F6F4FF; }
+  td strong { color: #1400F5; }
+  td:nth-child(2), th:nth-child(2) { white-space: nowrap; }
+
+  /* ── Callout ── */
+  .callout {
+    border-left: 4px solid #7C16EE;
+    background: #F6F4FF;
+    margin: 1.2em 0;
+    padding: 1em 1.3em;
+    border-radius: 0 4px 4px 0;
+    page-break-inside: avoid;
+  }
+
+  .callout strong { color: #1400F5; }
+
+  /* ── Mockup frames ── */
+  .mockup {
+    background: #0f1117;
+    border: 1px solid #2a2f3e;
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin: 16px 0;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 8.5pt;
+    line-height: 1.6;
+    color: #e2e4ed;
+    white-space: pre;
+    overflow-x: auto;
+    page-break-inside: avoid;
+  }
+
+  .mockup .m-title { color: #a29bfe; font-weight: 700; }
+  .mockup .m-green { color: #22c55e; }
+  .mockup .m-red { color: #ef4444; }
+  .mockup .m-orange { color: #f59e0b; }
+  .mockup .m-blue { color: #3b82f6; }
+  .mockup .m-purple { color: #8b5cf6; }
+  .mockup .m-cyan { color: #06b6d4; }
+  .mockup .m-dim { color: #555a6e; }
+  .mockup .m-muted { color: #7a7f94; }
+  .mockup .m-hot { color: #f43f5e; }
+  .mockup .m-white { color: #ffffff; font-weight: 700; }
+
+  /* ── Phase cards ── */
+  .phase {
+    background: #F6F4FF;
+    border: 1px solid #EEEEEE;
+    border-left: 4px solid #7C16EE;
+    border-radius: 0 8px 8px 0;
+    padding: 16px 20px;
+    margin: 12px 0;
+    page-break-inside: avoid;
+  }
+
+  .phase h4 {
+    margin: 0 0 6px;
+    color: #1400F5;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 11pt;
+  }
+
+  .phase .est {
+    font-size: 8.5pt;
+    color: #647CA1;
+    font-weight: 600;
+    float: right;
+  }
+
+  .phase ul { margin: 4px 0 0; font-size: 9.5pt; }
+
+  .page-break { page-break-before: always; }
+
+  .footer {
+    text-align: center;
+    font-size: 8pt;
+    color: #A0AEC0;
+    margin-top: 40px;
+    padding-top: 12px;
+    border-top: 1px solid #EEEEEE;
+  }
+</style>
+</head>
+<body>
+
+<!-- ══════════ COVER ══════════ -->
+<div class="cover">
+  <img class="cover-logo" src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz4KPCEtLSBHZW5lcmF0b3I6IEFkb2JlIElsbHVzdHJhdG9yIDI2LjUuMCwgU1ZHIEV4cG9ydCBQbHVnLUluIC4gU1ZHIFZlcnNpb246IDYuMDAgQnVpbGQgMCkgIC0tPgo8c3ZnIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayIgeD0iMHB4IiB5PSIwcHgiCgkgdmlld0JveD0iMCAwIDQzMiAxNTIuOSIgc3R5bGU9ImVuYWJsZS1iYWNrZ3JvdW5kOm5ldyAwIDAgNDMyIDE1Mi45OyIgeG1sOnNwYWNlPSJwcmVzZXJ2ZSI+CjxzdHlsZSB0eXBlPSJ0ZXh0L2NzcyI+Cgkuc3Qwe2ZpbGw6dXJsKCNTVkdJRF8xXyk7fQoJLnN0MXtmaWxsOnVybCgjU1ZHSURfMDAwMDAwNzI5NzAwMTA4MTMyNDQ0MjUwMTAwMDAwMDY0Mzc4NDg0NjY5NDM5OTg2MTVfKTt9Cgkuc3Qye2ZpbGw6dXJsKCNTVkdJRF8wMDAwMDExNDc2NjU5NTM5MTU4NTE2MDYzMDAwMDAwMTU4NjA5NTAwMzQzOTI2NjQ0MF8pO30KCS5zdDN7ZmlsbDp1cmwoI1NWR0lEXzAwMDAwMDM2OTQxOTU3Mzg1ODI0MzI5NDUwMDAwMDE2MTUzMjk0OTQ2NTY1OTA4MTMzXyk7fQoJLnN0NHtmaWxsOnVybCgjU1ZHSURfMDAwMDAwMjgyOTY1ODU3NTAwNDYxNDA2NzAwMDAwMTI2MTgxMzc1MTcwNTA0ODEzMjJfKTt9Cgkuc3Q1e2ZpbGw6dXJsKCNTVkdJRF8wMDAwMDA2MjE1MjA3MjA2MTc4MDIwMDM5MDAwMDAxMjQ4MDc5NTM5ODA5OTYyNTM2MF8pO30KCS5zdDZ7ZmlsbDp1cmwoI1NWR0lEXzAwMDAwMDU1Njg1MTQ1NjIxNTc0MjM4NDEwMDAwMDE1Njg2NTAxNTQ5MjgzMDM1NTUwXyk7fQoJLnN0N3tmaWxsOnVybCgjU1ZHSURfMDAwMDAwMDAxODYyMTI2MTkxNjA1MTg3MDAwMDAwMTA2MzQ4OTIzNjE4OTMxNjM0NDFfKTt9Cgkuc3Q4e2ZpbGw6dXJsKCNTVkdJRF8wMDAwMDAxNjA1ODQ5MjQ0Mjc1NDI4NDczMDAwMDAxNjYyMzA2NTcwMzEyOTYyNDk5M18pO30KCS5zdDl7ZmlsbDojRkZGRkZGO30KCS5zdDEwe2ZpbGw6dXJsKCNTVkdJRF8wMDAwMDAyMDM3NDk3NDM4MjAzNjAwODQzMDAwMDAxMTQzNzc5MDUxNjQ5NzMzMTg0Ml8pO30KCS5zdDExe2ZpbGw6dXJsKCNTVkdJRF8wMDAwMDAxOTY1OTg0MTQ3ODE1MTM2NjA2MDAwMDAxNjA0MDA4MjgyNDM2Nzc2MzYxM18pO30KCS5zdDEye2ZpbGw6dXJsKCNTVkdJRF8wMDAwMDAxMzE2ODUyNjAzMTU2NjI4Mjk0MDAwMDAxNTc3NDI0OTAwODcwOTYzMTEzNV8pO30KCS5zdDEze2ZpbGw6dXJsKCNTVkdJRF8wMDAwMDEyOTE3OTk5OTgwMzg3NzM3OTY4MDAwMDAwNTgxMzI5NzY2NTgxNjY3ODAyOF8pO30KCS5zdDE0e2ZpbGw6dXJsKCNTVkdJRF8wMDAwMDE1NDQyODM2MTU3MTIwNjU5OTkwMDAwMDAxMTAxMzEyMzU0MzcxOTUxMTk3MF8pO30KCS5zdDE1e2ZpbGw6dXJsKCNTVkdJRF8wMDAwMDAxMzE3ODE5ODI2ODQ5OTM3NTQ1MDAwMDAxNDgwOTE1MzQzODA0MzkzNjE3MF8pO30KPC9zdHlsZT4KPGcgaWQ9IkxheWVyXzQiPgo8L2c+CjxnIGlkPSJMYXllcl8xIj4KCTxnPgoJCTxsaW5lYXJHcmFkaWVudCBpZD0iU1ZHSURfMV8iIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIiB4MT0iLTEuMjQyOCIgeTE9Ijc2LjQ1NjgiIHgyPSI0MjIuNzgxMyIgeTI9Ijc2LjQ1NjgiPgoJCQk8c3RvcCAgb2Zmc2V0PSIwIiBzdHlsZT0ic3RvcC1jb2xvcjojRkYwMEYyIi8+CgkJCTxzdG9wICBvZmZzZXQ9IjAuNjUiIHN0eWxlPSJzdG9wLWNvbG9yOiM3QzE2RUUiLz4KCQkJPHN0b3AgIG9mZnNldD0iMSIgc3R5bGU9InN0b3AtY29sb3I6IzE0MDBGNSIvPgoJCTwvbGluZWFyR3JhZGllbnQ+CgkJPHJlY3QgeD0iMTg2LjQiIGNsYXNzPSJzdDAiIHdpZHRoPSI1OS4xIiBoZWlnaHQ9IjE1Mi45Ii8+CgkJCgkJCTxsaW5lYXJHcmFkaWVudCBpZD0iU1ZHSURfMDAwMDAwODA5MjgwMjg4MTMyMDYwMjMxODAwMDAwMDc5ODQ5NzA0NTAyOTQzMjQ4ODdfIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSIgeDE9Ii0xLjI0MjgiIHkxPSI3Ni40NTY4IiB4Mj0iNDIyLjc4MTMiIHkyPSI3Ni40NTY4Ij4KCQkJPHN0b3AgIG9mZnNldD0iMCIgc3R5bGU9InN0b3AtY29sb3I6I0ZGMDBGMiIvPgoJCQk8c3RvcCAgb2Zmc2V0PSIwLjY1IiBzdHlsZT0ic3RvcC1jb2xvcjojN0MxNkVFIi8+CgkJCTxzdG9wICBvZmZzZXQ9IjEiIHN0eWxlPSJzdG9wLWNvbG9yOiMxNDAwRjUiLz4KCQk8L2xpbmVhckdyYWRpZW50PgoJCTxwb2x5Z29uIHN0eWxlPSJmaWxsOnVybCgjU1ZHSURfMDAwMDAwODA5MjgwMjg4MTMyMDYwMjMxODAwMDAwMDc5ODQ5NzA0NTAyOTQzMjQ4ODdfKTsiIHBvaW50cz0iODguMSwzNC4zIDY4LjUsMCAwLDAgCgkJCTg4LjEsMTUyLjkgMTc2LjMsMCAxMDcuOCwwIAkJIi8+CgkJCgkJCTxsaW5lYXJHcmFkaWVudCBpZD0iU1ZHSURfMDAwMDAwNDYzMjM0MjQyOTE5Nzc0NjQ4NTAwMDAwMTQyNjMyOTgyNTI0NzYxMTc4OTBfIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSIgeDE9Ii0xLjI0MjgiIHkxPSI3Ni40NTY4IiB4Mj0iNDIyLjc4MTMiIHkyPSI3Ni40NTY4Ij4KCQkJPHN0b3AgIG9mZnNldD0iMCIgc3R5bGU9InN0b3AtY29sb3I6I0ZGMDBGMiIvPgoJCQk8c3RvcCAgb2Zmc2V0PSIwLjY1IiBzdHlsZT0ic3RvcC1jb2xvcjojN0MxNkVFIi8+CgkJCTxzdG9wICBvZmZzZXQ9IjEiIHN0eWxlPSJzdG9wLWNvbG9yOiMxNDAwRjUiLz4KCQk8L2xpbmVhckdyYWRpZW50PgoJCTxwb2x5Z29uIHN0eWxlPSJmaWxsOnVybCgjU1ZHSURfMDAwMDAwNDYzMjM0MjQyOTE5Nzc0NjQ4NTAwMDAwMTQyNjMyOTgyNTI0NzYxMTc4OTBfKTsiIHBvaW50cz0iMzYzLjUsMCAzNDMuOSwzNC4zIDMyNC4yLDAgCgkJCTI1NS43LDAgMzQzLjksMTUyLjkgNDMyLDAgCQkiLz4KCTwvZz4KPC9nPgo8L3N2Zz4K" />
+  <div class="cover-body">
+    <div class="cover-eyebrow">Implementation Plan</div>
+    <div class="cover-title">Release Train Process in Nectar</div>
+    <div class="cover-date">April 2026</div>
+    <p class="cover-tagline">Configurable milestones, gate enforcement, process reporting, and accountability — built into the tool the team already uses every day.</p>
+  </div>
+  <div class="cover-footer">Viv Technologies &middot; Confidential</div>
+</div>
+
+<!-- ══════════ WHAT WE'RE BUILDING ══════════ -->
+<h2>1. What We're Building</h2>
+
+<p>Four capabilities, layered so each is independently useful:</p>
+
+<table>
+  <thead>
+    <tr><th>Capability</th><th>What It Does</th><th>Who Uses It</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Configurable Templates</strong></td><td>Define T-minus milestones per release type. Editable in Nectar settings — no code deploy needed.</td><td>CTO, PM</td></tr>
+    <tr><td><strong>Gate Pipeline</strong></td><td>Visual gate-by-gate status on every release. Auto-checks + manual sign-offs. Blocks progression when criteria aren't met.</td><td>PM, Dev Lead, QA Lead</td></tr>
+    <tr><td><strong>Process Reporting</strong></td><td>Release scorecards, cross-release trends, milestone compliance, scope creep tracking.</td><td>CTO, PM</td></tr>
+    <tr><td><strong>Alerts &amp; Enforcement</strong></td><td>Slack alerts on missed gates, freeze violations, SLA breaches. RCA countdown tracking.</td><td>Everyone</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>Design principle:</strong> The process lives inside the release workflow, not in a separate doc. Every gate shows its rules when you click it. The process page is the reference — the gate pipeline is the daily driver.
+</div>
+
+<!-- ══════════ DATA MODEL ══════════ -->
+<h2>2. Data Model Changes</h2>
+
+<h3>New Table: <code>release_templates</code></h3>
+
+<table>
+  <thead><tr><th>Column</th><th>Type</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><strong>key</strong></td><td>TEXT PK</td><td>"monthly", "point", "hotfix"</td></tr>
+    <tr><td><strong>label</strong></td><td>TEXT</td><td>Display name</td></tr>
+    <tr><td><strong>shipDay</strong></td><td>TEXT</td><td>"wednesday"</td></tr>
+    <tr><td><strong>bufferDay</strong></td><td>TEXT</td><td>"thursday"</td></tr>
+    <tr><td><strong>skipWeekends</strong></td><td>INTEGER</td><td>1 = skip weekends in T-minus calc</td></tr>
+    <tr><td><strong>milestones</strong></td><td>TEXT (JSON)</td><td>Array of milestone definitions</td></tr>
+    <tr><td><strong>version</strong></td><td>INTEGER</td><td>Auto-increment on edit for auditing</td></tr>
+    <tr><td><strong>updatedAt</strong></td><td>TEXT</td><td>Last modified timestamp</td></tr>
+    <tr><td><strong>updatedBy</strong></td><td>TEXT</td><td>Who last edited</td></tr>
+  </tbody>
+</table>
+
+<h4>Milestone Definition Shape</h4>
+<div class="mockup">
+<span class="m-muted">// Each milestone in the template</span>
+{
+  <span class="m-purple">"key"</span>:         <span class="m-green">"scope-lock"</span>,
+  <span class="m-purple">"label"</span>:       <span class="m-green">"Scope Lock"</span>,
+  <span class="m-purple">"tMinus"</span>:      <span class="m-orange">25</span>,                  <span class="m-muted">// business days before ship</span>
+  <span class="m-purple">"owner"</span>:       <span class="m-green">"PM"</span>,
+  <span class="m-purple">"gate"</span>:        <span class="m-orange">true</span>,                <span class="m-muted">// blocks next milestone?</span>
+  <span class="m-purple">"description"</span>: <span class="m-green">"Customer Lead, PM, and Project Manager define scope..."</span>,
+  <span class="m-purple">"autoCheck"</span>:   <span class="m-green">"all-tickets-have-target-version"</span>,  <span class="m-muted">// or null for manual</span>
+  <span class="m-purple">"missAction"</span>:  <span class="m-green">"Ticket rolls to next release."</span>
+}
+</div>
+
+<h3>Changes to <code>releases</code> Table</h3>
+
+<table>
+  <thead><tr><th>New Column</th><th>Type</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><strong>releaseType</strong></td><td>TEXT</td><td>"monthly" | "point" | "hotfix"</td></tr>
+    <tr><td><strong>shipDate</strong></td><td>TEXT</td><td>Target ship date (ISO). The anchor for all T-minus computation.</td></tr>
+    <tr><td><strong>milestones</strong></td><td>TEXT (JSON)</td><td>Concrete milestone instances with dates + status</td></tr>
+    <tr><td><strong>templateVersion</strong></td><td>INTEGER</td><td>Which template version was used at creation</td></tr>
+  </tbody>
+</table>
+
+<h4>Milestone Instance Shape (on a release)</h4>
+<div class="mockup">
+<span class="m-muted">// Each milestone instance — computed + overridable</span>
+{
+  <span class="m-purple">"key"</span>:           <span class="m-green">"scope-lock"</span>,
+  <span class="m-purple">"label"</span>:         <span class="m-green">"Scope Lock"</span>,
+  <span class="m-purple">"tMinus"</span>:        <span class="m-orange">25</span>,
+  <span class="m-purple">"computedDate"</span>:  <span class="m-green">"2026-04-14"</span>,       <span class="m-muted">// auto-calculated from shipDate</span>
+  <span class="m-purple">"overrideDate"</span>:  <span class="m-orange">null</span>,               <span class="m-muted">// PM manually set? takes priority</span>
+  <span class="m-purple">"effectiveDate"</span>: <span class="m-green">"2026-04-14"</span>,       <span class="m-muted">// overrideDate ?? computedDate</span>
+  <span class="m-purple">"status"</span>:        <span class="m-green">"met"</span>,              <span class="m-muted">// pending | met | missed | skipped</span>
+  <span class="m-purple">"completedAt"</span>:   <span class="m-green">"2026-04-14T17:30:00Z"</span>,
+  <span class="m-purple">"completedBy"</span>:   <span class="m-green">"sarah@viv.com"</span>,
+  <span class="m-purple">"owner"</span>:         <span class="m-green">"PM"</span>,
+  <span class="m-purple">"gate"</span>:          <span class="m-orange">true</span>,
+  <span class="m-purple">"autoCheck"</span>:     <span class="m-green">"all-tickets-have-target-version"</span>
+}
+</div>
+
+<h3>New Table: <code>release_scorecards</code></h3>
+
+<table>
+  <thead><tr><th>Column</th><th>Type</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><strong>releaseKey</strong></td><td>TEXT PK, FK</td><td>Links to releases.key</td></tr>
+    <tr><td><strong>gateHitRate</strong></td><td>REAL</td><td>% of gates met on time</td></tr>
+    <tr><td><strong>onTimeShip</strong></td><td>INTEGER</td><td>1 = shipped on target date</td></tr>
+    <tr><td><strong>scopeChanges</strong></td><td>INTEGER</td><td>Tickets added after scope lock</td></tr>
+    <tr><td><strong>postFreezeChanges</strong></td><td>INTEGER</td><td>Cherry-picks after freeze</td></tr>
+    <tr><td><strong>qaBugsFound</strong></td><td>INTEGER</td><td>Bugs found during QA cycle</td></tr>
+    <tr><td><strong>qaSlaViolations</strong></td><td>INTEGER</td><td>Bugs not fixed within 24h</td></tr>
+    <tr><td><strong>migrationCount</strong></td><td>INTEGER</td><td>Data migrations in release</td></tr>
+    <tr><td><strong>rcaFiledAt</strong></td><td>TEXT</td><td>When RCA was filed</td></tr>
+    <tr><td><strong>cycleTimeDays</strong></td><td>INTEGER</td><td>Total business days scope→ship</td></tr>
+    <tr><td><strong>detail</strong></td><td>TEXT (JSON)</td><td>Full scorecard data</td></tr>
+    <tr><td><strong>computedAt</strong></td><td>TEXT</td><td>When scorecard was generated</td></tr>
+  </tbody>
+</table>
+
+<!-- ══════════ UI MOCKUPS ══════════ -->
+<h2>3. UI Mockups</h2>
+
+<h3>3a. Gate Pipeline — Release Detail Page</h3>
+
+<p>This replaces the existing timeline bar at the top of ReleaseDetail. It's the daily driver — the first thing you see when you open any release.</p>
+
+<div class="mockup">
+<span class="m-title">4.3.0 Monthly Release</span>                                   <span class="m-muted">Ship: Wed May 14</span>
+<span class="m-dim">────────────────────────────────────────────────────────────────────────────</span>
+
+ <span class="m-green">&#x2588;&#x2588;</span> Scope    <span class="m-green">&#x2588;&#x2588;</span> Dev      <span class="m-green">&#x2588;&#x2588;</span> QA       <span class="m-green">&#x2588;&#x2588;</span> Branch   <span class="m-orange">&#x2588;&#x2588;</span> QA       <span class="m-dim">&#x2588;&#x2588;</span> CP       <span class="m-dim">&#x2588;&#x2588;</span> Data     <span class="m-dim">&#x2588;&#x2588;</span> Cert     <span class="m-dim">&#x2588;&#x2588;</span> Ship
+    Lock        Done       Review      Cut       Cycle      Freeze     Migr.
+ <span class="m-green">  ✅          ✅          ✅          ✅   </span>     <span class="m-orange">🔄   </span>      <span class="m-dim">⏳          ⏳          ⏳          ⏳</span>
+ <span class="m-muted"> Apr 14      Apr 30      Apr 30      May 1      ···       May 9      May 12     May 12     May 14</span>
+ <span class="m-green"> on time     on time     on time     on time</span>     <span class="m-orange">active</span>
+                                                   <span class="m-white">▲ TODAY</span>
+</div>
+
+<h3>3b. Gate Detail Popover (click any gate node)</h3>
+
+<div class="mockup">
+<span class="m-dim">┌─────────────────────────────────────────────────┐</span>
+<span class="m-dim">│</span> <span class="m-title">Cherry-Pick Freeze</span>                    <span class="m-orange">T-6</span>      <span class="m-dim">│</span>
+<span class="m-dim">│</span>                                                 <span class="m-dim">│</span>
+<span class="m-dim">│</span> <span class="m-muted">Owner:</span> PM          <span class="m-muted">Due:</span> Fri May 9          <span class="m-dim">│</span>
+<span class="m-dim">│</span> <span class="m-muted">Status:</span> <span class="m-orange">Pending</span>    <span class="m-muted">Type:</span> Hard Gate         <span class="m-dim">│</span>
+<span class="m-dim">│</span>                                                 <span class="m-dim">│</span>
+<span class="m-dim">│</span> <span class="m-white">What this means:</span>                               <span class="m-dim">│</span>
+<span class="m-dim">│</span> No more cherry-picks without PM + CTO approval. <span class="m-dim">│</span>
+<span class="m-dim">│</span> Only P0/S1 fixes bypass. Mobile apps submit to  <span class="m-dim">│</span>
+<span class="m-dim">│</span> App Store + Play Store.                          <span class="m-dim">│</span>
+<span class="m-dim">│</span>                                                 <span class="m-dim">│</span>
+<span class="m-dim">│</span> <span class="m-white">If missed:</span>                                    <span class="m-dim">│</span>
+<span class="m-dim">│</span> <span class="m-red">Unapproved cherry-pick = revert + RCA.</span>         <span class="m-dim">│</span>
+<span class="m-dim">│</span>                                                 <span class="m-dim">│</span>
+<span class="m-dim">│</span> <span class="m-muted">──────────────────────────────</span>                  <span class="m-dim">│</span>
+<span class="m-dim">│</span>                                                 <span class="m-dim">│</span>
+<span class="m-dim">│</span>  <span class="m-blue">[Override Date]</span>   <span class="m-green">[Mark Complete]</span>   <span class="m-muted">[Skip]</span>  <span class="m-dim">│</span>
+<span class="m-dim">│</span>                                                 <span class="m-dim">│</span>
+<span class="m-dim">└─────────────────────────────────────────────────┘</span>
+</div>
+
+<h3>3c. Create Release Dialog — Updated</h3>
+
+<div class="mockup">
+<span class="m-dim">┌────────────────────────────────────────────────────┐</span>
+<span class="m-dim">│</span> <span class="m-title">Create Release</span>                                   <span class="m-dim">│</span>
+<span class="m-dim">│</span>                                                    <span class="m-dim">│</span>
+<span class="m-dim">│</span>  Repository    <span class="m-white">[webplatform        ▾]</span>              <span class="m-dim">│</span>
+<span class="m-dim">│</span>  Version       <span class="m-white">[4.3.0              ]</span>              <span class="m-dim">│</span>
+<span class="m-dim">│</span>  Release Type  <span class="m-white">[Monthly            ▾]</span>  <span class="m-green">← NEW</span>     <span class="m-dim">│</span>
+<span class="m-dim">│</span>  Ship Date     <span class="m-white">[May 14, 2026       📅]</span> <span class="m-green">← NEW</span>     <span class="m-dim">│</span>
+<span class="m-dim">│</span>                                                    <span class="m-dim">│</span>
+<span class="m-dim">│</span>  <span class="m-muted">Milestones (auto-computed from template):</span>        <span class="m-dim">│</span>
+<span class="m-dim">│</span>  <span class="m-dim">T-25</span>  Scope Lock .............. Mon Apr 14       <span class="m-dim">│</span>
+<span class="m-dim">│</span>  <span class="m-dim">T-14</span>  Release Notes ........... Fri Apr 25       <span class="m-dim">│</span>
+<span class="m-dim">│</span>  <span class="m-dim">T-13</span>  Dev Complete ............ Wed Apr 30       <span class="m-dim">│</span>
+<span class="m-dim">│</span>  <span class="m-dim">T-12</span>  Branch Cut .............. Thu May  1       <span class="m-dim">│</span>
+<span class="m-dim">│</span>  <span class="m-dim">T-6 </span>  Cherry-Pick Freeze ...... Fri May  9       <span class="m-dim">│</span>
+<span class="m-dim">│</span>  <span class="m-dim">T-2 </span>  Certification ........... Mon May 12       <span class="m-dim">│</span>
+<span class="m-dim">│</span>  <span class="m-dim">T-0 </span>  Ship .................... <span class="m-green">Wed May 14</span>       <span class="m-dim">│</span>
+<span class="m-dim">│</span>                                                    <span class="m-dim">│</span>
+<span class="m-dim">│</span>              <span class="m-muted">[Cancel]</span>     <span class="m-blue">[Create Release]</span>      <span class="m-dim">│</span>
+<span class="m-dim">└────────────────────────────────────────────────────┘</span>
+</div>
+
+<h3>3d. Template Configuration — Settings Page</h3>
+
+<div class="mockup">
+<span class="m-title">Release Templates</span>            <span class="m-muted">/config &gt; Release Process</span>
+
+<span class="m-white">Monthly Release</span>  <span class="m-muted">|</span>  Point Release  <span class="m-muted">|</span>  Hotfix
+<span class="m-blue">━━━━━━━━━━━━━━━</span>
+
+Ship Day: <span class="m-white">[Wednesday ▾]</span>    Buffer Day: <span class="m-white">[Thursday ▾]</span>    Skip Weekends: <span class="m-green">[✓]</span>
+
+<span class="m-muted">T-MINUS    MILESTONE                  OWNER          GATE    AUTO-CHECK</span>
+<span class="m-dim">───────────────────────────────────────────────────────────────────────────</span>
+  <span class="m-white">25</span>       Scope Lock                PM             <span class="m-green">✓</span>       tickets-have-version
+  <span class="m-white">14</span>       Release Notes to Cust.    PM             <span class="m-dim">✗</span>       <span class="m-dim">manual</span>
+  <span class="m-white">13</span>       Dev Complete              Dev Lead       <span class="m-green">✓</span>       all-prs-merged
+  <span class="m-white">13</span>       QA Scope Review           QA Lead        <span class="m-green">✓</span>       <span class="m-dim">manual</span>
+  <span class="m-white">12</span>       Branch Cut                PM             <span class="m-green">✓</span>       branch-exists
+  <span class="m-white"> 6</span>       Cherry-Pick Freeze        PM             <span class="m-green">✓</span>       time-based
+  <span class="m-white"> 6</span>       Mobile App Submission     Mobile Lead    <span class="m-green">✓</span>       <span class="m-dim">manual</span>
+  <span class="m-white"> 2</span>       Data Migration Check      DBA            <span class="m-green">✓</span>       migrations-approved
+  <span class="m-white"> 2</span>       Certification             QA Lead        <span class="m-green">✓</span>       truth-all-certified
+  <span class="m-white"> 1</span>       Staging Smoke             PM             <span class="m-dim">✗</span>       <span class="m-dim">manual</span>
+  <span class="m-white"> 0</span>       Ship                      PM             <span class="m-green">✓</span>       state-is-done
+
+                                <span class="m-blue">[+ Add Milestone]</span>       <span class="m-green">[Save Template]</span>
+</div>
+
+<h3>3e. Release Scorecard — Post-Ship View</h3>
+
+<div class="mockup">
+<span class="m-title">Release Scorecard: 4.3.0</span>                              <span class="m-green">SHIPPED May 14 ✅</span>
+
+<span class="m-white">Gate Performance</span>                                    <span class="m-muted">Hit Rate: </span><span class="m-green">87.5%</span>
+<span class="m-dim">───────────────────────────────────────────────────────────────────</span>
+  Scope Lock .............. <span class="m-green">Met ✅</span>   Apr 14  <span class="m-green">(on time)</span>
+  Dev Complete ............ <span class="m-green">Met ✅</span>   Apr 30  <span class="m-green">(on time)</span>
+  QA Scope Review ......... <span class="m-green">Met ✅</span>   Apr 30  <span class="m-green">(on time)</span>
+  Branch Cut .............. <span class="m-green">Met ✅</span>   May  1  <span class="m-green">(on time)</span>
+  Cherry-Pick Freeze ...... <span class="m-red">Missed ❌</span> May 10  <span class="m-red">(1 day late)</span>
+  Data Migration .......... <span class="m-green">Met ✅</span>   May 12  <span class="m-green">(on time)</span>
+  Certification ........... <span class="m-green">Met ✅</span>   May 12  <span class="m-green">(on time)</span>
+  Ship .................... <span class="m-green">Met ✅</span>   May 14  <span class="m-green">(on time)</span>
+
+<span class="m-white">Metrics</span>
+<span class="m-dim">───────────────────────────────────────────────────────────────────</span>
+  Scope changes after lock:     <span class="m-orange">+3</span> <span class="m-muted">(2 CTO-approved, 1 violation)</span>
+  Cherry-picks after freeze:    <span class="m-orange">2</span>
+  QA bugs found:                6  <span class="m-muted">(all fixed within 24h SLA ✅)</span>
+  Data migrations:              2  <span class="m-muted">(both DBA-approved ✅)</span>
+  Cycle time:                   <span class="m-white">22 business days</span>
+  RCA:                          <span class="m-green">Filed May 16 ✅</span>
+</div>
+
+<h3>3f. Process Health Dashboard — /reports/process-health</h3>
+
+<div class="mockup">
+<span class="m-title">Process Health</span>                                    <span class="m-muted">Last 6 releases</span>
+
+<span class="m-white">Trend Summary</span>
+<span class="m-dim">─────────────────────────────────────────────────────────────────────────</span>
+<span class="m-muted">                        4.1.0    4.2.0   4.2.0.1   4.2.0.2   4.3.0    TREND</span>
+ Gate hit rate           <span class="m-red">62%</span>      <span class="m-orange">75%</span>     <span class="m-green">100%</span>      <span class="m-green">100%</span>      <span class="m-green">87%</span>      <span class="m-green">↗</span>
+ On-time ship            <span class="m-red">❌</span>       <span class="m-green">✅</span>      <span class="m-green">✅</span>        <span class="m-green">✅</span>        <span class="m-green">✅</span>       <span class="m-green">↗</span>
+ Scope creep             <span class="m-red">+8</span>       <span class="m-orange">+3</span>      <span class="m-green">0</span>         <span class="m-green">+1</span>        <span class="m-orange">+3</span>       <span class="m-green">↗</span>
+ Post-freeze picks       <span class="m-red">5</span>        <span class="m-orange">2</span>       <span class="m-green">0</span>         <span class="m-green">0</span>         <span class="m-orange">2</span>        <span class="m-green">↗</span>
+ QA SLA violations       <span class="m-red">3</span>        <span class="m-orange">1</span>       <span class="m-green">0</span>         <span class="m-green">0</span>         <span class="m-green">0</span>        <span class="m-green">✅</span>
+ Cycle time (days)       <span class="m-red">38</span>       <span class="m-orange">27</span>      6         5         <span class="m-green">22</span>       <span class="m-green">↗</span>
+ Hotfixes spawned        <span class="m-red">2</span>        <span class="m-orange">1</span>       <span class="m-green">0</span>         <span class="m-green">0</span>         <span class="m-green">0</span>        <span class="m-green">✅</span>
+
+<span class="m-white">Upcoming Milestones</span>                                <span class="m-muted">All active releases</span>
+<span class="m-dim">─────────────────────────────────────────────────────────────────────────</span>
+  <span class="m-muted">Mon May 12</span>   4.3.0        Certification EOD          <span class="m-orange">⏳ PM</span>
+  <span class="m-muted">Mon May 12</span>   4.3.0        Data Migration Check       <span class="m-orange">⏳ DBA</span>
+  <span class="m-muted">Tue May 13</span>   4.3.0        Staging Smoke              <span class="m-dim">⏳ PM</span>
+  <span class="m-muted">Wed May 14</span>   4.3.0        <span class="m-red">SHIP</span>                       <span class="m-dim">⏳ PM</span>
+  <span class="m-muted">Fri May 16</span>   4.2.0.3     Scope Cutoff               <span class="m-dim">⏳ PM</span>
+</div>
+
+<!-- ══════════ PHASES ══════════ -->
+<h2>4. Implementation Phases</h2>
+
+<p>7 phases, each independently shippable. Total estimate: ~16-18 days.</p>
+
+<div class="phase" style="border-left-color: #1400F5;">
+  <h4><span class="est">~2 days</span>Phase 1: Configurable Templates</h4>
+  <ul>
+    <li><code>release_templates</code> table + migration</li>
+    <li>Seed default templates (monthly, point, hotfix) from the RFC</li>
+    <li>T-minus date computation engine: <code>computeMilestones(shipDate, template)</code> — skips weekends</li>
+    <li>API: <code>GET/PUT /settings/release-templates</code></li>
+    <li>Template versioning (auto-increment on save)</li>
+  </ul>
+  <p><strong>Tests:</strong> Date computation with weekends, holidays, edge cases (ship date on Monday). Template CRUD. Version increment.</p>
+</div>
+
+<div class="phase" style="border-left-color: #7C16EE;">
+  <h4><span class="est">~2 days</span>Phase 2: Release Milestones</h4>
+  <ul>
+    <li>Add <code>releaseType</code>, <code>shipDate</code>, <code>milestones</code>, <code>templateVersion</code> columns to releases</li>
+    <li>On create: snapshot template → compute concrete dates → store as milestones JSON</li>
+    <li>On ship date change: recompute all non-overridden dates</li>
+    <li>Manual override: <code>PATCH /releases/:version/milestones/:key { overrideDate }</code></li>
+    <li>Manual sign-off: <code>POST /releases/:version/milestones/:key/complete</code></li>
+    <li>Skip milestone: <code>POST /releases/:version/milestones/:key/skip</code></li>
+    <li>Update CreateReleaseDialog: add release type picker + ship date + milestone preview</li>
+  </ul>
+  <p><strong>Tests:</strong> Milestone creation from template. Override priority (manual &gt; computed). Recompute on ship date change preserves overrides. Skip behavior. Status transitions.</p>
+</div>
+
+<div class="phase" style="border-left-color: #3b82f6;">
+  <h4><span class="est">~3 days</span>Phase 3: Gate Pipeline UI</h4>
+  <ul>
+    <li><code>GatePipeline</code> component — horizontal pipeline replacing existing timeline bar</li>
+    <li>Gate nodes: color-coded by status (green/orange/red/grey)</li>
+    <li>Click → popover with: description, owner, due date, blocking items, miss consequence</li>
+    <li>Action buttons in popover: Override Date, Mark Complete, Skip</li>
+    <li>Auto-check integration: connect gate checkers to truth engine data</li>
+    <li>Template settings page: milestone editor UI on <code>/config</code></li>
+  </ul>
+  <p><strong>Tests:</strong> Component rendering for each status. Popover actions. Auto-check function mapping. Settings CRUD UI.</p>
+</div>
+
+<div class="phase" style="border-left-color: #22c55e;">
+  <h4><span class="est">~2 days</span>Phase 4: Auto-Check Functions</h4>
+  <ul>
+    <li>Gate checker registry: map <code>autoCheck</code> keys to functions</li>
+    <li><code>all-tickets-have-target-version</code> — query JIRA tickets for this version</li>
+    <li><code>all-prs-merged</code> — truth engine: all planned tickets have commits on master</li>
+    <li><code>branch-exists</code> — check release.branch exists, release.cutAt is set</li>
+    <li><code>truth-all-certified</code> — truth engine: 100% tickets = certified health</li>
+    <li><code>migrations-approved</code> — all migration entries have dbaApproved = true</li>
+    <li><code>time-based</code> — current date &gt;= milestone date</li>
+    <li><code>state-is-done</code> — release.state = 'done'</li>
+    <li>API: <code>GET /releases/:version/gates</code> — returns all milestones with live auto-check results</li>
+  </ul>
+  <p><strong>Tests:</strong> Each checker function independently. Gate aggregation. Partial completion states.</p>
+</div>
+
+<div class="phase" style="border-left-color: #f59e0b;">
+  <h4><span class="est">~3 days</span>Phase 5: Reporting</h4>
+  <ul>
+    <li><code>release_scorecards</code> table + auto-compute when release state → done</li>
+    <li>Scorecard computation: gate hit rate, on-time ship, scope changes, SLA compliance, cycle time</li>
+    <li>API: <code>GET /releases/:version/scorecard</code></li>
+    <li>API: <code>GET /reports/process-health?releases=10</code> — cross-release trends</li>
+    <li>API: <code>GET /reports/upcoming-milestones</code> — all pending milestones across active releases</li>
+    <li>Scorecard component on ReleaseDetail (post-ship)</li>
+    <li><code>/reports/process-health</code> page with trend table + upcoming milestones</li>
+  </ul>
+  <p><strong>Tests:</strong> Scorecard computation accuracy. Trend aggregation. Edge cases (release with no milestones, skipped gates). Upcoming milestones ordering.</p>
+</div>
+
+<div class="phase" style="border-left-color: #ef4444;">
+  <h4><span class="est">~2 days</span>Phase 6: Alerts &amp; Enforcement</h4>
+  <ul>
+    <li>Milestone overdue detector: runs on schedule, checks pending milestones past due date</li>
+    <li>Scope creep detector: ticket added to version after scope-lock milestone is met</li>
+    <li>Freeze violation detector: cherry-pick PR detected after CP freeze milestone is met</li>
+    <li>RCA countdown: hotfix shipped → 48h timer. Alert if not filed.</li>
+    <li>Slack integration: <code>POST /releases/:version/notify</code> extended for milestone alerts</li>
+    <li>Audit trail: all milestone status changes logged in existing audit table</li>
+  </ul>
+  <p><strong>Tests:</strong> Overdue detection timing. Scope creep with edge cases (ticket moved before vs. after lock). Freeze violation with CHERRY_PICK label. Slack payload formatting.</p>
+</div>
+
+<div class="phase" style="border-left-color: #06b6d4;">
+  <h4><span class="est">~2 days</span>Phase 7: Process Page</h4>
+  <ul>
+    <li><code>/process</code> route — living version of the RFC</li>
+    <li>Content pulled from templates (so it updates when templates change)</li>
+    <li>Sections: Three Tracks, Release Lead, T-Minus Runway (per type), Hard Rules, Escalation</li>
+    <li>Each milestone links to its template definition</li>
+    <li>Links to process health reports for live enforcement examples</li>
+  </ul>
+  <p><strong>Tests:</strong> Page renders. Template changes reflected. Links to live data resolve.</p>
+</div>
+
+<!-- ══════════ API SURFACE ══════════ -->
+<h2>5. API Surface</h2>
+
+<table>
+  <thead>
+    <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Phase</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>GET</td><td><code>/settings/release-templates</code></td><td>List all templates</td><td>1</td></tr>
+    <tr><td>GET</td><td><code>/settings/release-templates/:key</code></td><td>Get single template</td><td>1</td></tr>
+    <tr><td>PUT</td><td><code>/settings/release-templates/:key</code></td><td>Update template (auto-versions)</td><td>1</td></tr>
+    <tr><td>GET</td><td><code>/releases/:version/milestones</code></td><td>Get milestone instances with live status</td><td>2</td></tr>
+    <tr><td>PATCH</td><td><code>/releases/:version/milestones/:key</code></td><td>Override date or skip</td><td>2</td></tr>
+    <tr><td>POST</td><td><code>/releases/:version/milestones/:key/complete</code></td><td>Manual sign-off</td><td>2</td></tr>
+    <tr><td>GET</td><td><code>/releases/:version/gates</code></td><td>All gates with auto-check results</td><td>4</td></tr>
+    <tr><td>GET</td><td><code>/releases/:version/scorecard</code></td><td>Release scorecard</td><td>5</td></tr>
+    <tr><td>GET</td><td><code>/reports/process-health</code></td><td>Cross-release trends</td><td>5</td></tr>
+    <tr><td>GET</td><td><code>/reports/upcoming-milestones</code></td><td>All pending milestones</td><td>5</td></tr>
+  </tbody>
+</table>
+
+<!-- ══════════ TEST STRATEGY ══════════ -->
+<h2>6. Test Strategy</h2>
+
+<table>
+  <thead>
+    <tr><th>Layer</th><th>What We Test</th><th>Framework</th><th>Location</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Unit</strong></td><td>Date computation (weekends, holidays, edge cases)</td><td>Mocha + Chai</td><td><code>test/core/milestone-engine.test.js</code></td></tr>
+    <tr><td><strong>Unit</strong></td><td>Gate checker functions (each auto-check)</td><td>Mocha + Chai</td><td><code>test/core/gate-checkers.test.js</code></td></tr>
+    <tr><td><strong>Unit</strong></td><td>Scorecard computation</td><td>Mocha + Chai</td><td><code>test/core/scorecard.test.js</code></td></tr>
+    <tr><td><strong>API</strong></td><td>Template CRUD, milestone CRUD, reporting endpoints</td><td>Mocha + supertest</td><td><code>test/api/release-train.test.js</code></td></tr>
+    <tr><td><strong>Integration</strong></td><td>Create release → milestones computed → gate checks → scorecard</td><td>Mocha</td><td><code>test/integration/release-lifecycle.test.js</code></td></tr>
+    <tr><td><strong>UI</strong></td><td>GatePipeline renders, popover actions, template editor</td><td>Vitest + Testing Library</td><td><code>client/src/features/releases/__tests__/</code></td></tr>
+  </tbody>
+</table>
+
+<h3>Critical Test Scenarios</h3>
+
+<ul>
+  <li><strong>Date math:</strong> Ship date = Wednesday. T-25 computed correctly skipping weekends. Ship date on a Monday (should adjust?). T-minus = 0 edge case.</li>
+  <li><strong>Override priority:</strong> Manual override takes precedence. Clear override snaps back to computed. Ship date change recomputes non-overridden only.</li>
+  <li><strong>Template versioning:</strong> Template v2 doesn't affect releases created with v1. New releases get v2.</li>
+  <li><strong>Gate auto-checks:</strong> truth-all-certified with 100% vs 99% vs 0%. branch-exists when branch is null. time-based across timezone boundaries.</li>
+  <li><strong>Scorecard accuracy:</strong> Release with all gates met = 100%. Release with 1 missed = correct %. Scope creep count matches actual ticket additions after scope-lock date.</li>
+  <li><strong>Concurrency:</strong> Two users override the same milestone. Scorecard computation during active release.</li>
+</ul>
+
+<!-- ══════════ WHAT BUILDS ON WHAT ══════════ -->
+<h2>7. Dependency Graph</h2>
+
+<div class="mockup">
+<span class="m-title">Phase Dependencies</span>
+
+  <span class="m-blue">Phase 1: Templates</span>
+       │
+       ▼
+  <span class="m-purple">Phase 2: Milestones</span>  ──────────────────────────────────┐
+       │                                                 │
+       ├──────────────────┐                              │
+       ▼                  ▼                              ▼
+  <span class="m-blue">Phase 3: Gate UI</span>     <span class="m-green">Phase 4: Auto-Checks</span>       <span class="m-orange">Phase 5: Reporting</span>
+       │                  │
+       └────────┬─────────┘
+                ▼
+          <span class="m-red">Phase 6: Alerts</span>
+                │
+                ▼
+          <span class="m-cyan">Phase 7: Process Page</span>
+
+<span class="m-muted">Phases 3, 4, 5 can run in parallel after Phase 2.
+Phase 6 needs 3 + 4.
+Phase 7 needs everything (but is light work).</span>
+</div>
+
+<div class="callout">
+  <strong>Ship early, ship often:</strong> After Phase 2, every release in Nectar will show its milestone dates. That alone is valuable — the team can see branch cut dates, certification deadlines, and ship dates at a glance. Phases 3-7 make it progressively more powerful.
+</div>
+
+<div class="footer">
+  <p>Viv Technologies &middot; Confidential &middot; April 2026</p>
+</div>
+
+</body>
+</html>

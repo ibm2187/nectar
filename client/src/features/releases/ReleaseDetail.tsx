@@ -3,7 +3,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useWsStore } from '../../stores/wsStore'
 import { useAuthStore } from '../../stores/authStore'
 import { apiFetch } from '../../api/client'
-import type { AuditEntry, ValidationReport, DatadogImpactResponse, ReleaseComment, DeliveryForecast, Ticket, Release, PipelineData } from '../../api/client'
+import type { AuditEntry, ValidationReport, DatadogImpactResponse, ReleaseComment, DeliveryForecast, Release, PipelineData } from '../../api/client'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Card, CardContent } from '../../components/ui/card'
@@ -13,6 +13,7 @@ import { TruthView } from './TruthView'
 import { CustomerImpact } from './CustomerImpact'
 import { PipelineView } from './PipelineView'
 import { NectarLoader } from '../../components/NectarLoader'
+import { GatePipeline } from './GatePipeline'
 import { GenerateNotesDialog } from './GenerateNotesDialog'
 import { EditDraftDialog } from './EditDraftDialog'
 import { CustomerPills } from '../../components/CustomerPill'
@@ -95,7 +96,6 @@ export function ReleaseDetail() {
   const [commentText, setCommentText] = useState('')
   const [commentPosting, setCommentPosting] = useState(false)
   const [commentPanel, setCommentPanel] = useState(false)
-  const [tickets, setTickets] = useState<Ticket[]>([])
   const [pipeline, setPipeline] = useState<PipelineData | null>(null)
   const authUser = useAuthStore(s => s.user)
   const ssoEnabled = useAuthStore(s => s.ssoEnabled)
@@ -125,12 +125,10 @@ export function ReleaseDetail() {
     apiFetch<Release>(`/releases/${version}`)
       .then(r => {
         if (cancelled) return
-        setTickets(r.tickets || [])
         setPipeline(r.pipeline ?? null)
       })
       .catch(() => {
         if (cancelled) return
-        setTickets([])
         setPipeline(null)
       })
     return () => { cancelled = true }
@@ -274,38 +272,6 @@ export function ReleaseDetail() {
     await apiFetch(`/releases/${version}/risk?refresh=true`)
   }
 
-  // ── Date helpers (consistent ISO format) ──────────────
-  const fmtDate = (d: string | null | undefined) => d ? d.slice(0, 10) : null
-
-  const cutDate = fmtDate(release.cutAt) || fmtDate(release.createdAt)
-  const releaseDate = fmtDate(release.jiraReleaseDate)
-  const today = new Date().toISOString().slice(0, 10)
-  const isOverdue = releaseDate && !release.jiraReleased && releaseDate < today
-  const isReleased = !!release.jiraReleased
-
-  // Timeline progress: how far between cut → release date are we?
-  const timelineProgress = (() => {
-    if (!cutDate || !releaseDate) return null
-    const start = new Date(cutDate + 'T00:00:00').getTime()
-    const end = new Date(releaseDate + 'T00:00:00').getTime()
-    const now = Date.now()
-    if (end <= start) return 100
-    return Math.min(100, Math.max(0, Math.round(((now - start) / (end - start)) * 100)))
-  })()
-
-  // Ticket health distribution for the timeline bar
-  const ticketCounts = tickets.reduce(
-    (acc, t) => {
-      const s = (t.state || '').toLowerCase()
-      if (s === 'done' || s === 'cherry-picked' || s === 'ready-for-testing') acc.done++
-      else if (s === 'in-progress') acc.inProgress++
-      else acc.pending++
-      return acc
-    },
-    { done: 0, inProgress: 0, pending: 0 }
-  )
-  const totalTickets = tickets.length
-
   return (
     <div className="w-full">
       <Button variant="link" className="mb-2 px-0 text-xs" onClick={() => navigate(backPath)}>
@@ -419,6 +385,18 @@ export function ReleaseDetail() {
         </div>
       )}
 
+      {/* Release Train — gate pipeline + inline editors */}
+      <GatePipeline
+        version={release.version}
+        releaseType={release.releaseType ?? null}
+        shipDate={release.shipDate ?? null}
+        jiraReleaseDate={release.jiraReleaseDate ?? null}
+        milestones={release.milestones ?? []}
+        onUpdate={() => {
+          apiFetch(`/releases/${encodeURIComponent(version!)}`).catch(() => {})
+        }}
+      />
+
       {/* Notes task error/status banner */}
       {notesTaskError && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 mb-3 text-xs text-destructive">
@@ -435,83 +413,6 @@ export function ReleaseDetail() {
           </Button>
         </div>
       )}
-
-      {/* Release timeline */}
-      <div className="rounded-lg border bg-card p-4 mb-4">
-        {/* Timeline bar */}
-        <div className="flex items-center gap-3 mb-3">
-          {/* Cut date anchor */}
-          <div className="text-xs text-muted-foreground shrink-0 w-20 text-center">
-            <div className="font-medium text-foreground">{cutDate}</div>
-            <div className="text-[10px]">{release.cutAt ? 'cut' : 'created'}</div>
-          </div>
-
-          {/* Bar */}
-          <div className="flex-1 relative">
-            <div className="h-2 rounded-full bg-muted/30 overflow-hidden">
-              {totalTickets > 0 ? (
-                <div className="h-full flex">
-                  <div
-                    className="h-full bg-green-500/70 transition-all"
-                    style={{ width: `${(ticketCounts.done / totalTickets) * 100}%` }}
-                  />
-                  <div
-                    className="h-full bg-yellow-500/70 transition-all"
-                    style={{ width: `${(ticketCounts.inProgress / totalTickets) * 100}%` }}
-                  />
-                  <div
-                    className="h-full bg-muted-foreground/20 transition-all"
-                    style={{ width: `${(ticketCounts.pending / totalTickets) * 100}%` }}
-                  />
-                </div>
-              ) : (
-                <div className="h-full bg-muted/50" />
-              )}
-            </div>
-            {/* Today marker */}
-            {timelineProgress !== null && !isReleased && (
-              <div
-                className="absolute top-0 w-0.5 h-4 -mt-1 bg-foreground/60"
-                style={{ left: `${timelineProgress}%` }}
-                title={`Today: ${today}`}
-              >
-                <div className="absolute -top-4 left-1/2 -translate-x-1/2 text-[9px] text-muted-foreground whitespace-nowrap">
-                  today
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Release date anchor */}
-          <div className="text-xs shrink-0 w-20 text-center">
-            <div className={cn("font-medium", isReleased ? 'text-green-400' : isOverdue ? 'text-yellow-400' : 'text-foreground')}>
-              {releaseDate || '—'}
-            </div>
-            <div className={cn("text-[10px]", isReleased ? 'text-green-400' : isOverdue ? 'text-yellow-400' : 'text-muted-foreground')}>
-              {isReleased ? 'released' : isOverdue ? 'overdue' : 'target'}
-            </div>
-          </div>
-        </div>
-
-        {/* Stats row */}
-        <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
-          <span><span className="font-mono text-foreground">{release.branch}</span></span>
-          {release.cutFrom && (
-            <span>from <span className="font-mono">{release.cutFrom.substring(0, 7)}</span></span>
-          )}
-          {release.cutBy && <span>by {release.cutBy}</span>}
-          {release.cherryPicks.length > 0 && (
-            <span>{release.cherryPicks.length} cherry-picks</span>
-          )}
-          {totalTickets > 0 && (
-            <span className="ml-auto flex items-center gap-2">
-              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500/70" />{ticketCounts.done} done</span>
-              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-500/70" />{ticketCounts.inProgress} in progress</span>
-              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-muted-foreground/30" />{ticketCounts.pending} pending</span>
-            </span>
-          )}
-        </div>
-      </div>
 
       {/* Delivery Forecast + Pipeline side by side */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
