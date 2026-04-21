@@ -315,27 +315,27 @@ function createWebServer(services, config) {
   }
   if (discovery) {
     discovery.on('discovery:completed', (results) =>
-      broadcast({ type: 'discovery:completed', results, releases: enrichedReleaseList() })
+      broadcast({ type: 'discovery:completed', results })
     );
   }
   if (jiraSync) {
     jiraSync.on('sync:completed', (results) =>
-      broadcast({ type: 'jira:sync-completed', results, releases: enrichedReleaseList() })
+      broadcast({ type: 'jira:sync-completed', results })
     );
   }
   if (services.zohoSync) {
     services.zohoSync.on('sync:completed', (results) =>
-      broadcast({ type: 'zoho:sync-completed', results, releases: enrichedReleaseList() })
+      broadcast({ type: 'zoho:sync-completed', results })
     );
   }
   if (services.prSync) {
     services.prSync.on('sync:completed', (results) =>
-      broadcast({ type: 'pr:sync-completed', results, releases: enrichedReleaseList() })
+      broadcast({ type: 'pr:sync-completed', results })
     );
   }
   if (services.pipelineSync) {
     services.pipelineSync.on('sync:completed', (results) =>
-      broadcast({ type: 'pipeline:sync-completed', results, releases: enrichedReleaseList() })
+      broadcast({ type: 'pipeline:sync-completed', results })
     );
   }
   if (envPoller) {
