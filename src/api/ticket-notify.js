@@ -54,7 +54,13 @@ async function sendTicketNotification(opts, services) {
   });
 
   const jiraBaseUrl = process.env.JIRA_URL || process.env.JIRA_BASE_URL || 'https://vivtechnologies.atlassian.net';
-  const attribution = senderName ? `— _${senderName} via Nectar_` : '— _via Nectar_';
+
+  // Resolve names to Slack IDs for @mentions
+  const resolveSlackMention = (name) => {
+    if (!name || !peopleDirectory) return name;
+    const resolved = peopleDirectory.resolveSlackId(name);
+    return resolved ? `<@${resolved.slackId}>` : name;
+  };
 
   const results = { sent: 0, recipients: [], errors: [] };
 
@@ -65,7 +71,7 @@ async function sendTicketNotification(opts, services) {
       return results;
     }
     const channelName = SlackNotifier.releaseChannelName(version);
-    const text = _formatReleaseChannelMessage(tickets, message, version, jiraBaseUrl, attribution);
+    const text = _formatReleaseChannelMessage(tickets, message, version, jiraBaseUrl, resolveSlackMention);
     const res = await slack.postMessage(channelName, text);
     if (res.ok) {
       results.sent = 1;
@@ -101,7 +107,7 @@ async function sendTicketNotification(opts, services) {
 
     // Send DMs — one per unique recipient
     for (const [slackId, { name, tickets: recipientTickets }] of byRecipient) {
-      const text = _formatDmMessage(recipientTickets, message, version, jiraBaseUrl, attribution);
+      const text = _formatDmMessage(recipientTickets, message, version, jiraBaseUrl);
       try {
         await slack.dmUser(slackId, text);
         results.sent++;
@@ -118,7 +124,7 @@ async function sendTicketNotification(opts, services) {
   return results;
 }
 
-function _formatDmMessage(tickets, message, version, jiraBaseUrl, attribution) {
+function _formatDmMessage(tickets, message, version, jiraBaseUrl) {
   const versionLabel = version ? ` — Release ${version}` : '';
   const lines = [`📋 *Action needed${versionLabel}*`];
   lines.push('');
@@ -127,22 +133,21 @@ function _formatDmMessage(tickets, message, version, jiraBaseUrl, attribution) {
   }
   lines.push('');
   lines.push(`💬 ${message}`);
-  lines.push('');
-  lines.push(attribution);
   return lines.join('\n');
 }
 
-function _formatReleaseChannelMessage(tickets, message, version, jiraBaseUrl, attribution) {
+function _formatReleaseChannelMessage(tickets, message, version, jiraBaseUrl, resolveSlackMention) {
   const lines = [`📋 *Release ${version} — Action needed*`];
   lines.push('');
   for (const t of tickets) {
-    const assigneeLabel = [t.assignee, t.qaAssignee].filter(Boolean).join(' / ');
-    lines.push(`• <${jiraBaseUrl}/browse/${t.key}|${t.key}> — ${t.summary || t.key} _(${t.jiraStatus || '?'})_${assigneeLabel ? ` — ${assigneeLabel}` : ''}`);
+    const mentions = [t.assignee, t.qaAssignee]
+      .filter(Boolean)
+      .map(name => resolveSlackMention(name))
+      .join(' / ');
+    lines.push(`• <${jiraBaseUrl}/browse/${t.key}|${t.key}> — ${t.summary || t.key} _(${t.jiraStatus || '?'})_${mentions ? ` — ${mentions}` : ''}`);
   }
   lines.push('');
   lines.push(`💬 ${message}`);
-  lines.push('');
-  lines.push(attribution);
   return lines.join('\n');
 }
 
@@ -173,7 +178,6 @@ async function sendStandupReminder(opts, standupData, services) {
 
   const jiraBaseUrl = process.env.JIRA_URL || process.env.JIRA_BASE_URL || 'https://vivtechnologies.atlassian.net';
   const nectarBaseUrl = process.env.NECTAR_URL || 'https://nectar.vivtechnologies.com';
-  const attribution = senderName ? `— _${senderName} via Nectar_` : '— _via Nectar_';
 
   const BUCKET_LABELS = {
     releaseCritical: '🔴 Release-Critical',
@@ -215,8 +219,6 @@ async function sendStandupReminder(opts, standupData, services) {
     }
     lines.push('');
   }
-
-  lines.push(attribution);
 
   try {
     await slack.dmUser(resolved.slackId, lines.join('\n'));

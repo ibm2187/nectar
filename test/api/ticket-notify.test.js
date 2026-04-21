@@ -150,7 +150,7 @@ describe('sendTicketNotification', () => {
       expect(msgText).toContain('4.2.0');
     });
 
-    it('includes sender attribution', async () => {
+    it('does not include attribution line', async () => {
       const services = createMockServices();
       await sendTicketNotification({
         ticketKeys: ['DEV-100'],
@@ -161,7 +161,7 @@ describe('sendTicketNotification', () => {
       }, services);
 
       const msgText = services.slack.dmUser.mock.calls[0][1];
-      expect(msgText).toContain('Nukul via Nectar');
+      expect(msgText).not.toContain('via Nectar');
     });
 
     it('reports error for unresolvable Slack IDs', async () => {
@@ -200,6 +200,10 @@ describe('sendTicketNotification', () => {
       const msgText = services.slack.postMessage.mock.calls[0][1];
       expect(msgText).toContain('DEV-101');
       expect(msgText).toContain('Release 4.2.0');
+      // Should use Slack @mentions instead of plain names
+      expect(msgText).toContain('<@U001>'); // Alice Dev
+      expect(msgText).toContain('<@U002>'); // Bob QA
+      expect(msgText).not.toContain('via Nectar');
     });
 
     it('requires version for release channel', async () => {
@@ -292,7 +296,7 @@ describe('sendStandupReminder', () => {
     expect(msgText).toContain('Pending Testing');
     expect(msgText).toContain('In Development');
     expect(msgText).toContain('3 items');
-    expect(msgText).toContain('Nukul via Nectar');
+    expect(msgText).not.toContain('via Nectar');
   });
 
   it('works without custom message', async () => {
