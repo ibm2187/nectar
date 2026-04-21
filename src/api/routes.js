@@ -143,7 +143,13 @@ module.exports = function createRoutes(services, config) {
     });
     list.sort((a, b) => (a.jiraReleaseDate || 'zzzz').localeCompare(b.jiraReleaseDate || 'zzzz'));
     const environments = customerStore.listEnvironments();
-    res.json(annotateReleases(enrichReleasesWithTickets(list), environments));
+    const enriched = annotateReleases(enrichReleasesWithTickets(list), environments);
+    // Slim down for the calendar view — only ticket key+state needed (counts & forecast)
+    const slimmed = enriched.map(r => ({
+      ...r,
+      tickets: (r.tickets || []).map(t => ({ key: t.key, state: t.state })),
+    }));
+    res.json(slimmed);
   });
 
   router.get('/releases/active', (req, res) => {
