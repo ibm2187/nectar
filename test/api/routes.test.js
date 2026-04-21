@@ -392,6 +392,112 @@ describe('API Routes', () => {
     });
   });
 
+  describe('GET /api/roadmap — done status logic', () => {
+    function seedRoadmapData(services) {
+      // Create a release
+      services.releases.create({ repo: 'webplatform', version: '5.0.0', branch: 'release/5.0.0' });
+
+      // Seed tickets with various states, all linked to this release
+      const states = [
+        { key: 'DEV-1', state: 'done', status: 'QA Certified' },
+        { key: 'DEV-2', state: 'done', status: 'Resolved Without Code' },
+        { key: 'DEV-3', state: 'cherry-picked', status: 'Cherry Picked' },
+        { key: 'DEV-4', state: 'ready-for-testing', status: 'Ready for Testing' },
+        { key: 'DEV-5', state: 'in-progress', status: 'In Progress' },
+        { key: 'DEV-6', state: 'open', status: 'Open' },
+      ];
+      for (const t of states) {
+        services.ticketStore.upsert({
+          key: t.key,
+          summary: `Ticket ${t.key}`,
+          status: t.status,
+          state: t.state,
+          type: 'Story',
+          module: 'Billing',
+          component: 'RCM - Billing',
+          fixVersions: ['5.0.0'],
+        });
+      }
+    }
+
+    function findCard(modules, version) {
+      for (const mod of modules) {
+        for (const comp of mod.components) {
+          for (const cards of Object.values(comp.months)) {
+            const card = cards.find(c => c.version === version);
+            if (card) return card;
+          }
+        }
+      }
+      return null;
+    }
+
+    it('does NOT count ready-for-testing tickets as done', async () => {
+      const services = createMockServices();
+      seedRoadmapData(services);
+      const { app } = createTestApp(services);
+
+      const res = await request(app, 'GET', '/api/roadmap');
+      expect(res.status).toBe(200);
+
+      const card = findCard(res.body.modules, '5.0.0');
+      expect(card).toBeDefined();
+
+      // done = DEV-1 (done) + DEV-2 (done) + DEV-3 (cherry-picked) = 3
+      // NOT DEV-4 (ready-for-testing)
+      expect(card.done).toBe(3);
+      expect(card.tickets).toBe(6);
+    });
+
+    it('status filter done excludes ready-for-testing tickets', async () => {
+      const services = createMockServices();
+      seedRoadmapData(services);
+      const { app } = createTestApp(services);
+
+      const res = await request(app, 'GET', '/api/roadmap?status=notdone');
+      expect(res.status).toBe(200);
+
+      const card = findCard(res.body.modules, '5.0.0');
+      expect(card).toBeDefined();
+      // notdone includes: ready-for-testing + in-progress + open = 3 tickets
+      expect(card.tickets).toBe(3);
+    });
+  });
+
+  describe('GET /api/roadmap/:module/:version — done status logic', () => {
+    it('does NOT count ready-for-testing as done in detail view', async () => {
+      const services = createMockServices();
+      services.releases.create({ repo: 'webplatform', version: '5.1.0', branch: 'release/5.1.0' });
+
+      const tickets = [
+        { key: 'DEV-10', state: 'done', status: 'QA Certified' },
+        { key: 'DEV-11', state: 'ready-for-testing', status: 'Ready for Testing' },
+        { key: 'DEV-12', state: 'cherry-picked', status: 'Cherry Picked' },
+      ];
+      for (const t of tickets) {
+        services.ticketStore.upsert({
+          key: t.key,
+          summary: `Ticket ${t.key}`,
+          status: t.status,
+          state: t.state,
+          type: 'Story',
+          module: 'Billing',
+          component: 'RCM - Billing',
+          fixVersions: ['5.1.0'],
+        });
+      }
+
+      const { app } = createTestApp(services);
+      const res = await request(app, 'GET', '/api/roadmap/Billing/5.1.0');
+      expect(res.status).toBe(200);
+
+      // done = DEV-10 (done) + DEV-12 (cherry-picked) = 2, NOT DEV-11
+      expect(res.body.stats.done).toBe(2);
+      expect(res.body.stats.total).toBe(3);
+      expect(res.body.stats.remaining).toBe(1);
+    });
+  });
+
   describe('Error handling', () => {
     it('returns structured error for thrown errors', async () => {
       const { app, services } = createTestApp();

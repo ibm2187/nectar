@@ -2269,7 +2269,7 @@ module.exports = function createRoutes(services, config) {
         // Status filter: filter individual tickets by done/not-done
         if (statusFilter) {
           const ticketState = (ticket.state || '').toLowerCase();
-          const isDone = ['done', 'cherry-picked', 'ready-for-testing'].includes(ticketState);
+          const isDone = ['done', 'cherry-picked'].includes(ticketState);
           if (statusFilter === 'done' && !isDone) continue;
           if (statusFilter === 'notdone' && isDone) continue;
         }
@@ -2328,7 +2328,7 @@ module.exports = function createRoutes(services, config) {
       const cards = [];
       for (const group of byRelease.values()) {
         const { tickets, ...meta } = group;
-        const done = tickets.filter(t => ['done', 'cherry-picked', 'ready-for-testing'].includes((t.state || '').toLowerCase())).length;
+        const done = tickets.filter(t => ['done', 'cherry-picked'].includes((t.state || '').toLowerCase())).length;
         const inProgress = tickets.filter(t => (t.state || '').toLowerCase() === 'in-progress').length;
 
         // Ticket type breakdown
@@ -2500,7 +2500,7 @@ module.exports = function createRoutes(services, config) {
 
     const done = tickets.filter(t => {
       const s = (t.state || '').toLowerCase();
-      return s === 'done' || s === 'cherry-picked' || s === 'ready-for-testing';
+      return s === 'done' || s === 'cherry-picked';
     }).length;
 
     res.json({
