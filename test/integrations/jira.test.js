@@ -47,6 +47,51 @@ describe('JiraClient static methods', () => {
       expect(result.component).toBeNull();
       expect(result.customerTags).toEqual([]);
       expect(result.zohoRef).toBeNull();
+      expect(result.platforms).toEqual([]);
+    });
+
+    it('infers platforms from fixVersion prefixes', () => {
+      const ios = JiraClient.normalizeIssue({
+        key: 'DEV-I', fields: { fixVersions: [{ name: 'iOS 2026.4.0' }] },
+      });
+      expect(ios.fixVersions).toEqual(['2026.4.0']);
+      expect(ios.platforms).toEqual(['ios']);
+
+      const android = JiraClient.normalizeIssue({
+        key: 'DEV-A', fields: { fixVersions: [{ name: 'Android 2026.4.0' }] },
+      });
+      expect(android.platforms).toEqual(['android']);
+
+      const web = JiraClient.normalizeIssue({
+        key: 'DEV-W', fields: { fixVersions: [{ name: '4.2.1' }] },
+      });
+      expect(web.platforms).toEqual(['web']);
+
+      const both = JiraClient.normalizeIssue({
+        key: 'DEV-B',
+        fields: { fixVersions: [{ name: 'iOS 2026.4.0' }, { name: 'Android 2026.4.0' }] },
+      });
+      expect(both.platforms.sort()).toEqual(['android', 'ios']);
+    });
+
+    it('derives platforms from targetFixVersions when fixVersions is empty', () => {
+      const t = JiraClient.normalizeIssue({
+        key: 'DEV-T',
+        fields: { customfield_10594: [{ name: 'iOS 2026.4.0' }] },
+      });
+      expect(t.platforms).toEqual(['ios']);
+    });
+  });
+
+  describe('extractPlatform', () => {
+    it('matches known prefixes case-insensitively', () => {
+      expect(JiraClient.extractPlatform('iOS 2026.4.0')).toBe('ios');
+      expect(JiraClient.extractPlatform('ios 3.2.0')).toBe('ios');
+      expect(JiraClient.extractPlatform('Android 2026.4.0')).toBe('android');
+      expect(JiraClient.extractPlatform('ANDROID 1.0')).toBe('android');
+      expect(JiraClient.extractPlatform('4.2.0')).toBe('web');
+      expect(JiraClient.extractPlatform('')).toBeNull();
+      expect(JiraClient.extractPlatform(null)).toBeNull();
     });
   });
 

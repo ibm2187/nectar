@@ -50,7 +50,7 @@ class TicketStore extends EventEmitter {
         module, product, projects,
         priority, riskLevel, customerPriority,
         fixVersions, targetFixVersions, customerTags,
-        deployedEnvironments, labels, zohoRef,
+        deployedEnvironments, labels, platforms, zohoRef,
         submitterName, submitterEmail,
         created, updatedInJira, syncedAt
       ) VALUES (
@@ -59,7 +59,7 @@ class TicketStore extends EventEmitter {
         @module, @product, @projects,
         @priority, @riskLevel, @customerPriority,
         @fixVersions, @targetFixVersions, @customerTags,
-        @deployedEnvironments, @labels, @zohoRef,
+        @deployedEnvironments, @labels, @platforms, @zohoRef,
         @submitterName, @submitterEmail,
         @created, @updatedInJira, @syncedAt
       )
@@ -85,6 +85,7 @@ class TicketStore extends EventEmitter {
         customerTags = excluded.customerTags,
         deployedEnvironments = excluded.deployedEnvironments,
         labels = excluded.labels,
+        platforms = excluded.platforms,
         zohoRef = excluded.zohoRef,
         submitterName = excluded.submitterName,
         submitterEmail = excluded.submitterEmail,
@@ -156,17 +157,15 @@ class TicketStore extends EventEmitter {
   /**
    * Get all tickets for a release version.
    * Matches tickets where fixVersions or targetFixVersions contains the version.
+   * Optional `platform` (ios|android|web) filters to tickets whose raw JIRA
+   * version came from that platform — prevents cross-repo bleed when two
+   * releases share a clean version number (e.g. iOS 2026.4.0 + Android 2026.4.0).
    * Returns tickets with release membership info (source: 'both'|'target'|'fixVersion').
    */
-  getForVersion(version) {
-    // Version names are normalized at write time (prefixes like "iOS " stripped)
-    // so a simple exact-element LIKE match works.
+  getForVersion(version, platform = null) {
     const pattern = `%"${version}"%`;
-    const rows = this.db.prepare(`
-      SELECT * FROM jira_tickets
-      WHERE fixVersions LIKE ? OR targetFixVersions LIKE ?
-      ORDER BY key ASC
-    `).all(pattern, pattern);
+    const { sql, params } = this._versionQuery('SELECT * FROM jira_tickets', pattern, platform);
+    const rows = this.db.prepare(sql + ' ORDER BY key ASC').all(...params);
 
     return rows.map(row => {
       const ticket = ticketFromRow(row);
@@ -181,10 +180,10 @@ class TicketStore extends EventEmitter {
    * Get tickets for multiple versions at once.
    * Returns Map<version, ticket[]> with source info.
    */
-  getForVersions(versions) {
+  getForVersions(versions, platform = null) {
     const result = new Map();
     for (const v of versions) {
-      result.set(v, this.getForVersion(v));
+      result.set(v, this.getForVersion(v, platform));
     }
     return result;
   }
@@ -192,13 +191,25 @@ class TicketStore extends EventEmitter {
   /**
    * Get ticket keys for a version (lightweight — no full ticket data).
    */
-  getKeysForVersion(version) {
+  getKeysForVersion(version, platform = null) {
     const pattern = `%"${version}"%`;
-    return this.db.prepare(`
-      SELECT key FROM jira_tickets
-      WHERE fixVersions LIKE ? OR targetFixVersions LIKE ?
-      ORDER BY key ASC
-    `).all(pattern, pattern).map(r => r.key);
+    const { sql, params } = this._versionQuery('SELECT key FROM jira_tickets', pattern, platform);
+    return this.db.prepare(sql + ' ORDER BY key ASC').all(...params).map(r => r.key);
+  }
+
+  _versionQuery(selectClause, pattern, platform) {
+    if (platform) {
+      // Match tickets whose platforms includes the target, OR legacy rows
+      // whose platforms is still empty (not yet backfilled by full sync).
+      return {
+        sql: `${selectClause} WHERE (fixVersions LIKE ? OR targetFixVersions LIKE ?) AND (platforms LIKE ? OR platforms = '[]')`,
+        params: [pattern, pattern, `%"${platform}"%`],
+      };
+    }
+    return {
+      sql: `${selectClause} WHERE fixVersions LIKE ? OR targetFixVersions LIKE ?`,
+      params: [pattern, pattern],
+    };
   }
 
   // ── Search ────────────────────────────────────────
@@ -1047,6 +1058,7 @@ function ticketToRow(t) {
     customerTags: JSON.stringify(t.customerTags || []),
     deployedEnvironments: JSON.stringify(t.deployedEnvironments || []),
     labels: JSON.stringify(t.labels || []),
+    platforms: JSON.stringify(t.platforms || []),
     zohoRef: t.zohoRef ? JSON.stringify(t.zohoRef) : null,
     submitterName: t.submitterName || null,
     submitterEmail: t.submitterEmail || null,
@@ -1080,6 +1092,7 @@ function ticketFromRow(row) {
     customerTags: JSON.parse(row.customerTags || '[]'),
     deployedEnvironments: JSON.parse(row.deployedEnvironments || '[]'),
     labels: JSON.parse(row.labels || '[]'),
+    platforms: JSON.parse(row.platforms || '[]'),
     zohoRef: row.zohoRef ? JSON.parse(row.zohoRef) : null,
     submitterName: row.submitterName,
     submitterEmail: row.submitterEmail,

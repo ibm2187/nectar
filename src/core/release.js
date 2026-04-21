@@ -6,6 +6,16 @@ const { getDb } = require('./db');
 
 const STATES = ['planning', 'cutting', 'stabilizing', 'approved', 'deploying', 'done'];
 
+// Map a release repo to its platform tag on tickets.
+// Keeps tickets from iOS 2026.4.0 distinct from tickets on Android 2026.4.0
+// even though both releases carry version '2026.4.0'.
+function repoToPlatform(repo) {
+  if (repo === 'ios') return 'ios';
+  if (repo === 'android') return 'android';
+  if (repo === 'webplatform' || repo === 'bluesummit') return 'web';
+  return null;
+}
+
 const TRANSITIONS = {
   planning:    ['cutting'],
   cutting:     ['stabilizing'],
@@ -114,7 +124,7 @@ class ReleaseManager extends EventEmitter {
    */
   getTickets(release) {
     if (this._ticketStore) {
-      return this._ticketStore.getForVersion(release.version).map(t => ({
+      return this._ticketStore.getForVersion(release.version, repoToPlatform(release.repo)).map(t => ({
         key: t.key,
         summary: t.summary || '',
         state: t.state || 'pending',

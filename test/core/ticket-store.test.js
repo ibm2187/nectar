@@ -209,6 +209,25 @@ describe('TicketStore', () => {
       const keys = store.getKeysForVersion('4.2.1');
       expect(keys.sort()).toEqual(['DEV-1', 'DEV-2']);
     });
+
+    it('platform scope isolates iOS from Android on a shared clean version', () => {
+      store.upsertBatch([
+        makeTicket({ key: 'IOS-1',     fixVersions: ['2026.4.0'], targetFixVersions: [], platforms: ['ios'] }),
+        makeTicket({ key: 'IOS-2',     fixVersions: ['2026.4.0'], targetFixVersions: [], platforms: ['ios'] }),
+        makeTicket({ key: 'ANDROID-1', fixVersions: ['2026.4.0'], targetFixVersions: [], platforms: ['android'] }),
+      ]);
+      expect(store.getKeysForVersion('2026.4.0', 'ios').sort()).toEqual(['IOS-1', 'IOS-2']);
+      expect(store.getKeysForVersion('2026.4.0', 'android')).toEqual(['ANDROID-1']);
+      expect(store.getKeysForVersion('2026.4.0').sort()).toEqual(['ANDROID-1', 'IOS-1', 'IOS-2']);
+    });
+
+    it('legacy tickets with empty platforms match any platform (backward compat)', () => {
+      store.upsertBatch([
+        makeTicket({ key: 'LEGACY-1', fixVersions: ['2026.4.0'], targetFixVersions: [], platforms: [] }),
+      ]);
+      expect(store.getKeysForVersion('2026.4.0', 'ios')).toEqual(['LEGACY-1']);
+      expect(store.getKeysForVersion('2026.4.0', 'android')).toEqual(['LEGACY-1']);
+    });
   });
 
   // ── Search ────────────────────────────────────────

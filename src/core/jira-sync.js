@@ -3,6 +3,13 @@ const log = require('./log');
 const JiraClient = require('../integrations/jira');
 const { resolveTargetCustomers } = require('./customer-resolver');
 
+function repoToPlatform(repo) {
+  if (repo === 'ios') return 'ios';
+  if (repo === 'android') return 'android';
+  if (repo === 'webplatform' || repo === 'bluesummit') return 'web';
+  return null;
+}
+
 /**
  * JIRA-first release sync.
  * Queries JIRA versions as source of truth for releases,
@@ -389,10 +396,13 @@ class JiraSync extends EventEmitter {
     }
 
     const syncedAt = new Date().toISOString();
+    const platform = repoToPlatform(repo);
 
     // Snapshot existing ticket keys BEFORE mutations (for change detection).
+    // Scope by platform so syncing iOS 2026.4.0 doesn't see (and later prune)
+    // Android tickets that share the same bare version number.
     const preExistingKeys = this._ticketStore
-      ? new Set(this._ticketStore.getKeysForVersion(cleanVersion))
+      ? new Set(this._ticketStore.getKeysForVersion(cleanVersion, platform))
       : new Set();
 
     // Normalize all issues
