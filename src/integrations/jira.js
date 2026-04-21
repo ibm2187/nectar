@@ -280,6 +280,13 @@ class JiraClient {
   static normalizeIssue(issue) {
     const fields = issue.fields || {};
     const rawZoho = fields[ZOHO_CUSTOM_FIELD];
+    const rawFixNames = (fields.fixVersions || []).map(v => v.name).filter(Boolean);
+    const rawTargetNames = JiraClient.extractVersionNames(fields[TARGET_FIX_VERSION_FIELD]);
+    const platformSet = new Set();
+    for (const name of [...rawFixNames, ...rawTargetNames]) {
+      const p = JiraClient.extractPlatform(name);
+      if (p) platformSet.add(p);
+    }
     return {
       key: issue.key,
       summary: fields.summary || '',
@@ -287,8 +294,9 @@ class JiraClient {
       type: fields.issuetype ? fields.issuetype.name : 'Unknown',
       assignee: fields.assignee ? fields.assignee.displayName : null,
       priority: fields.priority ? fields.priority.name : null,
-      fixVersions: (fields.fixVersions || []).map(v => JiraClient.cleanVersionName(v.name)),
-      targetFixVersions: JiraClient.extractVersionNames(fields[TARGET_FIX_VERSION_FIELD]).map(v => JiraClient.cleanVersionName(v)),
+      fixVersions: rawFixNames.map(v => JiraClient.cleanVersionName(v)),
+      targetFixVersions: rawTargetNames.map(v => JiraClient.cleanVersionName(v)),
+      platforms: [...platformSet],
       labels: fields.labels || [],
       component: JiraClient.extractFieldString(fields[COMPONENT_FIELD]),
       module: JiraClient.extractFieldString(fields[MODULE_FIELD]),
@@ -321,6 +329,20 @@ class JiraClient {
     if (lower.startsWith('ios ')) return name.substring(4).trim();
     if (lower.startsWith('android ')) return name.substring(8).trim();
     return name;
+  }
+
+  /**
+   * Infer the release platform from a raw JIRA version name.
+   * "iOS 2026.4.0" → "ios", "Android 2026.4.0" → "android", "4.2.0" → "web".
+   * Enables disambiguating tickets when two repos (iOS+Android) share the same
+   * bare version number — prevents cross-platform prune collisions.
+   */
+  static extractPlatform(name) {
+    if (!name) return null;
+    const lower = String(name).toLowerCase();
+    if (lower.startsWith('ios ')) return 'ios';
+    if (lower.startsWith('android ')) return 'android';
+    return 'web';
   }
 
   /**

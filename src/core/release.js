@@ -4,6 +4,8 @@ const { getDb } = require('./db');
 
 // ── State machine definition ────────────────────────────────────────────────
 
+const { repoToPlatform } = require('./platform');
+
 const STATES = ['planning', 'cutting', 'stabilizing', 'approved', 'deploying', 'done'];
 
 const TRANSITIONS = {
@@ -114,7 +116,7 @@ class ReleaseManager extends EventEmitter {
    */
   getTickets(release) {
     if (this._ticketStore) {
-      return this._ticketStore.getForVersion(release.version).map(t => ({
+      return this._ticketStore.getForVersion(release.version, repoToPlatform(release.repo)).map(t => ({
         key: t.key,
         summary: t.summary || '',
         state: t.state || 'pending',

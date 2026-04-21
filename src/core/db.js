@@ -348,6 +348,7 @@ function applySchema(db) {
       customerTags         TEXT NOT NULL DEFAULT '[]',   -- JSON array
       deployedEnvironments TEXT NOT NULL DEFAULT '[]',   -- JSON array
       labels               TEXT NOT NULL DEFAULT '[]',   -- JSON array
+      platforms            TEXT NOT NULL DEFAULT '[]',   -- JSON array: 'ios' | 'android' | 'web'
       zohoRef              TEXT,                          -- JSON object
       submitterName        TEXT,
       submitterEmail       TEXT,
@@ -671,6 +672,28 @@ function applyMigrations(db) {
       // Backfill existing 'done' releases — best-effort, uses updatedAt as approximation.
       // Only backfills where shippedAt is NULL so future transitions set the real value.
       db.prepare(`UPDATE releases SET shippedAt = updatedAt WHERE state = 'done' AND shippedAt IS NULL`).run();
+    },
+    // v12: Add platforms JSON column to jira_tickets. Disambiguates shared version
+    // numbers across iOS/Android/web. Backfill uses the labels array as a proxy;
+    // next full ticket sync rewrites from JIRA truth.
+    (db) => {
+      const cols = db.prepare("PRAGMA table_info(jira_tickets)").all().map(c => c.name);
+      if (!cols.includes('platforms')) {
+        db.prepare(`ALTER TABLE jira_tickets ADD COLUMN platforms TEXT NOT NULL DEFAULT '[]'`).run();
+      }
+      db.prepare(`
+        UPDATE jira_tickets
+        SET platforms = CASE
+          WHEN labels LIKE '%"iOS"%'     AND labels LIKE '%"Android"%' THEN '["ios","android"]'
+          WHEN labels LIKE '%"iOS"%'                                   THEN '["ios"]'
+          WHEN labels LIKE '%"Android"%'                               THEN '["android"]'
+          ELSE                                                              '["web"]'
+        END
+        WHERE platforms = '[]'
+      `).run();
+      // Force a full ticket re-sync on next worker pass — platform array will
+      // be authoritative, computed from raw JIRA fixVersion names.
+      db.prepare(`UPDATE jira_sync_meta SET lastTicketSyncTime = NULL WHERE id = 1`).run();
     },
   ];
 
