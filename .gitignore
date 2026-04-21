@@ -41,3 +41,7 @@ Thumbs.db
 
 # Plans (ignore future additions; already-committed files remain tracked)
 docs/plans/
+
+# Claude Code state
+.claude/scheduled_tasks.lock
+.claude/

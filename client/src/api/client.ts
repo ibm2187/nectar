@@ -77,6 +77,26 @@ export interface Release {
   targetCustomerSource?: 'description' | 'suffix' | 'default'
   // Set by backend when releases are returned via /api/releases or /api/releases/calendar
   effectiveStatus?: EffectiveStatus
+  // Release train process
+  releaseType?: string | null
+  shipDate?: string | null
+  milestones?: Array<{
+    key: string
+    label: string
+    tMinus: number
+    computedDate: string
+    overrideDate: string | null
+    effectiveDate: string
+    status: 'pending' | 'met' | 'missed' | 'skipped'
+    completedAt: string | null
+    completedBy: string | null
+    owner: string
+    gate: boolean
+    autoCheck: string | null
+    description: string | null
+    missAction: string | null
+  }>
+  templateVersion?: number | null
   // Only populated by GET /api/releases/:version.
   pipeline?: PipelineData | null
 }

@@ -167,6 +167,10 @@ const envPoller = new EnvironmentPoller(customerStore, config);
 const ThemeConfig = require('./core/theme-config');
 const themeConfig = new ThemeConfig();
 
+const { TemplateStore } = require('./core/milestone-engine');
+const templateStore = new TemplateStore();
+log.info(`Template store initialized (${templateStore.list().length} templates loaded)`);
+
 const ApiKeyManager = require('./core/api-keys');
 const apiKeys = new ApiKeyManager();
 log.info(`API key manager initialized (${apiKeys.keys.size} keys loaded)`);
@@ -244,6 +248,7 @@ const services = {
   releaseNotifier,
   peopleDirectory, notificationSettings, notificationEngine, availability,
   ticketStore, prStore,
+  templateStore,
 };
 const webServer = createWebServer(services, config);
 

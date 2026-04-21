@@ -39,6 +39,10 @@ const themeConfig = new ThemeConfig();
 const NotificationSettings = require('./core/notification-settings');
 const notificationSettings = new NotificationSettings();
 
+const { TemplateStore } = require('./core/milestone-engine');
+const templateStore = new TemplateStore();
+log.info(`[web] Template store: ${templateStore.list().length} templates`);
+
 const PeopleDirectory = require('./core/people-directory');
 const peopleDirectory = new PeopleDirectory(config);
 peopleDirectory.load();
@@ -216,6 +220,7 @@ const jiraSyncStub = makeSyncStub('jira', {
 const pipelineSyncStub = makeSyncStub('pipeline', {
   getStatus: () => ({ running: false, lastRun: null, configured: aws.isConfigured(), mode: 'web-only' }),
   getBuildsPageData: () => pipelineSync.getBuildsPageDataFromDb(),
+  getPipelineForRelease: (release) => pipelineSync.getPipelineForRelease(release),
 });
 
 const services = {
@@ -241,6 +246,7 @@ const services = {
   releaseNotifier,
   peopleDirectory, notificationSettings, notificationEngine, availability,
   ticketStore, prStore, velocityEngine,
+  templateStore,
 };
 
 const webServer = createWebServer(services, config);

@@ -18,6 +18,7 @@ import { TasksPage } from './features/tasks/TasksPage'
 import { HealthDashboard } from './features/health/HealthDashboard'
 import { CustomerStatusPage } from './features/health/CustomerStatusPage'
 import { StandupPage } from './features/standup/StandupPage'
+import { ProcessHealthPage } from './features/reports/ProcessHealthPage'
 import { LoginPage } from './features/auth/LoginPage'
 import { connectWebSocket, disconnectWebSocket, useWsStore } from './stores/wsStore'
 import { useAuthStore, type UserPermissions } from './stores/authStore'
@@ -92,6 +93,7 @@ export default function App() {
             <Route path="/tickets" element={<PermissionGuard permKey="tickets"><TicketsPage /></PermissionGuard>} />
             <Route path="/roadmap" element={<PermissionGuard permKey="roadmap"><RoadmapPage /></PermissionGuard>} />
             <Route path="/tasks-queue" element={<PermissionGuard permKey="tasks"><TasksPage /></PermissionGuard>} />
+            <Route path="/reports/process-health" element={<PermissionGuard permKey="releases"><ProcessHealthPage /></PermissionGuard>} />
             <Route path="/config" element={<ConfigPage />} />
           </Route>
         </Routes>

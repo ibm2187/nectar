@@ -8,15 +8,17 @@ import { NectarLoader } from '../../components/NectarLoader'
 import { cn } from '../../lib/utils'
 import { IntegrationsConfigPage } from '../integrations-config/IntegrationsConfigPage'
 import { UpdatePage } from '../admin/UpdatePage'
+import { ReleaseTrainTab } from './ReleaseTrainTab'
 import { SortableHeader, useSortableData, useSortState } from '../../components/SortableHeader'
 import { lightenHex } from '../../lib/color-utils'
 
 // ── Tab types ─────────────────────────────────────────
 
-type Tab = 'display' | 'api-keys' | 'users' | 'connections' | 'notifications' | 'logs' | 'backfills' | 'update'
+type Tab = 'display' | 'release-train' | 'api-keys' | 'users' | 'connections' | 'notifications' | 'logs' | 'backfills' | 'update'
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'display', label: 'Display' },
+  { key: 'release-train', label: 'Release Train' },
   { key: 'api-keys', label: 'API Keys' },
   { key: 'users', label: 'Users' },
   { key: 'connections', label: 'Connections' },
@@ -73,6 +75,7 @@ export function ConfigPage() {
           <ThemesTab />
         </div>
       )}
+      {activeTab === 'release-train' && <ReleaseTrainTab />}
       {activeTab === 'api-keys' && <ApiKeysSection />}
       {activeTab === 'users' && <UsersTab />}
       {activeTab === 'connections' && <IntegrationsConfigPage />}

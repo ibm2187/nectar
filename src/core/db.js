@@ -269,6 +269,35 @@ function applySchema(db) {
     CREATE INDEX IF NOT EXISTS idx_audit_version ON audit(version);
     CREATE INDEX IF NOT EXISTS idx_audit_at      ON audit(at DESC);
 
+    -- ── release_templates (configurable process milestones) ────
+    CREATE TABLE IF NOT EXISTS release_templates (
+      key             TEXT PRIMARY KEY,
+      label           TEXT NOT NULL,
+      shipDay         TEXT,              -- "wednesday", "tuesday", etc. or null
+      bufferDay       TEXT,              -- delay buffer day
+      skipWeekends    INTEGER NOT NULL DEFAULT 1,
+      milestones      TEXT NOT NULL DEFAULT '[]',  -- JSON array of milestone definitions
+      version         INTEGER NOT NULL DEFAULT 1,
+      updatedAt       TEXT NOT NULL,
+      updatedBy       TEXT
+    );
+
+    -- ── release_scorecards (post-ship process metrics) ────────
+    CREATE TABLE IF NOT EXISTS release_scorecards (
+      releaseKey        TEXT PRIMARY KEY,
+      gateHitRate       REAL,
+      onTimeShip        INTEGER,
+      scopeChanges      INTEGER,
+      postFreezeChanges INTEGER,
+      qaBugsFound       INTEGER,
+      qaSlaViolations   INTEGER,
+      migrationCount    INTEGER,
+      rcaFiledAt        TEXT,
+      cycleTimeDays     INTEGER,
+      detail            TEXT NOT NULL DEFAULT '{}',  -- JSON full scorecard
+      computedAt        TEXT NOT NULL
+    );
+
     -- ── build_cards (pipeline sync) ────────────────────────────
     CREATE TABLE IF NOT EXISTS build_cards (
       projectName     TEXT PRIMARY KEY,
@@ -585,6 +614,63 @@ function applyMigrations(db) {
       if (!cols.includes('reviewDecision')) {
         db.prepare(`ALTER TABLE github_prs ADD COLUMN reviewDecision TEXT`).run();
       }
+    },
+    // v10: Add release train process columns to releases table.
+    // releaseType, shipDate, milestones (JSON), templateVersion.
+    // Also creates release_templates and release_scorecards tables (idempotent).
+    (db) => {
+      const cols = db.prepare("PRAGMA table_info(releases)").all().map(c => c.name);
+      if (!cols.includes('releaseType')) {
+        db.prepare(`ALTER TABLE releases ADD COLUMN releaseType TEXT`).run();
+      }
+      if (!cols.includes('shipDate')) {
+        db.prepare(`ALTER TABLE releases ADD COLUMN shipDate TEXT`).run();
+      }
+      if (!cols.includes('milestones')) {
+        db.prepare(`ALTER TABLE releases ADD COLUMN milestones TEXT NOT NULL DEFAULT '[]'`).run();
+      }
+      if (!cols.includes('templateVersion')) {
+        db.prepare(`ALTER TABLE releases ADD COLUMN templateVersion INTEGER`).run();
+      }
+      // Ensure release_templates + release_scorecards tables exist (may already from schema)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS release_templates (
+          key             TEXT PRIMARY KEY,
+          label           TEXT NOT NULL,
+          shipDay         TEXT,
+          bufferDay       TEXT,
+          skipWeekends    INTEGER NOT NULL DEFAULT 1,
+          milestones      TEXT NOT NULL DEFAULT '[]',
+          version         INTEGER NOT NULL DEFAULT 1,
+          updatedAt       TEXT NOT NULL,
+          updatedBy       TEXT
+        );
+        CREATE TABLE IF NOT EXISTS release_scorecards (
+          releaseKey        TEXT PRIMARY KEY,
+          gateHitRate       REAL,
+          onTimeShip        INTEGER,
+          scopeChanges      INTEGER,
+          postFreezeChanges INTEGER,
+          qaBugsFound       INTEGER,
+          qaSlaViolations   INTEGER,
+          migrationCount    INTEGER,
+          rcaFiledAt        TEXT,
+          cycleTimeDays     INTEGER,
+          detail            TEXT NOT NULL DEFAULT '{}',
+          computedAt        TEXT NOT NULL
+        );
+      `);
+    },
+    // v11: Add shippedAt to releases — immutable timestamp set when release
+    // transitions to 'done'. Avoids deriving on-time ship from mutable updatedAt.
+    (db) => {
+      const cols = db.prepare("PRAGMA table_info(releases)").all().map(c => c.name);
+      if (!cols.includes('shippedAt')) {
+        db.prepare(`ALTER TABLE releases ADD COLUMN shippedAt TEXT`).run();
+      }
+      // Backfill existing 'done' releases — best-effort, uses updatedAt as approximation.
+      // Only backfills where shippedAt is NULL so future transitions set the real value.
+      db.prepare(`UPDATE releases SET shippedAt = updatedAt WHERE state = 'done' AND shippedAt IS NULL`).run();
     },
   ];
 

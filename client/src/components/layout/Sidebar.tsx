@@ -29,6 +29,7 @@ const links: ReadonlyArray<{
   { to: '/integrations', label: 'Integrations', icon: '🔌', permKey: 'integrations' },
   { to: '/issues', label: 'Issues', icon: '🐛', permKey: 'issues' },
   { to: '/tasks-queue', label: 'Tasks', icon: '📋', permKey: 'tasks' },
+  { to: '/reports/process-health', label: 'Reports', icon: '📊', permKey: 'releases' },
   { to: '/config', label: 'Config', icon: '⚙', adminOnly: true },
 ]
 
