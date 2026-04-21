@@ -99,6 +99,16 @@ export function ReleaseDetail() {
   const ssoEnabled = useAuthStore(s => s.ssoEnabled)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Fetch tickets from API (WS releases don't include tickets to keep init small)
+  const [apiTickets, setApiTickets] = useState<Array<{ key: string; state: string }>>([])
+  useEffect(() => {
+    if (version) {
+      apiFetch<{ tickets: Array<{ key: string; state: string }> }>(`/releases/${version}`)
+        .then(data => setApiTickets(data.tickets || []))
+        .catch(() => {})
+    }
+  }, [version, release?.updatedAt])
+
   useEffect(() => {
     if (version) {
       apiFetch<AuditEntry[]>(`/audit/${version}`).then(setAudit).catch(() => {})
@@ -271,8 +281,10 @@ export function ReleaseDetail() {
   })()
 
   // Ticket health distribution for the timeline bar
-  const ticketCounts = release.tickets.reduce(
-    (acc, t) => {
+  // Uses API-fetched tickets (WS release.tickets is empty to keep init small)
+  const tickets = apiTickets.length > 0 ? apiTickets : (release.tickets || [])
+  const ticketCounts = tickets.reduce(
+    (acc: { done: number; inProgress: number; pending: number }, t: { state?: string }) => {
       const s = (t.state || '').toLowerCase()
       if (s === 'done' || s === 'cherry-picked' || s === 'ready-for-testing') acc.done++
       else if (s === 'in-progress') acc.inProgress++
@@ -281,7 +293,7 @@ export function ReleaseDetail() {
     },
     { done: 0, inProgress: 0, pending: 0 }
   )
-  const totalTickets = release.tickets.length
+  const totalTickets = tickets.length
 
   return (
     <div className="w-full">
