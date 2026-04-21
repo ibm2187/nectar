@@ -83,7 +83,7 @@ function computeReleaseStatus(release, prodEnvs = [], now = new Date()) {
   const exactMatches = prodEnvs.filter(e => e.currentVersion === release.version);
   if (exactMatches.length > 0) {
     for (const env of exactMatches) {
-      matchingEnvs.push(env);
+      matchingEnvs.push({ id: env.id, customerId: env.customerId, currentVersion: env.currentVersion });
       signals.push({ type: 'running-in-prod', env: env.id, detail: `Running in ${env.id}` });
     }
   }
