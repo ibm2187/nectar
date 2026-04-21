@@ -53,10 +53,13 @@ interface PersonRelease {
   ticketCount: number
 }
 
+type Team = 'qa' | 'mobile' | 'web'
+
 interface StandupPerson {
   name: string
   slackId: string | null
   roles: string[]
+  teams: Team[]
   isOoo: boolean
   buckets: PersonBuckets
   urgencyScore: number
@@ -109,6 +112,22 @@ const SORT_OPTIONS: { key: SortMode; label: string }[] = [
   { key: 'items',   label: 'Most Items' },
 ]
 
+// ── Team filters ──────────────────────────────────────────
+
+type TeamFilter = 'all' | Team
+
+const TEAM_FILTERS: { key: TeamFilter; label: string }[] = [
+  { key: 'all',    label: 'All' },
+  { key: 'qa',     label: 'QA' },
+  { key: 'mobile', label: 'Mobile' },
+  { key: 'web',    label: 'Web' },
+]
+
+function matchesTeam(person: StandupPerson, filter: TeamFilter): boolean {
+  if (filter === 'all') return true
+  return person.teams.includes(filter)
+}
+
 function sortPeople(people: StandupPerson[], mode: SortMode): StandupPerson[] {
   const sorted = [...people]
   switch (mode) {
@@ -147,6 +166,18 @@ export function StandupPage() {
   const [sortMode, setSortMode] = useState<SortMode>('urgency')
   const [allExpanded, setAllExpanded] = useState<boolean | null>(null) // null = per-bucket default
 
+  // Team filter — read from URL so it persists across reloads and is shareable
+  const teamFilter = (searchParams.get('team') as TeamFilter | null) || 'all'
+  const setTeamFilter = useCallback((next: TeamFilter) => {
+    const params = new URLSearchParams(searchParams)
+    if (next === 'all') params.delete('team')
+    else params.set('team', next)
+    // Reset person position when switching team — current index is meaningless
+    // against a different filtered list.
+    params.delete('person')
+    setSearchParams(params, { replace: true })
+  }, [searchParams, setSearchParams])
+
   // Current person index from URL (0-based), with localStorage resume
   const personIdx = useMemo(() => {
     const urlParam = searchParams.get('person')
@@ -171,16 +202,30 @@ export function StandupPage() {
     return () => { cancelled = true }
   }, [])
 
-  // Sort people
+  // Team counts (pre-filter) — used to label filter pills
+  const teamCounts = useMemo(() => {
+    const counts: Record<TeamFilter, number> = { all: 0, qa: 0, mobile: 0, web: 0 }
+    if (!data) return counts
+    counts.all = data.people.length
+    for (const p of data.people) {
+      for (const t of p.teams) counts[t]++
+    }
+    return counts
+  }, [data])
+
+  // Filter then sort
   const sortedPeople = useMemo(() => {
     if (!data) return []
-    return sortPeople(data.people, sortMode)
-  }, [data, sortMode])
+    const filtered = data.people.filter(p => matchesTeam(p, teamFilter))
+    return sortPeople(filtered, sortMode)
+  }, [data, sortMode, teamFilter])
 
   // Navigate between people — persists position to localStorage for resume
   const goTo = useCallback((idx: number) => {
     const clamped = Math.max(0, Math.min(idx, sortedPeople.length - 1))
-    setSearchParams({ person: String(clamped) }, { replace: true })
+    const params = new URLSearchParams(searchParams)
+    params.set('person', String(clamped))
+    setSearchParams(params, { replace: true })
     setAllExpanded(null) // reset expand/collapse when switching person
     try {
       localStorage.setItem('nectar:standup:position', JSON.stringify({
@@ -188,7 +233,7 @@ export function StandupPage() {
         date: new Date().toISOString().slice(0, 10),
       }))
     } catch {}
-  }, [sortedPeople.length, setSearchParams])
+  }, [sortedPeople.length, setSearchParams, searchParams])
 
   const goNext = useCallback(() => goTo(personIdx + 1), [goTo, personIdx])
   const goPrev = useCallback(() => goTo(personIdx - 1), [goTo, personIdx])
@@ -222,7 +267,7 @@ export function StandupPage() {
     )
   }
 
-  if (!data || sortedPeople.length === 0) {
+  if (!data || data.people.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3">
         <p className="text-3xl">All clear!</p>
@@ -231,13 +276,15 @@ export function StandupPage() {
     )
   }
 
-  const safeIdx = Math.min(personIdx, sortedPeople.length - 1)
-  const currentPerson = sortedPeople[safeIdx]
+  const safeIdx = Math.min(personIdx, Math.max(0, sortedPeople.length - 1))
+  const currentPerson = sortedPeople[safeIdx] ?? null
   const hasNext = safeIdx < sortedPeople.length - 1
   const hasPrev = safeIdx > 0
 
   // Count non-empty buckets for expand/collapse visibility
-  const nonEmptyBuckets = BUCKET_ORDER.filter(k => (currentPerson.buckets[k] || []).length > 0).length
+  const nonEmptyBuckets = currentPerson
+    ? BUCKET_ORDER.filter(k => (currentPerson.buckets[k] || []).length > 0).length
+    : 0
 
   return (
     <div className="flex gap-4 h-[calc(100vh-7rem)]">
@@ -245,7 +292,7 @@ export function StandupPage() {
       <div className="w-56 shrink-0 flex flex-col border rounded-lg bg-card overflow-hidden">
         <div className="px-3 py-2 border-b bg-muted/30 flex items-center justify-between">
           <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-            Team ({sortedPeople.length})
+            Team ({sortedPeople.length}{teamFilter !== 'all' ? `/${teamCounts.all}` : ''})
           </span>
           {/* Sort selector */}
           <select
@@ -257,6 +304,27 @@ export function StandupPage() {
               <option key={o.key} value={o.key}>{o.label}</option>
             ))}
           </select>
+        </div>
+        {/* Team filter pills */}
+        <div className="px-2 py-2 border-b bg-muted/10 flex flex-wrap gap-1">
+          {TEAM_FILTERS.map(f => {
+            const active = teamFilter === f.key
+            const count = teamCounts[f.key]
+            return (
+              <button
+                key={f.key}
+                onClick={() => setTeamFilter(f.key)}
+                className={cn(
+                  'text-[10px] font-medium px-2 py-0.5 rounded border transition-colors',
+                  active
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/30'
+                )}
+              >
+                {f.label} <span className="opacity-70">({count})</span>
+              </button>
+            )
+          })}
         </div>
         <div className="flex-1 overflow-y-auto">
           {sortedPeople.map((person, i) => {
@@ -333,7 +401,7 @@ export function StandupPage() {
               Next →
             </button>
             <span className="text-xs text-muted-foreground font-mono ml-2">
-              {safeIdx + 1}/{sortedPeople.length}
+              {sortedPeople.length > 0 ? `${safeIdx + 1}/${sortedPeople.length}` : '0/0'}
             </span>
 
             {/* Expand all / Collapse all */}
@@ -359,7 +427,19 @@ export function StandupPage() {
 
         {/* Person content */}
         <div className="flex-1 overflow-y-auto">
-          <PersonSlide person={currentPerson} forceExpanded={allExpanded} />
+          {currentPerson ? (
+            <PersonSlide person={currentPerson} forceExpanded={allExpanded} />
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full gap-2 text-center py-12">
+              <p className="text-lg">No team members match this filter.</p>
+              <button
+                onClick={() => setTeamFilter('all')}
+                className="text-xs text-primary hover:underline"
+              >
+                Clear filter
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -31,6 +31,15 @@ const URGENCY_WEIGHTS = {
   inDev: 0,
 };
 
+// Map a repo (short name or "org/repo") to a team. Unknown repos → null.
+function teamForRepo(repo) {
+  if (!repo) return null;
+  const short = String(repo).toLowerCase().split('/').pop();
+  if (short === 'android' || short === 'ios') return 'mobile';
+  if (short === 'webplatform' || short === 'bluesummit') return 'web';
+  return null;
+}
+
 /**
  * Build the standup data for all people with active work.
  *
@@ -138,6 +147,7 @@ function buildStandupData(services, opts = {}) {
           version: release.version,
           dueDate: release.jiraReleaseDate,
           state: release.state,
+          repo: release.repo || null,
         },
         prs: prs.map(p => ({
           prNumber: p.prNumber,
@@ -253,10 +263,19 @@ function buildStandupData(services, opts = {}) {
     const hasImminentTickets = allItems.some(i => imminentVersions.has(i.release.version));
     const defaultFilter = hasImminentTickets ? 'imminent' : 'all';
 
+    // Derive teams: QA role → qa; any ticket in mobile/web repo → those teams.
+    const teams = new Set();
+    if (roles.includes('qa')) teams.add('qa');
+    for (const { release } of allItems) {
+      const t = teamForRepo(release.repo);
+      if (t) teams.add(t);
+    }
+
     people.push({
       name: personName,
       slackId,
       roles,
+      teams: [...teams],
       isOoo,
       buckets,
       urgencyScore,
@@ -280,10 +299,13 @@ function buildStandupData(services, opts = {}) {
 
       const isOoo = availability ? availability.isPersonOut(member.name) : false;
       const resolved = peopleDirectory ? peopleDirectory.resolveSlackId(member.name) : null;
+      // Without active tickets we can only infer team from role.
+      const teams = standupRoles.includes('qa') ? ['qa'] : [];
       people.push({
         name: member.name,
         slackId: resolved ? resolved.slackId : null,
         roles: standupRoles,
+        teams,
         isOoo,
         buckets: {
           releaseCritical: [],
@@ -343,4 +365,4 @@ function _defaultHorizon(availability) {
   return end.toISOString().slice(0, 10);
 }
 
-module.exports = { buildStandupData, URGENCY_WEIGHTS };
+module.exports = { buildStandupData, URGENCY_WEIGHTS, teamForRepo };

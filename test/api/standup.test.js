@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { buildStandupData } = require('../../src/api/standup');
+const { buildStandupData, teamForRepo } = require('../../src/api/standup');
 
 // ── Test helpers ────────────────────────────────────────
 
@@ -472,6 +472,122 @@ describe('buildStandupData', () => {
       // Both tickets land in inDev (no truth)
       expect(alice.buckets.inDev).toHaveLength(2);
       expect(alice.buckets.inDev.map(t => t.release.version).sort()).toEqual(['4.2.0', '4.2.1']);
+    });
+  });
+
+  describe('team classification', () => {
+    it('tags QA role with qa team', () => {
+      const releases = [makeRelease('4.2.0', { repo: 'webplatform' })];
+      const tickets = [makeTicket('DEV-1', { qaAssignee: 'Bob QA' })];
+      const services = createMockServices(releases, { '4.2.0': tickets });
+      const result = buildStandupData(services, { horizon: '2026-04-27' });
+
+      const bob = result.people.find(p => p.name === 'Bob QA');
+      expect(bob.teams).toContain('qa');
+      expect(bob.teams).toContain('web');
+    });
+
+    it('tags devs on android/ios repos as mobile', () => {
+      const releases = [
+        makeRelease('ios-2026.4.0', { repo: 'ios' }),
+        makeRelease('4.2.0',        { repo: 'android' }),
+      ];
+      const tickets = {
+        'ios-2026.4.0': [makeTicket('DEV-1', { assignee: 'Alice Dev' })],
+        '4.2.0':        [makeTicket('DEV-2', { assignee: 'Alice Dev' })],
+      };
+      const services = createMockServices(releases, tickets);
+      const result = buildStandupData(services, { horizon: '2026-04-27' });
+
+      const alice = result.people.find(p => p.name === 'Alice Dev');
+      expect(alice.teams).toEqual(['mobile']);
+    });
+
+    it('tags devs on webplatform/bluesummit repos as web', () => {
+      const releases = [
+        makeRelease('4.2.0', { repo: 'webplatform' }),
+        makeRelease('5.0.0', { repo: 'bluesummit' }),
+      ];
+      const tickets = {
+        '4.2.0': [makeTicket('DEV-1', { assignee: 'Alice Dev' })],
+        '5.0.0': [makeTicket('DEV-2', { assignee: 'Alice Dev' })],
+      };
+      const services = createMockServices(releases, tickets);
+      const result = buildStandupData(services, { horizon: '2026-04-27' });
+
+      const alice = result.people.find(p => p.name === 'Alice Dev');
+      expect(alice.teams).toEqual(['web']);
+    });
+
+    it('tags a person spanning repos with multiple teams', () => {
+      const releases = [
+        makeRelease('4.2.0',        { repo: 'webplatform' }),
+        makeRelease('ios-2026.4.0', { repo: 'ios' }),
+      ];
+      const tickets = {
+        '4.2.0':        [makeTicket('DEV-1', { assignee: 'Alice Dev' })],
+        'ios-2026.4.0': [makeTicket('DEV-2', { assignee: 'Alice Dev' })],
+      };
+      const services = createMockServices(releases, tickets);
+      const result = buildStandupData(services, { horizon: '2026-04-27' });
+
+      const alice = result.people.find(p => p.name === 'Alice Dev');
+      expect(alice.teams.sort()).toEqual(['mobile', 'web']);
+    });
+
+    it('tags QA on mobile repo with both qa and mobile', () => {
+      const releases = [makeRelease('ios-2026.4.0', { repo: 'ios' })];
+      const tickets = [makeTicket('DEV-1', { qaAssignee: 'Bob QA' })];
+      const services = createMockServices(releases, { '4.2.0': tickets, 'ios-2026.4.0': tickets });
+      const result = buildStandupData(services, { horizon: '2026-04-27' });
+
+      const bob = result.people.find(p => p.name === 'Bob QA');
+      expect(bob.teams.sort()).toEqual(['mobile', 'qa']);
+    });
+
+    it('includes release.repo on ticket items', () => {
+      const releases = [makeRelease('4.2.0', { repo: 'android' })];
+      const tickets = [makeTicket('DEV-1', { assignee: 'Alice Dev' })];
+      const services = createMockServices(releases, { '4.2.0': tickets });
+      const result = buildStandupData(services, { horizon: '2026-04-27' });
+
+      const alice = result.people.find(p => p.name === 'Alice Dev');
+      expect(alice.buckets.inDev[0].release.repo).toBe('android');
+    });
+
+    it('fallback people (no tickets) get qa team only if QA role', () => {
+      const releases = [makeRelease('4.2.0')];
+      const team = [
+        { name: 'Alice Dev', roles: ['dev'] },
+        { name: 'Bob QA',    roles: ['qa']  },
+      ];
+      const services = createMockServices(releases, { '4.2.0': [] }, new Map(), new Map(), team);
+      const result = buildStandupData(services, { horizon: '2026-04-27' });
+
+      const alice = result.people.find(p => p.name === 'Alice Dev');
+      const bob = result.people.find(p => p.name === 'Bob QA');
+      expect(alice.teams).toEqual([]);
+      expect(bob.teams).toEqual(['qa']);
+    });
+
+    it('accepts full "org/repo" names', () => {
+      expect(teamForRepo('mavencare/webplatform')).toBe('web');
+      expect(teamForRepo('mavencare/iOS')).toBe('mobile');
+      expect(teamForRepo('mavencare/android')).toBe('mobile');
+      expect(teamForRepo('mavencare/bluesummit')).toBe('web');
+    });
+
+    it('accepts short repo names', () => {
+      expect(teamForRepo('webplatform')).toBe('web');
+      expect(teamForRepo('ios')).toBe('mobile');
+      expect(teamForRepo('android')).toBe('mobile');
+      expect(teamForRepo('bluesummit')).toBe('web');
+    });
+
+    it('returns null for unknown/missing repos', () => {
+      expect(teamForRepo(null)).toBeNull();
+      expect(teamForRepo('')).toBeNull();
+      expect(teamForRepo('something-else')).toBeNull();
     });
   });
 
