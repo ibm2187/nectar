@@ -2,13 +2,7 @@ const { EventEmitter } = require('events');
 const log = require('./log');
 const JiraClient = require('../integrations/jira');
 const { resolveTargetCustomers } = require('./customer-resolver');
-
-function repoToPlatform(repo) {
-  if (repo === 'ios') return 'ios';
-  if (repo === 'android') return 'android';
-  if (repo === 'webplatform' || repo === 'bluesummit') return 'web';
-  return null;
-}
+const { repoToPlatform } = require('./platform');
 
 /**
  * JIRA-first release sync.

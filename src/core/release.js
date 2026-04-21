@@ -4,17 +4,9 @@ const { getDb } = require('./db');
 
 // ── State machine definition ────────────────────────────────────────────────
 
-const STATES = ['planning', 'cutting', 'stabilizing', 'approved', 'deploying', 'done'];
+const { repoToPlatform } = require('./platform');
 
-// Map a release repo to its platform tag on tickets.
-// Keeps tickets from iOS 2026.4.0 distinct from tickets on Android 2026.4.0
-// even though both releases carry version '2026.4.0'.
-function repoToPlatform(repo) {
-  if (repo === 'ios') return 'ios';
-  if (repo === 'android') return 'android';
-  if (repo === 'webplatform' || repo === 'bluesummit') return 'web';
-  return null;
-}
+const STATES = ['planning', 'cutting', 'stabilizing', 'approved', 'deploying', 'done'];
 
 const TRANSITIONS = {
   planning:    ['cutting'],
