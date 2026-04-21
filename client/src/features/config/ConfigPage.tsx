@@ -1240,9 +1240,18 @@ interface BackfillResult {
 
 // ── Notifications Tab ─────────────────────────────────
 
+interface NotifGroupSchema {
+  label: string
+  description: string
+  notifications: Record<string, { label: string; description: string }>
+}
+
 interface NotifSettings {
   enabled: boolean
-  channels: Record<string, boolean>
+  redirectChannel: string | null
+  redirectDM: string | null
+  groups: Record<string, { enabled: boolean; notifications: Record<string, boolean> }>
+  schema: Record<string, NotifGroupSchema>
 }
 
 interface PeopleEntry {
@@ -1250,14 +1259,6 @@ interface PeopleEntry {
   slackId: string
   username: string
 }
-
-const CHANNEL_TOGGLES: { key: string; label: string; description: string }[] = [
-  { key: 'releases', label: 'Release Lifecycle', description: 'Cut, state transitions, and approvals — posted to the per-release channel (e.g. #releases-4-2-0)' },
-  { key: 'deploys', label: 'Deployments', description: 'Deployment success and failure alerts — posted to the per-release channel' },
-  { key: 'releaseStatus', label: 'Scheduled Status Updates', description: '9 AM and 2 PM status digests, date changes, and environment deployments — per-release channel' },
-  { key: 'buildFailures', label: 'Build Failure Alerts', description: 'DMs to dev and QA assignees when a build fails or recovers' },
-  { key: 'dailyDigest', label: 'Daily Digest', description: 'Morning DM to each person with their undone tickets across upcoming releases' },
-]
 
 function ToggleSwitch({ enabled, disabled, onToggle }: { enabled: boolean; disabled?: boolean; onToggle: () => void }) {
   return (
@@ -1275,6 +1276,76 @@ function ToggleSwitch({ enabled, disabled, onToggle }: { enabled: boolean; disab
         enabled ? 'translate-x-4' : 'translate-x-0'
       )} />
     </button>
+  )
+}
+
+function NotificationRoutingCard({ settings, saving, updateSettings }: {
+  settings: NotifSettings
+  saving: boolean
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  updateSettings: (patch: Record<string, any>) => Promise<void>
+}) {
+  const [channelValue, setChannelValue] = useState(settings.redirectChannel || '')
+  const [dmValue, setDmValue] = useState(settings.redirectDM || '')
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Notification Routing</CardTitle>
+      </CardHeader>
+      <CardContent className="p-4 pt-0 space-y-4">
+        <div className="rounded bg-amber-500/10 border border-amber-500/30 px-3 py-2">
+          <p className="text-xs text-amber-300 font-medium">Testing only</p>
+          <p className="text-[11px] text-amber-300/80 mt-0.5">
+            These overrides redirect all Slack notifications to a single channel or user. Use this to verify notifications work without spamming real channels. Messages are prefixed with the original target so you can see where they would have gone.
+          </p>
+        </div>
+        {/* Redirect Channel */}
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium">Redirect Channel</label>
+          <p className="text-[11px] text-muted-foreground">Route all channel posts to this channel instead</p>
+          <div className="flex items-center gap-2">
+            <Input
+              value={channelValue}
+              onChange={e => setChannelValue(e.target.value)}
+              placeholder="#test-notifications"
+              className="h-8 text-xs flex-1 max-w-xs"
+            />
+            <Button variant="outline" size="sm" disabled={saving} onClick={() => updateSettings({ redirectChannel: channelValue || null })}>
+              Save
+            </Button>
+            <Button variant="ghost" size="sm" disabled={saving} onClick={() => { setChannelValue(''); updateSettings({ redirectChannel: null }) }}>
+              Clear
+            </Button>
+          </div>
+          {settings.redirectChannel && (
+            <p className="text-[11px] text-green-400">Active: all channel posts → {settings.redirectChannel}</p>
+          )}
+        </div>
+        {/* Redirect DM */}
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium">Redirect DM</label>
+          <p className="text-[11px] text-muted-foreground">Route all DMs to this Slack user instead</p>
+          <div className="flex items-center gap-2">
+            <Input
+              value={dmValue}
+              onChange={e => setDmValue(e.target.value)}
+              placeholder="U12345678 (Slack user ID)"
+              className="h-8 text-xs flex-1 max-w-xs"
+            />
+            <Button variant="outline" size="sm" disabled={saving} onClick={() => updateSettings({ redirectDM: dmValue || null })}>
+              Save
+            </Button>
+            <Button variant="ghost" size="sm" disabled={saving} onClick={() => { setDmValue(''); updateSettings({ redirectDM: null }) }}>
+              Clear
+            </Button>
+          </div>
+          {settings.redirectDM && (
+            <p className="text-[11px] text-green-400">Active: all DMs → {settings.redirectDM}</p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -1315,7 +1386,8 @@ function NotificationsTab() {
 
   useEffect(() => { load() }, [])
 
-  async function updateSettings(patch: Partial<NotifSettings>) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async function updateSettings(patch: Record<string, any>) {
     if (!settings) return
     setSaving(true)
     try {
@@ -1403,29 +1475,48 @@ function NotificationsTab() {
         </CardContent>
       </Card>
 
-      {/* Channel toggles */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Notification Types</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="divide-y divide-border/30">
-            {CHANNEL_TOGGLES.map(({ key, label, description }) => (
-              <div key={key} className="flex items-center justify-between px-4 py-3">
+      {/* Grouped notification toggles */}
+      {settings.schema && Object.entries(settings.schema).map(([groupKey, group]) => {
+        const groupState = settings.groups[groupKey]
+        if (!groupState) return null
+        return (
+          <Card key={groupKey}>
+            <CardContent className="p-4">
+              {/* Group header with parent toggle */}
+              <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium">{label}</p>
-                  <p className="text-xs text-muted-foreground">{description}</p>
+                  <h3 className="text-sm font-medium">{group.label}</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">{group.description}</p>
                 </div>
                 <ToggleSwitch
-                  enabled={settings.channels[key] ?? true}
+                  enabled={groupState.enabled}
                   disabled={saving || !settings.enabled}
-                  onToggle={() => updateSettings({ channels: { ...settings.channels, [key]: !settings.channels[key] } })}
+                  onToggle={() => updateSettings({ groups: { [groupKey]: { enabled: !groupState.enabled } } })}
                 />
               </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+              {/* Child notification toggles */}
+              <div className="mt-3 ml-4 space-y-0 divide-y divide-border/20">
+                {Object.entries(group.notifications).map(([notifKey, notif]) => (
+                  <div key={notifKey} className="flex items-center justify-between py-2.5">
+                    <div>
+                      <p className="text-sm">{notif.label}</p>
+                      <p className="text-[11px] text-muted-foreground">{notif.description}</p>
+                    </div>
+                    <ToggleSwitch
+                      enabled={groupState.notifications[notifKey] ?? false}
+                      disabled={saving || !settings.enabled || !groupState.enabled}
+                      onToggle={() => updateSettings({ groups: { [groupKey]: { notifications: { [notifKey]: !(groupState.notifications[notifKey] ?? false) } } } })}
+                    />
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )
+      })}
+
+      {/* Notification Routing (redirect overrides) */}
+      <NotificationRoutingCard settings={settings} saving={saving} updateSettings={updateSettings} />
 
       {/* Test — send digest to a specific person */}
       <Card>

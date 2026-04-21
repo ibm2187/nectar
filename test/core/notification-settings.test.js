@@ -1,158 +1,301 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import fs from 'fs';
-import path from 'path';
 
-const STATE_FILE = path.join(__dirname, '..', '..', '.nectar-notification-settings.json');
+const { createTestDb } = require('../../src/core/db');
 const NotificationSettings = require('../../src/core/notification-settings');
 
-describe('NotificationSettings', () => {
-  let settings;
-  let originalState;
+/**
+ * Helper: create a fresh NotificationSettings with an in-memory DB
+ * and a controlled NODE_ENV.
+ */
+function freshSettings(nodeEnv, db) {
+  const orig = process.env.NODE_ENV;
+  process.env.NODE_ENV = nodeEnv;
+  try {
+    return new NotificationSettings({ db });
+  } finally {
+    process.env.NODE_ENV = orig;
+  }
+}
+
+describe('NotificationSettings (grouped model)', () => {
+  let db;
 
   beforeEach(() => {
-    if (fs.existsSync(STATE_FILE)) {
-      originalState = fs.readFileSync(STATE_FILE, 'utf8');
-      fs.unlinkSync(STATE_FILE);
-    } else {
-      originalState = null;
-    }
-    settings = new NotificationSettings();
+    db = createTestDb();
   });
 
   afterEach(() => {
-    if (originalState !== null) {
-      fs.writeFileSync(STATE_FILE, originalState);
-    } else if (fs.existsSync(STATE_FILE)) {
-      fs.unlinkSync(STATE_FILE);
-    }
+    try { db.close(); } catch { /* ok */ }
   });
 
-  describe('defaults', () => {
-    it('starts with master toggle enabled', () => {
-      expect(settings.enabled).toBe(true);
+  // ── Production defaults ──────────────────────────────
+
+  describe('production defaults', () => {
+    it('master toggle defaults to true', () => {
+      const s = freshSettings('production', db);
+      expect(s.enabled).toBe(true);
     });
 
-    it('starts with all channels enabled', () => {
-      expect(settings.get('releases')).toBe(true);
-      expect(settings.get('deploys')).toBe(true);
-      expect(settings.get('releaseStatus')).toBe(true);
-      expect(settings.get('buildFailures')).toBe(true);
-      expect(settings.get('dailyDigest')).toBe(true);
+    it('all groups default to enabled', () => {
+      const s = freshSettings('production', db);
+      const all = s.getAll();
+      for (const groupKey of Object.keys(all.groups)) {
+        expect(all.groups[groupKey].enabled).toBe(true);
+      }
     });
 
-    it('returns true for unknown channel types (safe default)', () => {
-      expect(settings.get('unknownType')).toBe(true);
+    it('all notifications default to enabled', () => {
+      const s = freshSettings('production', db);
+      expect(s.get('transitions')).toBe(true);
+      expect(s.get('deploys')).toBe(true);
+      expect(s.get('dateChanges')).toBe(true);
+      expect(s.get('envDeployments')).toBe(true);
+      expect(s.get('releaseStatus')).toBe(true);
+      expect(s.get('ticketChanges')).toBe(true);
+      expect(s.get('dailyDigest')).toBe(true);
+      expect(s.get('buildFailures')).toBe(true);
+      expect(s.get('cherryPickConflicts')).toBe(true);
+    });
+
+    it('redirect fields default to null', () => {
+      const s = freshSettings('production', db);
+      const all = s.getAll();
+      expect(all.redirectChannel).toBeNull();
+      expect(all.redirectDM).toBeNull();
     });
   });
+
+  // ── Non-production defaults ──────────────────────────
+
+  describe('non-production defaults', () => {
+    it('master toggle still defaults to true', () => {
+      const s = freshSettings('development', db);
+      expect(s.enabled).toBe(true);
+    });
+
+    it('all groups default to disabled', () => {
+      const s = freshSettings('development', db);
+      const all = s.getAll();
+      for (const groupKey of Object.keys(all.groups)) {
+        expect(all.groups[groupKey].enabled).toBe(false);
+      }
+    });
+
+    it('all notifications default to disabled', () => {
+      const s = freshSettings('development', db);
+      expect(s.get('transitions')).toBe(false);
+      expect(s.get('deploys')).toBe(false);
+      expect(s.get('dailyDigest')).toBe(false);
+      expect(s.get('buildFailures')).toBe(false);
+      expect(s.get('cherryPickConflicts')).toBe(false);
+    });
+  });
+
+  // ── Group parent toggles ─────────────────────────────
+
+  describe('group parent toggles', () => {
+    it('disabling a group makes all its children return false via get()', () => {
+      const s = freshSettings('production', db);
+      s.setGroup('releaseChannel', false);
+      expect(s.get('transitions')).toBe(false);
+      expect(s.get('deploys')).toBe(false);
+      expect(s.get('dateChanges')).toBe(false);
+      expect(s.get('envDeployments')).toBe(false);
+    });
+
+    it('does not affect other groups', () => {
+      const s = freshSettings('production', db);
+      s.setGroup('releaseChannel', false);
+      expect(s.get('dailyDigest')).toBe(true);
+      expect(s.get('buildFailures')).toBe(true);
+    });
+
+    it('re-enabling group restores child states', () => {
+      const s = freshSettings('production', db);
+      s.set('transitions', false);       // disable one child
+      s.setGroup('releaseChannel', false); // disable group
+      expect(s.get('transitions')).toBe(false);
+      s.setGroup('releaseChannel', true);  // re-enable group
+      expect(s.get('transitions')).toBe(false); // child still off
+      expect(s.get('deploys')).toBe(true);       // other child still on
+    });
+  });
+
+  // ── Master toggle ────────────────────────────────────
 
   describe('master toggle', () => {
-    it('disables all channels when master is off', () => {
-      settings.update({ enabled: false });
-      expect(settings.get('releases')).toBe(false);
-      expect(settings.get('deploys')).toBe(false);
-      expect(settings.get('buildFailures')).toBe(false);
+    it('disables everything when off', () => {
+      const s = freshSettings('production', db);
+      s.update({ enabled: false });
+      expect(s.get('transitions')).toBe(false);
+      expect(s.get('dailyDigest')).toBe(false);
+      expect(s.get('buildFailures')).toBe(false);
     });
 
-    it('master off overrides per-channel enabled state', () => {
-      settings.set('releases', true);
-      settings.update({ enabled: false });
-      expect(settings.get('releases')).toBe(false);
-    });
-
-    it('re-enabling master restores per-channel state', () => {
-      settings.set('deploys', false);
-      settings.update({ enabled: false });
-      expect(settings.get('deploys')).toBe(false);
-      settings.update({ enabled: true });
-      expect(settings.get('deploys')).toBe(false); // channel still explicitly off
-      expect(settings.get('releases')).toBe(true);  // channel still on
+    it('re-enabling restores per-group and per-child state', () => {
+      const s = freshSettings('production', db);
+      s.set('deploys', false);
+      s.setGroup('developerAlerts', false);
+      s.update({ enabled: false });
+      expect(s.get('transitions')).toBe(false);
+      s.update({ enabled: true });
+      expect(s.get('transitions')).toBe(true);
+      expect(s.get('deploys')).toBe(false);      // child explicitly off
+      expect(s.get('dailyDigest')).toBe(false);   // group off
     });
   });
+
+  // ── set / get ────────────────────────────────────────
 
   describe('set / get', () => {
-    it('toggles a channel off', () => {
-      settings.set('deploys', false);
-      expect(settings.get('deploys')).toBe(false);
+    it('toggles individual children', () => {
+      const s = freshSettings('production', db);
+      s.set('deploys', false);
+      expect(s.get('deploys')).toBe(false);
+      s.set('deploys', true);
+      expect(s.get('deploys')).toBe(true);
     });
 
-    it('ignores unknown channel keys', () => {
-      settings.set('bogus', false);
-      expect(settings.channels.bogus).toBeUndefined();
+    it('unknown keys return false', () => {
+      const s = freshSettings('production', db);
+      expect(s.get('unknownKey')).toBe(false);
     });
   });
 
-  describe('update', () => {
-    it('bulk updates channels', () => {
-      settings.update({ channels: { releases: false, deploys: false } });
-      expect(settings.get('releases')).toBe(false);
-      expect(settings.get('deploys')).toBe(false);
-      expect(settings.get('releaseStatus')).toBe(true); // unchanged
+  // ── Redirect overrides ───────────────────────────────
+
+  describe('redirect overrides', () => {
+    it('stores and returns redirectChannel', () => {
+      const s = freshSettings('production', db);
+      s.update({ redirectChannel: '#test-notifications' });
+      expect(s.getAll().redirectChannel).toBe('#test-notifications');
     });
 
-    it('ignores non-boolean channel values', () => {
-      settings.update({ channels: { releases: 'no' } });
-      expect(settings.get('releases')).toBe(true); // unchanged
+    it('stores and returns redirectDM', () => {
+      const s = freshSettings('production', db);
+      s.update({ redirectDM: 'U12345678' });
+      expect(s.getAll().redirectDM).toBe('U12345678');
     });
 
-    it('updates both master and channels together', () => {
-      settings.update({ enabled: false, channels: { releases: false } });
-      expect(settings.enabled).toBe(false);
-      expect(settings.channels.releases).toBe(false);
+    it('clears with null', () => {
+      const s = freshSettings('production', db);
+      s.update({ redirectChannel: '#test' });
+      s.update({ redirectChannel: null });
+      expect(s.getAll().redirectChannel).toBeNull();
+    });
+
+    it('coerces empty string to null', () => {
+      const s = freshSettings('production', db);
+      s.update({ redirectChannel: '' });
+      expect(s.getAll().redirectChannel).toBeNull();
     });
   });
+
+  // ── getAll ───────────────────────────────────────────
 
   describe('getAll', () => {
-    it('returns enabled flag plus all channels', () => {
-      const all = settings.getAll();
-      expect(all.enabled).toBe(true);
-      expect(all.channels).toHaveProperty('releases');
-      expect(all.channels).toHaveProperty('buildFailures');
-      expect(all.channels).toHaveProperty('dailyDigest');
+    it('returns full grouped structure', () => {
+      const s = freshSettings('production', db);
+      const all = s.getAll();
+      expect(all).toHaveProperty('enabled');
+      expect(all).toHaveProperty('redirectChannel');
+      expect(all).toHaveProperty('redirectDM');
+      expect(all).toHaveProperty('groups');
+      expect(all.groups).toHaveProperty('releaseChannel');
+      expect(all.groups).toHaveProperty('scheduledReports');
+      expect(all.groups).toHaveProperty('developerAlerts');
     });
 
-    it('returns a copy, not a reference', () => {
-      const all = settings.getAll();
-      all.channels.releases = false;
-      expect(settings.get('releases')).toBe(true); // original unchanged
+    it('returns a deep copy', () => {
+      const s = freshSettings('production', db);
+      const all = s.getAll();
+      all.groups.releaseChannel.enabled = false;
+      expect(s.getAll().groups.releaseChannel.enabled).toBe(true);
     });
   });
 
+  // ── getSchema ────────────────────────────────────────
+
+  describe('getSchema', () => {
+    it('returns GROUP_SCHEMA with labels and descriptions', () => {
+      const s = freshSettings('production', db);
+      const schema = s.getSchema();
+      expect(schema).toHaveProperty('releaseChannel');
+      expect(schema.releaseChannel.label).toBe('Release Channel');
+      expect(schema.releaseChannel.notifications).toHaveProperty('transitions');
+      expect(schema.releaseChannel.notifications.transitions.label).toBeTruthy();
+    });
+
+    it('schema is frozen (immutable)', () => {
+      const s = freshSettings('production', db);
+      const schema = s.getSchema();
+      expect(() => { schema.releaseChannel.label = 'MODIFIED'; }).toThrow();
+    });
+  });
+
+  // ── update (bulk) ────────────────────────────────────
+
+  describe('update', () => {
+    it('bulk updates groups and children', () => {
+      const s = freshSettings('production', db);
+      s.update({
+        groups: {
+          releaseChannel: {
+            enabled: false,
+            notifications: { transitions: false },
+          },
+          developerAlerts: {
+            notifications: { buildFailures: false },
+          },
+        },
+      });
+      expect(s.getAll().groups.releaseChannel.enabled).toBe(false);
+      expect(s.getAll().groups.releaseChannel.notifications.transitions).toBe(false);
+      expect(s.getAll().groups.developerAlerts.notifications.buildFailures).toBe(false);
+      // Unchanged
+      expect(s.getAll().groups.developerAlerts.enabled).toBe(true);
+      expect(s.getAll().groups.developerAlerts.notifications.dailyDigest).toBe(true);
+    });
+  });
+
+  // ── Persistence (SQLite) ─────────────────────────────
+
   describe('persistence', () => {
-    it('saves to disk on update', () => {
-      settings.update({ enabled: false });
-      expect(fs.existsSync(STATE_FILE)).toBe(true);
-      const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-      expect(data.enabled).toBe(false);
+    it('saves to DB on update', () => {
+      const s = freshSettings('production', db);
+      s.update({ enabled: false });
+      const row = db.prepare('SELECT * FROM notification_settings WHERE id = 1').get();
+      expect(row).toBeTruthy();
+      expect(row.enabled).toBe(0);
     });
 
-    it('loads state on construction', () => {
-      fs.writeFileSync(STATE_FILE, JSON.stringify({
-        enabled: false,
-        channels: { releases: false, deploys: true, releaseStatus: false },
-      }));
-      const fresh = new NotificationSettings();
-      expect(fresh.enabled).toBe(false);
-      expect(fresh.channels.releases).toBe(false);
-      expect(fresh.channels.releaseStatus).toBe(false);
+    it('loads state on new construction with same DB', () => {
+      const s1 = freshSettings('production', db);
+      s1.set('transitions', false);
+      s1.update({ redirectChannel: '#test-redirect' });
+
+      const s2 = freshSettings('production', db);
+      expect(s2.get('transitions')).toBe(false);
+      expect(s2.getAll().redirectChannel).toBe('#test-redirect');
     });
 
-    it('handles missing state file gracefully', () => {
-      if (fs.existsSync(STATE_FILE)) fs.unlinkSync(STATE_FILE);
-      const fresh = new NotificationSettings();
-      expect(fresh.enabled).toBe(true);
+    it('handles empty DB gracefully (no row = defaults)', () => {
+      const s = freshSettings('production', db);
+      expect(s.enabled).toBe(true);
+      expect(s.get('transitions')).toBe(true);
     });
 
-    it('handles corrupt state file gracefully', () => {
-      fs.writeFileSync(STATE_FILE, 'not valid json');
-      const fresh = new NotificationSettings();
-      expect(fresh.enabled).toBe(true); // falls back to defaults
-    });
+    it('non-production loads persisted state (new behavior)', () => {
+      // Save non-default state with production env
+      const s1 = freshSettings('production', db);
+      s1.set('dailyDigest', false);  // override production default (true → false)
 
-    it('flush saves current state', () => {
-      settings.enabled = false;
-      settings.flush();
-      const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-      expect(data.enabled).toBe(false);
+      // Load with development env — should load persisted state, not dev defaults
+      const s2 = freshSettings('development', db);
+      // dailyDigest was explicitly set to false; dev default is also false,
+      // but the group enabled state was persisted as true (production default)
+      expect(s2.getAll().groups.developerAlerts.enabled).toBe(true);
+      expect(s2.getAll().groups.developerAlerts.notifications.dailyDigest).toBe(false);
     });
   });
 });

@@ -11,21 +11,17 @@ const DONE_STATUSES = new Set(['QA Certified', 'Done', 'Closed', 'Resolved', 'Re
  * for releases due today or tomorrow.
  */
 class ReleaseNotifier {
-  constructor(releases, slack, config) {
+  constructor(releases, slack, config, notificationSettings) {
     this.releases = releases;
     this.slack = slack;
     this.config = config;
+    this.settings = notificationSettings || null;
     this._tasks = [];
   }
 
   start() {
     if (!this.slack.isConfigured()) {
       log.warn('Release notifier disabled (Slack not configured)');
-      return;
-    }
-
-    if (process.env.NODE_ENV !== 'production') {
-      log.info('Release notifier: scheduled notifications disabled (not production). Manual notify still works.');
       return;
     }
 
@@ -37,6 +33,7 @@ class ReleaseNotifier {
 
     for (const schedule of schedules) {
       const task = cron.schedule(schedule, () => {
+        if (this.settings && !this.settings.get('releaseStatus')) return;
         this.notifyDueReleases().catch(err =>
           log.error('Release notifier error:', err.message)
         );

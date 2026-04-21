@@ -82,6 +82,10 @@ const jenkins = new JenkinsClient(config);
 const SlackNotifier = require('./integrations/slack');
 const slack = new SlackNotifier(config);
 
+const NotificationSettings = require('./core/notification-settings');
+const notificationSettings = new NotificationSettings();
+slack.notificationSettings = notificationSettings;
+
 const ZohoClient = require('./integrations/zoho');
 const zoho = new ZohoClient();
 if (zoho.isConfigured()) log.info('Zoho Desk client configured');
@@ -146,7 +150,7 @@ const pipelineSync = new PipelineSync(releases, aws, repoManager, config);
 pipelineSync.setPrSync(prSync);
 
 const ReleaseNotifier = require('./core/release-notifier');
-const releaseNotifier = new ReleaseNotifier(releases, slack, config);
+const releaseNotifier = new ReleaseNotifier(releases, slack, config, notificationSettings);
 
 const CustomerStore = require('./core/customer-store');
 const customerStore = new CustomerStore();
@@ -178,9 +182,6 @@ log.info(`Task queue initialized (${taskQueue.tasks.size} tasks loaded)`);
 const PeopleDirectory = require('./core/people-directory');
 const peopleDirectory = new PeopleDirectory(config);
 
-const NotificationSettings = require('./core/notification-settings');
-const notificationSettings = new NotificationSettings();
-
 const Availability = require('./core/availability');
 const availability = new Availability();
 
@@ -195,7 +196,7 @@ const AUTOMATED_USERS = new Set(['discovery', 'jira-sync', 'cherry-pick-watcher'
 
 releases.on('release:transition', (release, { from, to, user }) => {
   if (AUTOMATED_USERS.has(user)) return;
-  if (!notificationSettings.get('releases')) return;
+  if (!notificationSettings.get('transitions')) return;
   slack.notifyTransition(release, from, to);
   if (to === 'cutting') {
     slack.notifyReleaseCut(release);
@@ -203,7 +204,7 @@ releases.on('release:transition', (release, { from, to, user }) => {
 });
 
 releases.on('approval:added', (release, approval) => {
-  if (!notificationSettings.get('releases')) return;
+  if (!notificationSettings.get('transitions')) return;
   slack.notifyApprovalAdded(release, approval);
   if (approvals.isFullyApproved(release)) {
     slack.notifyAllApproved(release);
@@ -225,6 +226,7 @@ releases.on('deployment:updated', (release, deployment) => {
 });
 
 cherryPickWatcher.on('cherry-pick:conflict', (release, parsed) => {
+  if (!notificationSettings.get('cherryPickConflicts')) return;
   slack.notifyCherryPickConflict(release, parsed, parsed.author);
 });
 
@@ -262,7 +264,7 @@ setInterval(() => {
 
   // Start JIRA sync (primary source of truth for releases)
   jiraSync.on('release:date-changed', (release, { oldDate, newDate }) => {
-    if (!notificationSettings.get('releaseStatus')) return;
+    if (!notificationSettings.get('dateChanges')) return;
     const SlackNotifier = require('./integrations/slack');
     const channel = SlackNotifier.releaseChannelName(release.version);
     const text = `📅 *Release ${release.version}* date changed: ~${oldDate}~ → *${newDate}*`;
@@ -322,7 +324,7 @@ setInterval(() => {
   envPoller.on('env:version-changed', ({ envName, customerId, newVersion, previousVersion }) => {
     const customer = customerStore.getCustomer ? customerStore.getCustomer(customerId) : null;
     const customerName = customer?.name || customerId;
-    if (notificationSettings.get('releaseStatus')) {
+    if (notificationSettings.get('envDeployments')) {
       slack.notifyReleaseDeployment(newVersion, envName, customerName, previousVersion);
     }
     pipelineSync.promoteToHot(newVersion);

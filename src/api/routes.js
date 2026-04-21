@@ -1468,13 +1468,13 @@ module.exports = function createRoutes(services, config) {
 
   router.get('/notifications/settings', (req, res) => {
     const { notificationSettings } = services;
-    res.json(notificationSettings.getAll());
+    res.json({ ...notificationSettings.getAll(), schema: notificationSettings.getSchema() });
   });
 
   router.put('/notifications/settings', requireAdmin, (req, res) => {
     const { notificationSettings } = services;
     notificationSettings.update(req.body);
-    res.json(notificationSettings.getAll());
+    res.json({ ...notificationSettings.getAll(), schema: notificationSettings.getSchema() });
   });
 
   router.put('/users/:email/notifications', (req, res) => {
