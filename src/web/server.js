@@ -52,33 +52,6 @@ function createWebServer(services, config) {
     next();
   });
 
-  // ── Dev login route (before auth middleware) ──────────
-  // Visit /dev/login/viewer@test.com to set a session cookie as that user.
-  // Only available when NODE_ENV !== 'production'.
-  if (process.env.NODE_ENV !== 'production') {
-    const jwtLib = require('jsonwebtoken');
-    const jwtSec = process.env.JWT_SECRET || 'nectar-default-jwt-secret';
-    app.get('/dev/login/:email', (req, res) => {
-      const email = decodeURIComponent(req.params.email);
-      const user = userStore ? userStore.getUser(email) : null;
-      const name = user ? user.name : email;
-      const role = userStore ? userStore.getRole(email) : 'user';
-      const token = jwtLib.sign({ email, name, picture: null, domain: 'test.com', role }, jwtSec, { expiresIn: '7d' });
-      res.cookie('nectar_session', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000, path: '/' });
-      res.redirect('/');
-    });
-    app.get('/dev/users', (req, res) => {
-      const users = userStore ? userStore.listUsers() : [];
-      const html = ['<h2>Dev Login — Pick a user</h2><ul>'];
-      for (const u of users) {
-        const caps = userStore.getCapabilities(u.email);
-        html.push(`<li><a href="/dev/login/${encodeURIComponent(u.email)}">${u.name}</a> (${u.email}) — ${caps.length} capabilities</li>`);
-      }
-      html.push('</ul>');
-      res.send(html.join('\n'));
-    });
-  }
-
   // ── Auth routes (before auth middleware) ──────────────
   const { createAuthRoutes, createAuthMiddleware } = require('../api/auth');
   app.use('/api/auth', createAuthRoutes({ userStore }));
