@@ -454,13 +454,14 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
   const thisWeekVersions = useMemo(() => {
     const now = new Date()
     const day = now.getDay() // 0=Sun
-    const monday = new Date(now)
-    monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1))
-    monday.setHours(0, 0, 0, 0)
-    const sunday = new Date(monday)
-    sunday.setDate(monday.getDate() + 6)
-    const monStr = monday.toISOString().slice(0, 10)
-    const sunStr = sunday.toISOString().slice(0, 10)
+    const diffToMon = day === 0 ? -6 : 1 - day
+    const year = now.getFullYear(), month = now.getMonth(), date = now.getDate()
+    const mon = new Date(year, month, date + diffToMon)
+    const sun = new Date(year, month, date + diffToMon + 6)
+    // Format as YYYY-MM-DD in local time (matches JIRA release dates)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const monStr = `${mon.getFullYear()}-${pad(mon.getMonth() + 1)}-${pad(mon.getDate())}`
+    const sunStr = `${sun.getFullYear()}-${pad(sun.getMonth() + 1)}-${pad(sun.getDate())}`
     return person.releases
       .filter(r => r.dueDate && r.dueDate >= monStr && r.dueDate <= sunStr)
       .map(r => r.version)
