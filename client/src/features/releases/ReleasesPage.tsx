@@ -343,7 +343,7 @@ export function ReleasesPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => updateParams({ zoom: null, offset: null })}
+                  onClick={() => updateParams({ zoom: 'week', offset: null })}
                   className={cn("px-3 py-1.5 border-l transition-colors", zoom === 'week' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
                 >
                   Week
@@ -368,8 +368,8 @@ export function ReleasesPage() {
               </button>
               <button
                 type="button"
-                onClick={() => updateParams({ zoom: null, offset: null })}
-                className={cn("px-3 py-1.5 rounded-r-md border-l transition-colors", (zoom === 'week' || zoom === 'month') ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
+                onClick={() => updateParams({ zoom: 'week', offset: null })}
+                className={cn("px-3 py-1.5 rounded-r-md border-l transition-colors", zoom === 'week' ? "bg-primary text-primary-foreground" : "hover:bg-accent")}
               >
                 Week
               </button>
