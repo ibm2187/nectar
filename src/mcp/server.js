@@ -3,6 +3,7 @@ const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/ser
 const { z } = require('zod');
 const log = require('../core/log');
 const { aggregateFeatureFlags, aggregateIntegrations } = require('../core/feature-aggregator');
+const { getArtifactsS3 } = require('../core/s3-artifacts');
 
 /**
  * Nectar MCP Server — exposes customer, environment, release, and truth
@@ -411,6 +412,28 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth, taskQueu
           if (gammaUrl) output.gammaUrl = gammaUrl;
           if (notes) output.notes = notes;
           if (perTicketSummaries) output.perTicketSummaries = perTicketSummaries;
+
+          // Upload notes to S3 as draft so EditDraftDialog can load it
+          const taskSnap = taskQueue.getTask(taskId);
+          if (notes && taskSnap?.input?.version) {
+            const s3 = getArtifactsS3();
+            if (s3) {
+              try {
+                const { PutObjectCommand } = require('@aws-sdk/client-s3');
+                const key = `releases/${taskSnap.input.version}/release-notes-draft.md`;
+                await s3.client.send(new PutObjectCommand({
+                  Bucket: s3.bucket,
+                  Key: key,
+                  Body: notes,
+                  ContentType: 'text/markdown',
+                }));
+                output.artifacts = [{ type: 'draft', filename: 'release-notes-draft.md' }];
+                log.info(`Uploaded draft to S3: ${key}`);
+              } catch (s3Err) {
+                log.warn(`Failed to upload draft to S3 (non-fatal): ${s3Err.message}`);
+              }
+            }
+          }
 
           const task = taskQueue.complete(taskId, output);
 

@@ -22,7 +22,7 @@ import { CustomerPills } from '../../components/CustomerPill'
 interface TaskArtifact {
   type: string
   filename: string
-  bytes: number
+  bytes?: number
 }
 
 interface TaskInfo {
@@ -333,9 +333,9 @@ export function ReleaseDetail() {
               <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1.5" />
               {notesTaskLoading ? 'Creating...' : notesTask?.status === 'pending' ? 'Queued...' : 'Generating notes...'}
             </Button>
-          ) : notesTask && notesTask.status === 'completed' && notesTask.output?.artifacts?.length ? (
+          ) : notesTask && notesTask.status === 'completed' && (notesTask.output?.artifacts?.length || notesTask.output?.notes) ? (
             <>
-              {notesTask.output.artifacts.filter(a => a.type === 'pdf').map(a => (
+              {notesTask.output.artifacts?.filter(a => a.type === 'pdf').map(a => (
                 <a key={a.filename} href={`/api/releases/${version}/artifacts/${a.filename}`} target="_blank" rel="noopener noreferrer">
                   <Button variant="outline" size="sm" className="text-xs h-7">Release Notes</Button>
                 </a>
