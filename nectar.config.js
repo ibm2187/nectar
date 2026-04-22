@@ -114,4 +114,11 @@ module.exports = {
     releases: '#releases',
     deploys: '#deploys',
   },
+
+  // ── Standup tab ─────────────────────────────────────────
+  standup: {
+    // Fallback roster only shows people with dev/qa ticket activity within
+    // this many days. Hides ex-employees whose names persist on old tickets.
+    rosterActiveSinceDays: 90,
+  },
 };

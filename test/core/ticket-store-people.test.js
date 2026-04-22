@@ -137,4 +137,62 @@ describe('TicketStore.getDistinctPeople', () => {
     expect(people.length).toBe(1);
     expect(people[0].roles.sort()).toEqual(['dev', 'pm', 'qa', 'reporter']);
   });
+
+  // ISSUE-51: "Former user" is JIRA's placeholder for deactivated accounts.
+  it('excludes placeholder names (Former user, Unassigned)', () => {
+    insertTicket(db, 'DEV-1', { assignee: 'Alice' });
+    insertTicket(db, 'DEV-2', { assignee: 'Former user' });
+    insertTicket(db, 'DEV-3', { qaAssignee: 'Former User' });
+    insertTicket(db, 'DEV-4', { reporter: 'Unassigned' });
+
+    const people = store.getDistinctPeople();
+    expect(people.map(p => p.name)).toEqual(['Alice']);
+  });
+
+  describe('activeSinceDays filter (ISSUE-51)', () => {
+    it('drops people whose last ticket activity is beyond the window', () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const longAgo = new Date(Date.now() - 200 * 86400000).toISOString().slice(0, 10);
+
+      insertTicket(db, 'DEV-1', { assignee: 'Active Alice', updatedInJira: today });
+      insertTicket(db, 'DEV-2', { assignee: 'Stale Steve',  updatedInJira: longAgo });
+
+      const people = store.getDistinctPeople({ activeSinceDays: 90 });
+      expect(people.map(p => p.name)).toEqual(['Active Alice']);
+    });
+
+    it('returns everyone when activeSinceDays is not set', () => {
+      const longAgo = new Date(Date.now() - 200 * 86400000).toISOString().slice(0, 10);
+      insertTicket(db, 'DEV-1', { assignee: 'Stale Steve', updatedInJira: longAgo });
+
+      const people = store.getDistinctPeople();
+      expect(people.map(p => p.name)).toEqual(['Stale Steve']);
+    });
+
+    it('activeRoles restricts which roles count as recent activity', () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const longAgo = new Date(Date.now() - 200 * 86400000).toISOString().slice(0, 10);
+
+      // Ex-QA recently *reported* a bug but has no recent dev/qa assignment.
+      insertTicket(db, 'DEV-1', { qaAssignee: 'Former QA',  updatedInJira: longAgo });
+      insertTicket(db, 'DEV-2', { reporter:   'Former QA',  updatedInJira: today });
+
+      const withReporter = store.getDistinctPeople({ activeSinceDays: 90 });
+      expect(withReporter.map(p => p.name)).toContain('Former QA');
+
+      const devQaOnly = store.getDistinctPeople({ activeSinceDays: 90, activeRoles: ['dev', 'qa'] });
+      expect(devQaOnly.map(p => p.name)).not.toContain('Former QA');
+    });
+
+    it('keeps person whose latest activity in active-role window is recent', () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const longAgo = new Date(Date.now() - 200 * 86400000).toISOString().slice(0, 10);
+
+      insertTicket(db, 'DEV-1', { assignee: 'Current Dev', updatedInJira: longAgo });
+      insertTicket(db, 'DEV-2', { assignee: 'Current Dev', updatedInJira: today });
+
+      const people = store.getDistinctPeople({ activeSinceDays: 90, activeRoles: ['dev', 'qa'] });
+      expect(people.map(p => p.name)).toEqual(['Current Dev']);
+    });
+  });
 });

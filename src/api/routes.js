@@ -465,6 +465,9 @@ module.exports = function createRoutes(services, config) {
 
     const opts = {};
     if (req.query.horizon) opts.horizon = req.query.horizon;
+    if (config.standup && Number.isFinite(config.standup.rosterActiveSinceDays)) {
+      opts.rosterActiveSinceDays = config.standup.rosterActiveSinceDays;
+    }
     const standupServices = {
       releases,
       ticketStore,
@@ -525,7 +528,11 @@ module.exports = function createRoutes(services, config) {
       availability: services.availability,
       peopleDirectory: services.peopleDirectory,
     };
-    const standupData = buildStandupData(standupServices);
+    const standupOpts = {};
+    if (config.standup && Number.isFinite(config.standup.rosterActiveSinceDays)) {
+      standupOpts.rosterActiveSinceDays = config.standup.rosterActiveSinceDays;
+    }
+    const standupData = buildStandupData(standupServices, standupOpts);
     const person = standupData.people.find(p => p.name === personName);
     if (!person) {
       return res.status(404).json({ error: `Person not found: ${personName}` });

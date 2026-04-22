@@ -26,6 +26,9 @@ const STATUS_GROUPS = {
 const DONE_STATUSES = new Set(STATUS_GROUPS['done']);
 const NOT_DONE_STATUSES = new Set([...STATUS_GROUPS['in-dev'], ...STATUS_GROUPS['blocked'], ...STATUS_GROUPS['ready-for-qa'], ...STATUS_GROUPS['in-qa']]);
 
+// JIRA displayName values that represent deactivated accounts — never useful in rosters.
+const PLACEHOLDER_NAMES = new Set(['former user', 'unassigned']);
+
 /**
  * Normalized JIRA ticket database.
  *
@@ -344,30 +347,63 @@ class TicketStore extends EventEmitter {
   // ── People (distinct names across all tickets) ────
 
   /**
-   * Get all distinct people from tickets in a single SQL query.
-   * Returns an array of { name, roles: string[] } objects sorted by name.
-   * Replaces the O(N) release loop that ran 1011 individual queries.
+   * Distinct people across assignee/reporter/qaAssignee/productAssignee fields.
+   * Returns { name, roles: string[], lastUpdated: string|null } sorted by name.
+   *
+   * Options:
+   *   activeSinceDays — drop people whose most recent ticket activity (within
+   *     `activeRoles`, default all roles) is older than N days. Used by standup
+   *     to hide ex-employees whose names still appear on historical tickets.
+   *   activeRoles — restrict the recency check to these roles. e.g. ['dev','qa']
+   *     ignores a person's reporter history when deciding if they're active.
+   *
+   * Placeholder JIRA names ("Former user", "Unassigned") are always excluded.
    */
-  getDistinctPeople() {
-    // Union all person columns, tag each with a role
+  getDistinctPeople(opts = {}) {
     const rows = this.db.prepare(`
-      SELECT name, GROUP_CONCAT(DISTINCT role) AS roles FROM (
-        SELECT assignee AS name, 'dev' AS role FROM jira_tickets WHERE assignee IS NOT NULL AND assignee != ''
+      SELECT name, role, MAX(updatedInJira) AS lastUpdated FROM (
+        SELECT assignee AS name, 'dev' AS role, updatedInJira FROM jira_tickets WHERE assignee IS NOT NULL AND assignee != ''
         UNION ALL
-        SELECT reporter AS name, 'reporter' AS role FROM jira_tickets WHERE reporter IS NOT NULL AND reporter != ''
+        SELECT reporter AS name, 'reporter' AS role, updatedInJira FROM jira_tickets WHERE reporter IS NOT NULL AND reporter != ''
         UNION ALL
-        SELECT qaAssignee AS name, 'qa' AS role FROM jira_tickets WHERE qaAssignee IS NOT NULL AND qaAssignee != ''
+        SELECT qaAssignee AS name, 'qa' AS role, updatedInJira FROM jira_tickets WHERE qaAssignee IS NOT NULL AND qaAssignee != ''
         UNION ALL
-        SELECT productAssignee AS name, 'pm' AS role FROM jira_tickets WHERE productAssignee IS NOT NULL AND productAssignee != ''
+        SELECT productAssignee AS name, 'pm' AS role, updatedInJira FROM jira_tickets WHERE productAssignee IS NOT NULL AND productAssignee != ''
       )
-      GROUP BY name
-      ORDER BY name COLLATE NOCASE ASC
+      GROUP BY name, role
     `).all();
 
-    return rows.map(r => ({
-      name: r.name,
-      roles: r.roles.split(','),
-    }));
+    const cutoff = Number.isFinite(opts.activeSinceDays) && opts.activeSinceDays > 0
+      ? new Date(Date.now() - opts.activeSinceDays * 86400000).toISOString()
+      : null;
+    const activeRoleSet = Array.isArray(opts.activeRoles) && opts.activeRoles.length > 0
+      ? new Set(opts.activeRoles)
+      : null;
+
+    // Collapse (name, role) rows into one entry per person, tracking roles and
+    // the max ticket activity across whichever roles count toward "active".
+    const byName = new Map();
+    for (const r of rows) {
+      if (PLACEHOLDER_NAMES.has(r.name.trim().toLowerCase())) continue;
+      let entry = byName.get(r.name);
+      if (!entry) {
+        entry = { name: r.name, roles: new Set(), lastUpdated: null, lastActiveUpdate: null };
+        byName.set(r.name, entry);
+      }
+      entry.roles.add(r.role);
+      if (r.lastUpdated && (!entry.lastUpdated || r.lastUpdated > entry.lastUpdated)) {
+        entry.lastUpdated = r.lastUpdated;
+      }
+      const countsForActivity = !activeRoleSet || activeRoleSet.has(r.role);
+      if (countsForActivity && r.lastUpdated && (!entry.lastActiveUpdate || r.lastUpdated > entry.lastActiveUpdate)) {
+        entry.lastActiveUpdate = r.lastUpdated;
+      }
+    }
+
+    return [...byName.values()]
+      .filter(e => !cutoff || (e.lastActiveUpdate && e.lastActiveUpdate >= cutoff))
+      .map(e => ({ name: e.name, roles: [...e.roles], lastUpdated: e.lastUpdated }))
+      .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
   }
 
   // ── Analytical views ──────────────────────────────

@@ -44,10 +44,16 @@ function teamForRepo(repo) {
  * Build the standup data for all people with active work.
  *
  * @param {object} services - { releases, ticketStore, prStore, availability, peopleDirectory }
- * @param {object} opts - { horizon }
+ * @param {object} opts - { horizon, rosterActiveSinceDays }
  * @returns {object} { people, releasesDueThisWeek, generatedAt }
  */
 function buildStandupData(services, opts = {}) {
+  // Fallback roster = people with dev/qa activity within this window. Without
+  // this filter, ex-employees linger forever (ISSUE-51) because their names stay
+  // on historical tickets. 90 days covers extended PTO without leaking churn.
+  const rosterActiveSinceDays = Number.isFinite(opts.rosterActiveSinceDays)
+    ? opts.rosterActiveSinceDays
+    : 90;
   const { releases, ticketStore, prStore, availability, peopleDirectory } = services;
   const today = new Date().toISOString().slice(0, 10);
   const horizon = opts.horizon || _defaultHorizon(availability);
@@ -292,7 +298,10 @@ function buildStandupData(services, opts = {}) {
   // Include team members who have no items (all-clear) so everyone is visible.
   // Pull from ticketStore.getDistinctPeople() which knows all devs/QA from JIRA history.
   if (ticketStore && ticketStore.getDistinctPeople) {
-    const allTeam = ticketStore.getDistinctPeople();
+    const allTeam = ticketStore.getDistinctPeople({
+      activeSinceDays: rosterActiveSinceDays,
+      activeRoles: ['dev', 'qa'],
+    });
     const included = new Set(people.map(p => p.name));
     for (const member of allTeam) {
       if (included.has(member.name)) continue;
