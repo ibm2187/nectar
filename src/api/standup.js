@@ -9,11 +9,6 @@ const log = require('../core/log');
  * Returns: { people: [...], releasesDueThisWeek: [...], generatedAt }
  */
 
-const DONE_STATUSES = new Set([
-  'QA Certified', 'No QA - Certified', 'QA Done', 'Done', 'Closed',
-  'Resolved', 'Released', 'Resolved Without Code', 'Completed',
-]);
-
 // Health categories from ticket_truth that map to our priority buckets
 const ATTENTION_CATEGORIES = new Set(['attention']);
 const AWAITING_CP_CATEGORIES = new Set(['awaiting-cp']);
@@ -75,7 +70,9 @@ function buildStandupData(services, opts = {}) {
   for (const release of activeReleases) {
     const tickets = releases.getTickets(release);
     for (const ticket of tickets) {
-      if (DONE_STATUSES.has(ticket.jiraStatus || '')) continue;
+      // ISSUE-52: use Jira's statusCategory enum rather than hand-rolled name list —
+      // authoritative and locale/case-proof (e.g. "NO QA - Certified" carries category="Done").
+      if (ticket.statusCategory === 'Done') continue;
       allTicketKeys.add(ticket.key);
 
       if (ticket.assignee) {
@@ -340,7 +337,7 @@ function buildStandupData(services, opts = {}) {
     dueDate: r.jiraReleaseDate,
     state: r.state,
     repo: r.repo || null,
-    ticketsRemaining: (releases.getTickets(r) || []).filter(t => !DONE_STATUSES.has(t.jiraStatus || '')).length,
+    ticketsRemaining: (releases.getTickets(r) || []).filter(t => t.statusCategory !== 'Done').length,
   })).sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
 
   return {

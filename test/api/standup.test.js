@@ -5,10 +5,14 @@ const { buildStandupData, teamForRepo } = require('../../src/api/standup');
 // ── Test helpers ────────────────────────────────────────
 
 function makeTicket(key, overrides = {}) {
+  const jiraStatus = overrides.jiraStatus || 'Development In Progress';
+  // Mirror Jira: statusCategory is derived from status. Callers may override explicitly.
+  const defaultCategory = DONE_NAMES.has(jiraStatus) ? 'Done' : 'In Progress';
   return {
     key,
     summary: `Test ticket ${key}`,
-    jiraStatus: 'Development In Progress',
+    jiraStatus,
+    statusCategory: defaultCategory,
     type: 'Story',
     priority: 'Medium',
     assignee: null,
@@ -16,6 +20,12 @@ function makeTicket(key, overrides = {}) {
     ...overrides,
   };
 }
+
+// Sample of status names Jira categorizes as "Done" — for test helper defaulting only.
+const DONE_NAMES = new Set([
+  'QA Certified', 'NO QA - Certified', 'No QA - Certified', 'QA Done',
+  'Done', 'Closed', 'Resolved', 'Released', 'Resolved Without Code', 'Completed',
+]);
 
 function makeRelease(version, overrides = {}) {
   return {
@@ -128,6 +138,29 @@ describe('buildStandupData', () => {
     expect(result.people).toHaveLength(1);
     expect(result.people[0].name).toBe('Alice Dev');
     expect(result.people[0].totalItems).toBe(0);
+  });
+
+  // ISSUE-52: "NO QA - Certified" tickets were showing up as undone because the
+  // standup hand-rolled a status-name list and typo'd "No QA - Certified" (lowercase o).
+  // Done-ness now flows through Jira's statusCategory enum, making name/case/locale
+  // variations irrelevant.
+  it('treats tickets with statusCategory="Done" as done regardless of status name casing', () => {
+    const releases = [makeRelease('4.2.0')];
+    const tickets = [
+      makeTicket('DEV-1', { assignee: 'Alice Dev', jiraStatus: 'NO QA - Certified', statusCategory: 'Done' }),
+      makeTicket('DEV-2', { assignee: 'Alice Dev', jiraStatus: 'Some Future Status', statusCategory: 'Done' }),
+      makeTicket('DEV-3', { assignee: 'Alice Dev', jiraStatus: 'In Progress', statusCategory: 'In Progress' }),
+    ];
+    const team = [{ name: 'Alice Dev', roles: ['dev'] }];
+    const services = createMockServices(releases, { '4.2.0': tickets }, new Map(), new Map(), team);
+    const result = buildStandupData(services, { horizon: '2026-04-27' });
+
+    expect(result.people).toHaveLength(1);
+    const alice = result.people[0];
+    // Only DEV-3 (not Done) should be in a bucket
+    expect(alice.totalItems).toBe(1);
+    expect(alice.buckets.inDev).toHaveLength(1);
+    expect(alice.buckets.inDev[0].key).toBe('DEV-3');
   });
 
   it('includes all team members even those without any tickets', () => {

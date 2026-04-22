@@ -281,8 +281,35 @@ describe('NotificationEngine', () => {
         {
           version: '4.2.0', state: 'stabilizing', jiraReleaseDate: future,
           tickets: [
-            { key: 'DEV-1', summary: 'Done one', assignee: 'Alice', jiraStatus: 'Done' },
-            { key: 'DEV-2', summary: 'Active', assignee: 'Alice', jiraStatus: 'In Progress' },
+            { key: 'DEV-1', summary: 'Done one', assignee: 'Alice', jiraStatus: 'Done', statusCategory: 'Done' },
+            { key: 'DEV-2', summary: 'Active', assignee: 'Alice', jiraStatus: 'In Progress', statusCategory: 'In Progress' },
+          ],
+        },
+      ]);
+
+      mockPeople.resolveSlackId.mockReturnValue({ slackId: 'U_ALICE' });
+
+      const promise = engine.sendDailyDigests();
+      await vi.runAllTimersAsync();
+      await promise;
+
+      expect(mockSlack.dmUser).toHaveBeenCalledTimes(1);
+      const [, message] = mockSlack.dmUser.mock.calls[0];
+      expect(message).toContain('DEV-2');
+      expect(message).not.toContain('DEV-1');
+    });
+
+    // ISSUE-52: digest previously included "NO QA - Certified" tickets because
+    // the hand-rolled done list had a case typo. Now driven by Jira statusCategory.
+    it('filters out tickets whose statusCategory is Done regardless of status name', async () => {
+      vi.useFakeTimers();
+      const future = new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10);
+      mockReleases.list.mockReturnValue([
+        {
+          version: '4.2.0', state: 'stabilizing', jiraReleaseDate: future,
+          tickets: [
+            { key: 'DEV-1', summary: 'Cert', assignee: 'Alice', jiraStatus: 'NO QA - Certified', statusCategory: 'Done' },
+            { key: 'DEV-2', summary: 'Active', assignee: 'Alice', jiraStatus: 'In Progress', statusCategory: 'In Progress' },
           ],
         },
       ]);

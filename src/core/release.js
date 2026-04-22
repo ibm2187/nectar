@@ -121,6 +121,7 @@ class ReleaseManager extends EventEmitter {
         summary: t.summary || '',
         state: t.state || 'pending',
         jiraStatus: t.status || 'Unknown',
+        statusCategory: t.statusCategory || null,
         type: t.type || null,
         assignee: t.assignee || null,
         reporter: t.reporter || null,
