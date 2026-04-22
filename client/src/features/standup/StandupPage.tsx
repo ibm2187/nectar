@@ -449,23 +449,42 @@ export function StandupPage() {
 // ── Sub-components ──────────────────────────────────────────
 
 function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceExpanded: boolean | null }) {
-  // Release filter: 'imminent' = only tickets on releases due within 5 biz days,
-  // 'all' = everything, or a specific version string
-  const [filter, setFilter] = useState<string>(person.defaultFilter)
+  // Release filter: 'thisweek' = releases due Mon-Sun of current week,
+  // 'imminent' = within 5 biz days, 'all' = everything, or a specific version
+  const thisWeekVersions = useMemo(() => {
+    const now = new Date()
+    const day = now.getDay() // 0=Sun
+    const monday = new Date(now)
+    monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1))
+    monday.setHours(0, 0, 0, 0)
+    const sunday = new Date(monday)
+    sunday.setDate(monday.getDate() + 6)
+    const monStr = monday.toISOString().slice(0, 10)
+    const sunStr = sunday.toISOString().slice(0, 10)
+    return person.releases
+      .filter(r => r.dueDate && r.dueDate >= monStr && r.dueDate <= sunStr)
+      .map(r => r.version)
+  }, [person.releases])
+
+  const defaultFilter = thisWeekVersions.length > 0 ? 'thisweek' : (person.defaultFilter === 'imminent' && person.imminentVersions.length > 0 ? 'imminent' : 'all')
+  const [filter, setFilter] = useState<string>(defaultFilter)
 
   // Reset filter when person changes
   useEffect(() => {
-    setFilter(person.defaultFilter)
-  }, [person.name, person.defaultFilter])
+    const df = thisWeekVersions.length > 0 ? 'thisweek' : (person.defaultFilter === 'imminent' && person.imminentVersions.length > 0 ? 'imminent' : 'all')
+    setFilter(df)
+  }, [person.name, person.defaultFilter, thisWeekVersions.length])
 
   // Apply filter to buckets
   const filteredBuckets = useMemo(() => {
     if (filter === 'all') return person.buckets
 
     // Determine which versions to show
-    const allowedVersions = new Set<string>(
-      filter === 'imminent' ? person.imminentVersions : [filter]
-    )
+    let filterVersions: string[]
+    if (filter === 'thisweek') filterVersions = thisWeekVersions
+    else if (filter === 'imminent') filterVersions = person.imminentVersions
+    else filterVersions = [filter]
+    const allowedVersions = new Set<string>(filterVersions)
 
     const filterTickets = (items: StandupTicketItem[]) =>
       items.filter(t => allowedVersions.has(t.release.version))
@@ -517,7 +536,16 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
         {person.releases.length > 0 && (
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-muted-foreground font-medium">Filter:</span>
-            {/* Imminent pill (only if they have imminent tickets) */}
+            {/* This Week pill */}
+            {thisWeekVersions.length > 0 && (
+              <FilterPill
+                label="This Week"
+                count={countForVersions(person, thisWeekVersions)}
+                active={filter === 'thisweek'}
+                onClick={() => setFilter('thisweek')}
+              />
+            )}
+            {/* Next 5 biz days pill (only if different from this week) */}
             {person.imminentVersions.length > 0 && (
               <FilterPill
                 label="Next 5 days"
@@ -605,13 +633,18 @@ function FilterPill({ label, count, active, onClick, dimmed }: {
 function countForFilter(person: StandupPerson, filter: string): number {
   if (filter === 'all') return person.totalItems
   const versions = new Set(filter === 'imminent' ? person.imminentVersions : [filter])
+  return countForVersions(person, [...versions])
+}
+
+function countForVersions(person: StandupPerson, versions: string[]): number {
+  const versionSet = new Set(versions)
   let count = 0
   for (const bucketKey of BUCKET_ORDER) {
     const items = person.buckets[bucketKey]
     if (!items) continue
     for (const item of items) {
-      if ('release' in item && versions.has((item as StandupTicketItem).release.version)) count++
-      else if (!('release' in item)) count++ // PRs count in imminent
+      if ('release' in item && versionSet.has((item as StandupTicketItem).release.version)) count++
+      else if (!('release' in item)) count++ // PRs always counted
     }
   }
   return count
