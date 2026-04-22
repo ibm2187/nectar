@@ -271,8 +271,8 @@ function createWebServer(services, config) {
   releases.on('release:transition', (release, transition) =>
     broadcast({ type: 'release:transition', release: enrichRelease(release), transition })
   );
-  releases.on('release:deleted', (version) =>
-    broadcast({ type: 'release:deleted', version })
+  releases.on('release:deleted', (release) =>
+    broadcast({ type: 'release:deleted', id: release.id, version: release.version, repo: release.repo })
   );
   releases.on('cherry-pick:added', (release) =>
     broadcast({ type: 'release:updated', release: enrichRelease(release) })

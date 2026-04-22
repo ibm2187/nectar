@@ -5,6 +5,13 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+// URL-safe release identifier shared by server and client. iOS and Android
+// can share a clean version number (e.g. 2026.4.0); qualify with repo so
+// API paths disambiguate. Server parses by splitting on the first colon.
+export function releaseKey(r: { repo?: string | null; version: string }): string {
+  return r.repo ? `${r.repo}:${r.version}` : r.version
+}
+
 export function timeAgo(iso: string | null): string {
   if (!iso) return ''
   const diff = Date.now() - new Date(iso).getTime()

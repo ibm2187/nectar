@@ -8,7 +8,7 @@ import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Card, CardContent } from '../../components/ui/card'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetBody } from '../../components/ui/sheet'
-import { timeAgo, cn } from '../../lib/utils'
+import { timeAgo, cn, releaseKey } from '../../lib/utils'
 import { TruthView } from './TruthView'
 import { CustomerImpact } from './CustomerImpact'
 import { PipelineView } from './PipelineView'
@@ -68,20 +68,22 @@ export function ReleaseDetail() {
   }
   const { path: backPath, label: backLabel } = backPaths[from || ''] || { path: '/', label: 'Back to home' }
 
-  // key can be "repo:version" or just "version"
+  // key can be "repo:version" or just "version". Match the server-side split
+  // (indexOf on first colon) so a version that itself contains a colon still
+  // resolves consistently on both sides.
   const release = useWsStore(s => {
     if (!key) return undefined
-    // Try matching by id pattern first
-    return s.releases.find(r => {
-      if (key.includes(':')) {
-        const [repo, ver] = key.split(':')
-        return r.repo === repo && r.version === ver
-      }
-      return r.version === key
-    })
+    const colonIdx = key.indexOf(':')
+    if (colonIdx > 0) {
+      const repo = key.slice(0, colonIdx)
+      const ver = key.slice(colonIdx + 1)
+      return s.releases.find(r => r.repo === repo && r.version === ver)
+    }
+    return s.releases.find(r => r.version === key)
   })
 
   const version = release?.version ?? key
+  const apiKey = release ? releaseKey(release) : version
   const jiraBaseUrl = useWsStore(s => s.config.jiraBaseUrl)
   const jiraProject = useWsStore(s => s.config.jiraProject || 'DEV')
   const [audit, setAudit] = useState<AuditEntry[]>([])
@@ -110,20 +112,20 @@ export function ReleaseDetail() {
 
   // Fetch comments for this release
   useEffect(() => {
-    if (!version) return
-    apiFetch<ReleaseComment[]>(`/releases/${version}/comments`)
+    if (!apiKey) return
+    apiFetch<ReleaseComment[]>(`/releases/${encodeURIComponent(apiKey)}/comments`)
       .then(setComments)
       .catch(() => {})
-  }, [version, release?.updatedAt])
+  }, [apiKey, release?.updatedAt])
 
   // WS slimRelease drops tickets + pipeline to avoid OOM on broadcast, so the
   // detail page fetches them per-release. pipelineSyncTick keeps the card
   // fresh when new builds land without a navigation refresh.
   const pipelineSyncTick = useWsStore(s => s.pipelineSyncTick)
   useEffect(() => {
-    if (!version) return
+    if (!apiKey) return
     let cancelled = false
-    apiFetch<Release>(`/releases/${version}`)
+    apiFetch<Release>(`/releases/${encodeURIComponent(apiKey)}`)
       .then(r => {
         if (cancelled) return
         setPipeline(r.pipeline ?? null)
@@ -133,13 +135,13 @@ export function ReleaseDetail() {
         setPipeline(null)
       })
     return () => { cancelled = true }
-  }, [version, release?.updatedAt, pipelineSyncTick])
+  }, [apiKey, release?.updatedAt, pipelineSyncTick])
 
   const postComment = useCallback(async () => {
-    if (!version || !commentText.trim() || commentPosting) return
+    if (!apiKey || !commentText.trim() || commentPosting) return
     setCommentPosting(true)
     try {
-      const comment = await apiFetch<ReleaseComment>(`/releases/${version}/comments`, {
+      const comment = await apiFetch<ReleaseComment>(`/releases/${encodeURIComponent(apiKey)}/comments`, {
         method: 'POST',
         body: JSON.stringify({ text: commentText.trim() }),
       })
@@ -149,19 +151,19 @@ export function ReleaseDetail() {
       // silently fail
     }
     setCommentPosting(false)
-  }, [version, commentText, commentPosting])
+  }, [apiKey, commentText, commentPosting])
 
   const deleteComment = useCallback(async (commentId: string) => {
-    if (!version) return
+    if (!apiKey) return
     try {
-      await apiFetch(`/releases/${version}/comments/${commentId}`, {
+      await apiFetch(`/releases/${encodeURIComponent(apiKey)}/comments/${commentId}`, {
         method: 'DELETE',
       })
       setComments(prev => prev.filter(c => c.id !== commentId))
     } catch {
       // silently fail
     }
-  }, [version])
+  }, [apiKey])
 
   const currentUserEmail = authUser?.email || null
   const isAdmin = authUser?.role === 'admin' || !ssoEnabled
@@ -255,22 +257,23 @@ export function ReleaseDetail() {
     return <NectarLoader message="Loading release..." className="mt-32" />
   }
 
+  const pathKey = releaseKey(release)
   const nextStates = TRANSITIONS[release.state] || []
 
   async function transition(toState: string) {
-    await apiFetch(`/releases/${version}`, {
+    await apiFetch(`/releases/${encodeURIComponent(pathKey)}`, {
       method: 'PATCH',
       body: JSON.stringify({ state: toState }),
     })
   }
 
   async function validate() {
-    const report = await apiFetch<ValidationReport>(`/releases/${version}/validate`)
+    const report = await apiFetch<ValidationReport>(`/releases/${encodeURIComponent(pathKey)}/validate`)
     setValidation(report)
   }
 
   async function assessRisk() {
-    await apiFetch(`/releases/${version}/risk?refresh=true`)
+    await apiFetch(`/releases/${encodeURIComponent(pathKey)}/risk?refresh=true`)
   }
 
   return (
@@ -318,7 +321,7 @@ export function ReleaseDetail() {
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={assessRisk}>Risk</Button>
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={async () => {
             try {
-              const res = await apiFetch<{ ok: boolean; channel: string }>(`/releases/${version}/notify`, { method: 'POST' })
+              const res = await apiFetch<{ ok: boolean; channel: string }>(`/releases/${encodeURIComponent(pathKey)}/notify`, { method: 'POST' })
               if (res.ok) alert(`Posted to ${res.channel}`)
             } catch (err) {
               alert(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
@@ -336,7 +339,7 @@ export function ReleaseDetail() {
           ) : notesTask && notesTask.status === 'completed' && (notesTask.output?.artifacts?.length || notesTask.output?.notes) ? (
             <>
               {notesTask.output.artifacts?.filter(a => a.type === 'pdf').map(a => (
-                <a key={a.filename} href={`/api/releases/${version}/artifacts/${a.filename}`} target="_blank" rel="noopener noreferrer">
+                <a key={a.filename} href={`/api/releases/${encodeURIComponent(pathKey)}/artifacts/${a.filename}`} target="_blank" rel="noopener noreferrer">
                   <Button variant="outline" size="sm" className="text-xs h-7">Release Notes</Button>
                 </a>
               ))}
@@ -388,20 +391,20 @@ export function ReleaseDetail() {
 
       {/* Release Train — gate pipeline + inline editors */}
       <GatePipeline
-        version={release.version}
+        version={pathKey}
         releaseType={release.releaseType ?? null}
         shipDate={release.shipDate ?? null}
         jiraReleaseDate={release.jiraReleaseDate ?? null}
         milestones={release.milestones ?? []}
         templateVersion={release.templateVersion ?? null}
         onUpdate={() => {
-          apiFetch(`/releases/${encodeURIComponent(version!)}`).catch(() => {})
+          apiFetch(`/releases/${encodeURIComponent(pathKey)}`).catch(() => {})
         }}
       />
 
       {/* Scorecard — appears post-ship or when gates have been acted on */}
       <ReleaseScorecard
-        version={release.version}
+        version={pathKey}
         shouldRender={
           !!release.milestones && release.milestones.length > 0 && (
             release.state === 'done' ||
@@ -607,7 +610,7 @@ export function ReleaseDetail() {
         title={`Customer Impact${(release as any).zohoTickets?.length ? ` (${(release as any).zohoTickets.length} support tickets)` : ''}`}
         defaultOpen={(release as any).zohoTickets?.length > 0}
       >
-        <CustomerImpact version={release.version} />
+        <CustomerImpact version={pathKey} />
       </CollapsibleSection>
 
       {/* Deployment Impact */}
@@ -691,7 +694,7 @@ export function ReleaseDetail() {
       <EditDraftDialog
         open={editDraftOpen}
         onOpenChange={setEditDraftOpen}
-        releaseVersion={release.version}
+        releaseVersion={pathKey}
         onRegenerated={refreshNotesTask}
       />
 

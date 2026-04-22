@@ -134,27 +134,25 @@ module.exports = function createRoutes(services, config) {
   // Ticket queries now use SQL-level enrichment via TicketStore.ENRICH_COLUMNS
   // which joins releases, PRs, and truth in a single query.
 
-  /**
-   * Enrich releases with ticket data from the DB using a single SQL query.
-   * Replaces the deprecated release.tickets[] blob with live data.
-   */
+  // Release identity key. Prefer the DB-unique id so two repo-less releases
+  // sharing a version can't collide in a cache; fall back for test fixtures.
+  function releaseCacheKey(r) {
+    return r.id || `${r.repo || ''}:${r.version}`;
+  }
+
   function enrichReleasesWithTickets(releaseList) {
     if (!ticketStore || releaseList.length === 0) return releaseList;
 
-    // Build a lookup: version → release indices (for multi-repo same-version)
-    const versions = [...new Set(releaseList.map(r => r.version))];
-    if (versions.length === 0) return releaseList;
-
-    // Single query: get all tickets for all versions at once
-    const ticketsByVersion = new Map();
-    for (const version of versions) {
-      const tickets = getTicketsForRelease({ version });
-      ticketsByVersion.set(version, tickets);
+    const ticketsByKey = new Map();
+    for (const r of releaseList) {
+      const key = releaseCacheKey(r);
+      if (ticketsByKey.has(key)) continue;
+      ticketsByKey.set(key, getTicketsForRelease(r));
     }
 
     return releaseList.map(r => ({
       ...r,
-      tickets: ticketsByVersion.get(r.version) || [],
+      tickets: ticketsByKey.get(releaseCacheKey(r)) || [],
     }));
   }
 
@@ -297,13 +295,14 @@ module.exports = function createRoutes(services, config) {
       return availability.getPersonOutInRange(name, today, releaseDate);
     };
 
-    // Pre-fetch tickets, PRs, and truth for ALL releases in batch queries
-    // instead of N queries per release.
-    const ticketsByVersion = new Map();
+    // Batch PR + truth lookups across all tickets. Ticket fetch is still one
+    // query per release (see getTicketsForRelease); keyed by release identity
+    // so iOS 2026.4.0 and Android 2026.4.0 don't overwrite each other's lists.
+    const ticketsByKey = new Map();
     const allTicketKeys = new Set();
     for (const release of annotated) {
       const tickets = getTicketsForRelease(release);
-      ticketsByVersion.set(release.version, tickets);
+      ticketsByKey.set(releaseCacheKey(release), tickets);
       for (const t of tickets) allTicketKeys.add(t.key);
     }
     const uniqueKeys = [...allTicketKeys];
@@ -311,7 +310,7 @@ module.exports = function createRoutes(services, config) {
     const prLookup = prStore ? prStore.findByJiraKeysSlim(uniqueKeys) : new Map();
 
     let result = annotated.map(release => {
-      let tickets = ticketsByVersion.get(release.version) || [];
+      let tickets = ticketsByKey.get(releaseCacheKey(release)) || [];
 
       // Enrich tickets with PR data + build status + OOO annotations + truth
       const ticketKeys = tickets.map(t => t.key);
@@ -2311,7 +2310,7 @@ module.exports = function createRoutes(services, config) {
     function summarizeByRelease(entries) {
       const byRelease = new Map();
       for (const { ticket, release, effectiveMonth } of entries) {
-        const rKey = `${release.repo}:${release.version}`;
+        const rKey = releaseCacheKey(release);
         if (!byRelease.has(rKey)) {
           byRelease.set(rKey, {
             repo: release.repo,

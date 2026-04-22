@@ -79,7 +79,7 @@ function createRelease({ repo, version, branch, cutFrom, cutBy, releaseType, shi
  *   release:created   (release)
  *   release:updated   (release, changes)
  *   release:transition (release, { from, to })
- *   release:deleted   (version)
+ *   release:deleted   (release)
  *   cherry-pick:added (release, cherryPick)
  *   approval:added   (release, approval)
  *   deployment:added  (release, deployment)
@@ -163,15 +163,34 @@ class ReleaseManager extends EventEmitter {
   }
 
   get(version, repo = null) {
-    // Try repo-scoped key first, then plain version for backward compat
+    // Also accept "repo:version" in the first arg so callers with only
+    // req.params.version can still disambiguate (split on the first colon
+    // to mirror client/src/features/releases/ReleaseDetail.tsx).
+    if (!repo && typeof version === 'string' && version.includes(':')) {
+      const idx = version.indexOf(':');
+      const maybeRepo = version.slice(0, idx);
+      const maybeVersion = version.slice(idx + 1);
+      if (maybeRepo && maybeVersion) {
+        const byCompound = this.releases.get(this._key(maybeRepo, maybeVersion));
+        if (byCompound) return byCompound;
+      }
+    }
     if (repo) return this.releases.get(this._key(repo, version)) || null;
     return this.releases.get(version) || this._findByVersion(version);
   }
 
+  // Returns the single match for a bare version. Returns null on ambiguity
+  // (multiple repos share the version) so callers can't silently mutate the
+  // wrong release — they must pass repo.
   _findByVersion(version) {
+    const matches = [];
     for (const r of this.releases.values()) {
-      if (r.version === version) return r;
+      if (r.version === version) matches.push(r);
     }
+    if (matches.length === 0) return null;
+    if (matches.length === 1) return matches[0];
+    const repos = matches.map(r => r.repo).join(', ');
+    log.warn(`Ambiguous release lookup: version "${version}" matches repos [${repos}]. Pass repo to disambiguate.`);
     return null;
   }
 
@@ -230,7 +249,7 @@ class ReleaseManager extends EventEmitter {
     }
 
     this._upsertRow(this._keyOf(release), release);
-    this.audit.record(version, 'state:transition', { from, to: toState }, user);
+    this.audit.record(release.version, 'state:transition', { from, to: toState }, user);
     this.emit('release:transition', release, { from, to: toState, user });
     return release;
   }
@@ -251,7 +270,7 @@ class ReleaseManager extends EventEmitter {
 
     release.updatedAt = new Date().toISOString();
     this._upsertRow(this._keyOf(release), release);
-    this.audit.record(version, 'release:updated', applied, user);
+    this.audit.record(release.version, 'release:updated', applied, user);
     this.emit('release:updated', release, applied);
     return release;
   }
@@ -282,7 +301,7 @@ class ReleaseManager extends EventEmitter {
 
     release.updatedAt = new Date().toISOString();
     this._upsertRow(this._keyOf(release), release);
-    this.audit.record(version, 'ticket:added', { key: ticket.key }, user);
+    this.audit.record(release.version, 'ticket:added', { key: ticket.key }, user);
     this.emit('release:updated', release, { tickets: this.getTickets(release) });
     return release;
   }
@@ -300,7 +319,7 @@ class ReleaseManager extends EventEmitter {
 
     release.updatedAt = new Date().toISOString();
     this._upsertRow(this._keyOf(release), release);
-    this.audit.record(version, 'ticket:removed', { key: ticketKey }, user);
+    this.audit.record(release.version, 'ticket:removed', { key: ticketKey }, user);
     this.emit('release:updated', release, { tickets: this.getTickets(release) });
     return release;
   }
@@ -328,7 +347,7 @@ class ReleaseManager extends EventEmitter {
 
     release.updatedAt = new Date().toISOString();
     this._upsertRow(this._keyOf(release), release);
-    this.audit.record(version, 'cherry-pick:added', {
+    this.audit.record(release.version, 'cherry-pick:added', {
       sha: cp.sha, ticket: cp.ticket, status: cp.status,
     }, user);
     this.emit('cherry-pick:added', release, cp);
@@ -350,7 +369,7 @@ class ReleaseManager extends EventEmitter {
 
     release.updatedAt = new Date().toISOString();
     this._upsertRow(this._keyOf(release), release);
-    this.audit.record(version, 'approval:added', record, approval.user);
+    this.audit.record(release.version, 'approval:added', record, approval.user);
     this.emit('approval:added', release, record);
     return release;
   }
@@ -369,7 +388,7 @@ class ReleaseManager extends EventEmitter {
     release.comments.push(comment);
     release.updatedAt = new Date().toISOString();
     this._upsertRow(this._keyOf(release), release);
-    this.audit.record(version, 'comment:added', { commentId: comment.id }, user);
+    this.audit.record(release.version, 'comment:added', { commentId: comment.id }, user);
     this.emit('comment:added', release, comment);
     return comment;
   }
@@ -383,7 +402,7 @@ class ReleaseManager extends EventEmitter {
     release.comments.splice(idx, 1);
     release.updatedAt = new Date().toISOString();
     this._upsertRow(this._keyOf(release), release);
-    this.audit.record(version, 'comment:deleted', { commentId }, user);
+    this.audit.record(release.version, 'comment:deleted', { commentId }, user);
     this.emit('comment:deleted', release, commentId);
     return { ok: true };
   }
@@ -397,7 +416,7 @@ class ReleaseManager extends EventEmitter {
     );
     if (existing) {
       Object.assign(existing, deployment);
-      this.audit.record(version, 'deployment:updated', deployment, user);
+      this.audit.record(release.version, 'deployment:updated', deployment, user);
       this.emit('deployment:updated', release, existing);
     } else {
       const record = {
@@ -408,7 +427,7 @@ class ReleaseManager extends EventEmitter {
         triggeredBy: user,
       };
       release.deployments.push(record);
-      this.audit.record(version, 'deployment:added', record, user);
+      this.audit.record(release.version, 'deployment:added', record, user);
       this.emit('deployment:added', release, record);
     }
 
@@ -420,20 +439,14 @@ class ReleaseManager extends EventEmitter {
   // ── Delete ──────────────────────────────────────────────
 
   delete(version, repo = null, user = null) {
-    const key = this._key(repo, version);
-    let actualKey = null;
-    // Try repo-scoped key first, then plain version
-    if (this.releases.has(key)) {
-      actualKey = key;
-    } else if (this.releases.has(version)) {
-      actualKey = version;
-    } else {
-      throw new Error(`Release ${version} not found`);
-    }
+    // Resolve compound form ("ios:2026.4.0") and ambiguous versions via get().
+    const release = this.get(version, repo);
+    if (!release) throw new Error(`Release ${version} not found`);
+    const actualKey = this._keyOf(release);
     this.releases.delete(actualKey);
     this.db.prepare('DELETE FROM releases WHERE key = ?').run(actualKey);
-    this.audit.record(version, 'release:deleted', { repo }, user);
-    this.emit('release:deleted', version);
+    this.audit.record(release.version, 'release:deleted', { repo: release.repo }, user);
+    this.emit('release:deleted', release);
   }
 
   // ── Persistence ─────────────────────────────────────────
@@ -458,8 +471,7 @@ class ReleaseManager extends EventEmitter {
   // ── Helpers ─────────────────────────────────────────────
 
   _getOrThrow(version, repo = null) {
-    const key = this._key(repo, version);
-    const release = this.releases.get(key) || this._findByVersion(version);
+    const release = this.get(version, repo);
     if (!release) throw new Error(`Release ${version} not found`);
     return release;
   }

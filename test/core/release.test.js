@@ -292,12 +292,31 @@ describe('ReleaseManager', () => {
       expect(() => rm.delete('nonexistent')).toThrow('not found');
     });
 
-    it('emits release:deleted event', () => {
-      rm.create({ version: '4.2.0' });
-      let deleted = null;
-      rm.on('release:deleted', (v) => { deleted = v; });
-      rm.delete('4.2.0');
-      expect(deleted).toBe('4.2.0');
+    it('emits release:deleted event with the full release so WS consumers can scope by id', () => {
+      rm.create({ version: '4.2.0', repo: 'webplatform' });
+      let emitted = null;
+      rm.on('release:deleted', (r) => { emitted = r; });
+      rm.delete('4.2.0', 'webplatform');
+      expect(emitted).toBeTruthy();
+      expect(emitted.version).toBe('4.2.0');
+      expect(emitted.repo).toBe('webplatform');
+      expect(emitted.id).toBeTruthy();
+    });
+
+    // Regression for PR #68: deleting one of two releases sharing a version
+    // must identify the deleted release by id so the client can remove only
+    // the target release from its WS-backed list (old behavior filtered by
+    // version and wiped both iOS and Android from the client state).
+    it('emit payload allows distinguishing between colliding releases', () => {
+      rm.create({ version: '2026.4.0', repo: 'ios' });
+      rm.create({ version: '2026.4.0', repo: 'android' });
+      let emitted = null;
+      rm.on('release:deleted', (r) => { emitted = r; });
+      rm.delete('ios:2026.4.0');
+      expect(emitted.repo).toBe('ios');
+      expect(emitted.id).toContain('ios');
+      // Android release still present
+      expect(rm.get('2026.4.0', 'android')).not.toBeNull();
     });
   });
 
@@ -374,6 +393,100 @@ describe('ReleaseManager', () => {
       expect(ReleaseManager.STATES).toContain('planning');
       expect(ReleaseManager.STATES).toContain('done');
       expect(ReleaseManager.TRANSITIONS.planning).toEqual(['cutting']);
+    });
+  });
+
+  describe('get — repo/version disambiguation (#64, #65 regression)', () => {
+    it('get(version, repo) returns the repo-scoped release', () => {
+      rm.create({ version: '2026.4.0', repo: 'ios' });
+      rm.create({ version: '2026.4.0', repo: 'android' });
+      expect(rm.get('2026.4.0', 'ios').repo).toBe('ios');
+      expect(rm.get('2026.4.0', 'android').repo).toBe('android');
+    });
+
+    it('get("repo:version") parses compound form and returns the right release', () => {
+      rm.create({ version: '2026.4.0', repo: 'ios' });
+      rm.create({ version: '2026.4.0', repo: 'android' });
+      expect(rm.get('ios:2026.4.0').repo).toBe('ios');
+      expect(rm.get('android:2026.4.0').repo).toBe('android');
+    });
+
+    it('get(version) returns null and warns when multiple repos share the version', () => {
+      const warnSpy = vi.spyOn(require('../../src/core/log'), 'warn').mockImplementation(() => {});
+      rm.create({ version: '2026.4.0', repo: 'ios' });
+      rm.create({ version: '2026.4.0', repo: 'android' });
+      // Before the fix this silently returned the first match (bug source
+      // for mutations targeting the wrong release). Now it warns + null.
+      expect(rm.get('2026.4.0')).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Ambiguous release lookup')
+      );
+    });
+
+    it('get(version) still works for unique-version lookups (backward compat)', () => {
+      rm.create({ version: '4.2.0', repo: 'webplatform' });
+      expect(rm.get('4.2.0').repo).toBe('webplatform');
+    });
+
+    it('mutations via compound key target only the intended release', () => {
+      rm.create({ version: '2026.4.0', repo: 'ios' });
+      rm.create({ version: '2026.4.0', repo: 'android' });
+      rm.transition('ios:2026.4.0', 'cutting');
+      expect(rm.get('2026.4.0', 'ios').state).toBe('cutting');
+      expect(rm.get('2026.4.0', 'android').state).toBe('planning');
+    });
+  });
+
+  // Regression for PR #68 review: compound keys entering via mutation methods
+  // were flowing straight into audit.record(), so audit entries got stored
+  // under "ios:2026.4.0" while the UI queries by bare version "2026.4.0".
+  // Every mutation method must persist the bare version.
+  describe('audit — bare version under compound-key mutations', () => {
+    beforeEach(() => {
+      rm.create({ version: '2026.4.0', repo: 'ios' });
+      rm.create({ version: '2026.4.0', repo: 'android' });
+    });
+
+    it('transition via compound key stores audit under bare version', () => {
+      rm.transition('ios:2026.4.0', 'cutting', 'tester');
+      const entries = audit.forRelease('2026.4.0').filter(e => e.action === 'state:transition');
+      expect(entries).toHaveLength(1);
+    });
+
+    it('update via compound key stores audit under bare version', () => {
+      rm.update('ios:2026.4.0', { notes: 'hello' }, 'tester');
+      const entries = audit.forRelease('2026.4.0').filter(e => e.action === 'release:updated');
+      expect(entries).toHaveLength(1);
+    });
+
+    it('addComment via compound key stores audit under bare version', () => {
+      rm.addComment('ios:2026.4.0', { text: 'hi', user: 'tester' });
+      const entries = audit.forRelease('2026.4.0').filter(e => e.action === 'comment:added');
+      expect(entries).toHaveLength(1);
+    });
+
+    it('addCherryPick via compound key stores audit under bare version', () => {
+      rm.addCherryPick('ios:2026.4.0', { sha: 'abc123', ticket: 'DEV-1' }, 'tester');
+      const entries = audit.forRelease('2026.4.0').filter(e => e.action === 'cherry-pick:added');
+      expect(entries).toHaveLength(1);
+    });
+
+    it('addApproval via compound key stores audit under bare version', () => {
+      rm.addApproval('ios:2026.4.0', { user: 'tester', role: 'qa' });
+      const entries = audit.forRelease('2026.4.0').filter(e => e.action === 'approval:added');
+      expect(entries).toHaveLength(1);
+    });
+
+    it('addDeployment via compound key stores audit under bare version', () => {
+      rm.addDeployment('ios:2026.4.0', { customer: 'ck', env: 'prod', status: 'pending' }, 'tester');
+      const entries = audit.forRelease('2026.4.0').filter(e => e.action === 'deployment:added');
+      expect(entries).toHaveLength(1);
+    });
+
+    it('delete via compound key stores audit under bare version', () => {
+      rm.delete('ios:2026.4.0', null, 'tester');
+      const entries = audit.forRelease('2026.4.0').filter(e => e.action === 'release:deleted');
+      expect(entries).toHaveLength(1);
     });
   });
 });
