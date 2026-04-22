@@ -1,4 +1,5 @@
 const { getDb } = require('../db');
+const { STATUS_CATEGORIES } = require('../status-categories');
 
 /**
  * Status groups — copied from ticket-store.js for module independence.
@@ -208,7 +209,7 @@ class WorkloadBuilder {
                fixVersions, targetFixVersions, customerTags
         FROM jira_tickets
         WHERE (fixVersions LIKE ? OR targetFixVersions LIKE ?)
-          AND statusCategory != 'Done'
+          AND statusCategory != '${STATUS_CATEGORIES.DONE}'
       `).all(pattern, pattern);
 
       for (const row of rows) {

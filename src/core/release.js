@@ -112,7 +112,13 @@ class ReleaseManager extends EventEmitter {
 
   /**
    * Get tickets for a release. Queries the normalized TicketStore.
-   * Returns tickets in the standard format with jiraStatus, state, etc.
+   * Returns tickets in the standard format with jiraStatus, statusCategory,
+   * state, etc.
+   *
+   * This is the canonical read path for server-internal ticket consumers
+   * (standup, notification-engine, release-truth). Consumers relying on
+   * `statusCategory` (e.g. via `isDone`) must source tickets from here,
+   * not from raw TicketStore rows, to guarantee the field is populated.
    */
   getTickets(release) {
     if (this._ticketStore) {

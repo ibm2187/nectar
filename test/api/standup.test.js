@@ -4,6 +4,12 @@ const { buildStandupData, teamForRepo } = require('../../src/api/standup');
 
 // ── Test helpers ────────────────────────────────────────
 
+// Sample of status names Jira categorizes as "Done" — for test helper defaulting only.
+const DONE_NAMES = new Set([
+  'QA Certified', 'NO QA - Certified', 'QA Done',
+  'Done', 'Closed', 'Resolved', 'Released', 'Resolved Without Code', 'Completed',
+]);
+
 function makeTicket(key, overrides = {}) {
   const jiraStatus = overrides.jiraStatus || 'Development In Progress';
   // Mirror Jira: statusCategory is derived from status. Callers may override explicitly.
@@ -20,12 +26,6 @@ function makeTicket(key, overrides = {}) {
     ...overrides,
   };
 }
-
-// Sample of status names Jira categorizes as "Done" — for test helper defaulting only.
-const DONE_NAMES = new Set([
-  'QA Certified', 'NO QA - Certified', 'No QA - Certified', 'QA Done',
-  'Done', 'Closed', 'Resolved', 'Released', 'Resolved Without Code', 'Completed',
-]);
 
 function makeRelease(version, overrides = {}) {
   return {

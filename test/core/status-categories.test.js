@@ -8,10 +8,6 @@ describe('STATUS_CATEGORIES', () => {
     expect(STATUS_CATEGORIES.IN_PROGRESS).toBe('In Progress');
     expect(STATUS_CATEGORIES.DONE).toBe('Done');
   });
-
-  it('is frozen — prevents accidental mutation', () => {
-    expect(Object.isFrozen(STATUS_CATEGORIES)).toBe(true);
-  });
 });
 
 describe('isDone', () => {

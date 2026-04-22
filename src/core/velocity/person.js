@@ -1,4 +1,5 @@
 const { getDb } = require('../db');
+const { STATUS_CATEGORIES } = require('../status-categories');
 
 /**
  * Statuses that represent "real done" — ticket was actually completed.
@@ -77,7 +78,7 @@ class PersonVelocity {
     const row = this.db.prepare(`
       SELECT COUNT(DISTINCT jt.key) AS n FROM jira_tickets jt
       WHERE jt.${personColumn} = ?
-        AND jt.statusCategory = 'Done'
+        AND jt.statusCategory = '${STATUS_CATEGORIES.DONE}'
         AND jt.status NOT IN (${excludePlaceholders})
         AND EXISTS (
           SELECT 1 FROM json_each(jt.fixVersions) fv
@@ -117,7 +118,7 @@ class PersonVelocity {
     const devRows = this.db.prepare(`
       SELECT jt.assignee AS name, COUNT(DISTINCT jt.key) AS n FROM jira_tickets jt
       WHERE jt.assignee IS NOT NULL
-        AND jt.statusCategory = 'Done'
+        AND jt.statusCategory = '${STATUS_CATEGORIES.DONE}'
         AND jt.status NOT IN (${excludePlaceholders})
         AND EXISTS (
           SELECT 1 FROM json_each(jt.fixVersions) fv
@@ -142,7 +143,7 @@ class PersonVelocity {
     const qaRows = this.db.prepare(`
       SELECT jt.qaAssignee AS name, COUNT(DISTINCT jt.key) AS n FROM jira_tickets jt
       WHERE jt.qaAssignee IS NOT NULL
-        AND jt.statusCategory = 'Done'
+        AND jt.statusCategory = '${STATUS_CATEGORIES.DONE}'
         AND jt.status NOT IN (${excludePlaceholders})
         AND EXISTS (
           SELECT 1 FROM json_each(jt.fixVersions) fv
@@ -180,7 +181,7 @@ class PersonVelocity {
     const devTotal = this.db.prepare(`
       SELECT COUNT(DISTINCT jt.key) AS n FROM jira_tickets jt
       WHERE jt.assignee IS NOT NULL
-        AND jt.statusCategory = 'Done'
+        AND jt.statusCategory = '${STATUS_CATEGORIES.DONE}'
         AND jt.status NOT IN (${excludePlaceholders})
         AND EXISTS (
           SELECT 1 FROM json_each(jt.fixVersions) fv
@@ -192,7 +193,7 @@ class PersonVelocity {
     const devPeople = this.db.prepare(`
       SELECT COUNT(DISTINCT jt.assignee) AS n FROM jira_tickets jt
       WHERE jt.assignee IS NOT NULL
-        AND jt.statusCategory = 'Done'
+        AND jt.statusCategory = '${STATUS_CATEGORIES.DONE}'
         AND jt.status NOT IN (${excludePlaceholders})
         AND EXISTS (
           SELECT 1 FROM json_each(jt.fixVersions) fv
@@ -205,7 +206,7 @@ class PersonVelocity {
     const qaTotal = this.db.prepare(`
       SELECT COUNT(DISTINCT jt.key) AS n FROM jira_tickets jt
       WHERE jt.qaAssignee IS NOT NULL
-        AND jt.statusCategory = 'Done'
+        AND jt.statusCategory = '${STATUS_CATEGORIES.DONE}'
         AND jt.status NOT IN (${excludePlaceholders})
         AND EXISTS (
           SELECT 1 FROM json_each(jt.fixVersions) fv
@@ -217,7 +218,7 @@ class PersonVelocity {
     const qaPeople = this.db.prepare(`
       SELECT COUNT(DISTINCT jt.qaAssignee) AS n FROM jira_tickets jt
       WHERE jt.qaAssignee IS NOT NULL
-        AND jt.statusCategory = 'Done'
+        AND jt.statusCategory = '${STATUS_CATEGORIES.DONE}'
         AND jt.status NOT IN (${excludePlaceholders})
         AND EXISTS (
           SELECT 1 FROM json_each(jt.fixVersions) fv

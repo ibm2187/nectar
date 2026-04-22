@@ -1,5 +1,6 @@
 const { EventEmitter } = require('events');
 const { getDb } = require('./db');
+const { STATUS_CATEGORIES } = require('./status-categories');
 
 // Status group mappings — mirrors client/src/lib/status-colors.ts
 const STATUS_GROUPS = {
@@ -300,7 +301,7 @@ class TicketStore extends EventEmitter {
     }
     if (opts.statusGroup) {
       if (opts.statusGroup === 'not-done') {
-        conditions.push("statusCategory != 'Done'");
+        conditions.push(`statusCategory != '${STATUS_CATEGORIES.DONE}'`);
       } else if (STATUS_GROUPS[opts.statusGroup]) {
         const statuses = STATUS_GROUPS[opts.statusGroup];
         const placeholders = statuses.map(() => '?').join(',');
@@ -377,7 +378,7 @@ class TicketStore extends EventEmitter {
     const offset = opts.offset || 0;
 
     const where = `
-      WHERE statusCategory = 'Done'
+      WHERE statusCategory = '${STATUS_CATEGORIES.DONE}'
         AND fixVersions = '[]'
         AND status NOT IN ('Resolved Without Code', 'Archived')
     `;
@@ -403,7 +404,7 @@ class TicketStore extends EventEmitter {
     const limit = opts.limit || 100;
     const offset = opts.offset || 0;
 
-    const where = `WHERE statusCategory = 'To Do' AND created >= ?`;
+    const where = `WHERE statusCategory = '${STATUS_CATEGORIES.TODO}' AND created >= ?`;
 
     const rows = this.db.prepare(`
       SELECT * FROM jira_tickets ${where}
@@ -453,7 +454,7 @@ class TicketStore extends EventEmitter {
     }
     if (opts.statusGroup) {
       if (opts.statusGroup === 'not-done') {
-        conditions.push("jt.statusCategory != 'Done'");
+        conditions.push(`jt.statusCategory != '${STATUS_CATEGORIES.DONE}'`);
       } else if (STATUS_GROUPS[opts.statusGroup]) {
         const statuses = STATUS_GROUPS[opts.statusGroup];
         const placeholders = statuses.map(() => '?').join(',');

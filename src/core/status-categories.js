@@ -15,6 +15,17 @@ const STATUS_CATEGORIES = Object.freeze({
   DONE: 'Done',
 });
 
+/**
+ * True iff the ticket is in Jira's "Done" category.
+ *
+ * Contract: the ticket MUST carry a populated `statusCategory` field.
+ * Internal tickets should flow through `ReleaseManager.getTickets()` or the
+ * `TicketStore` read path — both populate it from the `jira_tickets` table.
+ * There is no status-name fallback here, deliberately: fallbacks drift.
+ *
+ * @param {{statusCategory?: string}|null|undefined} ticket
+ * @returns {boolean}
+ */
 function isDone(ticket) {
   return !!ticket && ticket.statusCategory === STATUS_CATEGORIES.DONE;
 }
