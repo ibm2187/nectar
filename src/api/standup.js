@@ -1,4 +1,5 @@
 const log = require('../core/log');
+const { isDone } = require('../core/status-categories');
 
 /**
  * Daily Standup API — aggregates per-person data with priority buckets
@@ -70,9 +71,7 @@ function buildStandupData(services, opts = {}) {
   for (const release of activeReleases) {
     const tickets = releases.getTickets(release);
     for (const ticket of tickets) {
-      // ISSUE-52: use Jira's statusCategory enum rather than hand-rolled name list —
-      // authoritative and locale/case-proof (e.g. "NO QA - Certified" carries category="Done").
-      if (ticket.statusCategory === 'Done') continue;
+      if (isDone(ticket)) continue;
       allTicketKeys.add(ticket.key);
 
       if (ticket.assignee) {
@@ -337,7 +336,7 @@ function buildStandupData(services, opts = {}) {
     dueDate: r.jiraReleaseDate,
     state: r.state,
     repo: r.repo || null,
-    ticketsRemaining: (releases.getTickets(r) || []).filter(t => t.statusCategory !== 'Done').length,
+    ticketsRemaining: (releases.getTickets(r) || []).filter(t => !isDone(t)).length,
   })).sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
 
   return {

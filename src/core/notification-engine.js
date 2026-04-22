@@ -3,6 +3,7 @@ const path = require('path');
 const cron = require('node-cron');
 const log = require('./log');
 const SlackNotifier = require('../integrations/slack');
+const { isDone } = require('./status-categories');
 
 // Role-based status buckets for the daily digest.
 // A ticket shows under the DEV section only when it's in a dev-actionable status,
@@ -287,8 +288,7 @@ class NotificationEngine {
 
     for (const release of relevant) {
       for (const ticket of this.releases.getTickets(release)) {
-        // ISSUE-52: rely on Jira statusCategory enum, not hand-rolled name list.
-        if (ticket.statusCategory === 'Done') continue;
+        if (isDone(ticket)) continue;
 
         const people = new Set();
         if (ticket.assignee) people.add(ticket.assignee);
@@ -507,7 +507,7 @@ class NotificationEngine {
     const items = [];
     for (const release of relevant) {
       for (const ticket of this.releases.getTickets(release)) {
-        if (ticket.statusCategory === 'Done') continue;
+        if (isDone(ticket)) continue;
         const isAssignee = ticket.assignee && matchingNames.has(ticket.assignee);
         const isQa = ticket.qaAssignee && matchingNames.has(ticket.qaAssignee);
         if (isAssignee || isQa) {
