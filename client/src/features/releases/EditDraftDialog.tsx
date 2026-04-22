@@ -26,7 +26,7 @@ export function EditDraftDialog({ open, onOpenChange, releaseVersion, onRegenera
     setLoading(true)
     setError(null)
     setSaveMsg(null)
-    apiFetch<string>(`/releases/${releaseVersion}/draft`, { raw: true })
+    apiFetch<string>(`/releases/${encodeURIComponent(releaseVersion)}/draft`, { raw: true })
       .then(text => {
         setContent(text)
         setOriginalContent(text)
@@ -42,7 +42,7 @@ export function EditDraftDialog({ open, onOpenChange, releaseVersion, onRegenera
     setError(null)
     setSaveMsg(null)
     try {
-      await apiFetch(`/releases/${releaseVersion}/draft`, {
+      await apiFetch(`/releases/${encodeURIComponent(releaseVersion)}/draft`, {
         method: 'PUT',
         body: JSON.stringify({ content, regenerate: false }),
       })
@@ -60,7 +60,7 @@ export function EditDraftDialog({ open, onOpenChange, releaseVersion, onRegenera
     setError(null)
     setSaveMsg(null)
     try {
-      await apiFetch(`/releases/${releaseVersion}/draft`, {
+      await apiFetch(`/releases/${encodeURIComponent(releaseVersion)}/draft`, {
         method: 'PUT',
         body: JSON.stringify({ content, regenerate: true }),
       })

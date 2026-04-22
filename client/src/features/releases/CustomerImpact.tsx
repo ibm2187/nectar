@@ -58,7 +58,7 @@ export function CustomerImpact({ version }: { version: string }) {
   useEffect(() => {
     setLoading(true)
     setError(null)
-    apiFetch<CustomerImpactData>(`/releases/${version}/customer-impact`)
+    apiFetch<CustomerImpactData>(`/releases/${encodeURIComponent(version)}/customer-impact`)
       .then(setData)
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))

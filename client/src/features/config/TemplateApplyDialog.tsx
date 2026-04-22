@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { apiFetch } from '../../api/client'
-import { cn } from '../../lib/utils'
+import { cn, releaseKey } from '../../lib/utils'
 
 interface AffectedRelease {
   version: string
@@ -56,17 +56,17 @@ export function TemplateApplyDialog({
         const stale = (r.releases || []).filter(x => x.stale)
         setAffected(stale)
         // Pre-check untouched releases (safe to refresh)
-        setSelected(new Set(stale.filter(x => x.impact === 'untouched').map(x => x.version)))
+        setSelected(new Set(stale.filter(x => x.impact === 'untouched').map(releaseKey)))
       })
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load'))
       .finally(() => setLoading(false))
   }, [open, templateKey])
 
-  function toggle(version: string) {
+  function toggle(key: string) {
     setSelected(prev => {
       const next = new Set(prev)
-      if (next.has(version)) next.delete(version)
-      else next.add(version)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       return next
     })
   }
@@ -75,7 +75,7 @@ export function TemplateApplyDialog({
     if (selected.size === affected.length) {
       setSelected(new Set())
     } else {
-      setSelected(new Set(affected.map(a => a.version)))
+      setSelected(new Set(affected.map(releaseKey)))
     }
   }
 
@@ -86,20 +86,20 @@ export function TemplateApplyDialog({
     }
     setApplying(true)
     setError(null)
-    const versions = Array.from(selected)
+    const keys = Array.from(selected)
     let ok = 0
     let failed: string[] = []
-    for (const v of versions) {
+    for (const k of keys) {
       try {
-        await apiFetch(`/releases/${encodeURIComponent(v)}/refresh-template`, { method: 'POST' })
+        await apiFetch(`/releases/${encodeURIComponent(k)}/refresh-template`, { method: 'POST' })
         ok++
       } catch {
-        failed.push(v)
+        failed.push(k)
       }
     }
     setApplying(false)
     if (failed.length > 0) {
-      setError(`Applied to ${ok} of ${versions.length}. Failed: ${failed.join(', ')}`)
+      setError(`Applied to ${ok} of ${keys.length}. Failed: ${failed.join(', ')}`)
     } else {
       onApplied?.(ok)
       onOpenChange(false)
@@ -141,11 +141,12 @@ export function TemplateApplyDialog({
 
               <div className="border rounded-md divide-y max-h-80 overflow-y-auto">
                 {affected.map(r => {
-                  const isSelected = selected.has(r.version)
+                  const rKey = releaseKey(r)
+                  const isSelected = selected.has(rKey)
                   const impact = impactLabels[r.impact]
                   return (
                     <label
-                      key={r.version}
+                      key={rKey}
                       className={cn(
                         'flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-muted/30',
                         isSelected && 'bg-primary/5'
@@ -154,7 +155,7 @@ export function TemplateApplyDialog({
                       <input
                         type="checkbox"
                         checked={isSelected}
-                        onChange={() => toggle(r.version)}
+                        onChange={() => toggle(rKey)}
                         className="shrink-0"
                       />
                       <div className="flex-1 min-w-0">

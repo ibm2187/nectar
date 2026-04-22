@@ -20,7 +20,7 @@ interface WsState {
   setEnvironments: (e: Environment[]) => void
   setConfig: (c: AppConfig) => void
   upsertRelease: (r: Release) => void
-  removeRelease: (version: string) => void
+  removeRelease: (id: string) => void
   upsertCustomer: (c: Customer) => void
   upsertEnvironment: (e: Environment) => void
   bumpPipelineSyncTick: () => void
@@ -49,8 +49,8 @@ export const useWsStore = create<WsState>((set) => ({
     else next.unshift(release)
     return { releases: next }
   }),
-  removeRelease: (version) => set((state) => ({
-    releases: state.releases.filter(r => r.version !== version),
+  removeRelease: (id) => set((state) => ({
+    releases: state.releases.filter(r => r.id !== id),
   })),
   upsertCustomer: (customer) => set((state) => {
     const idx = state.customers.findIndex(c => c.id === customer.id)
@@ -145,7 +145,7 @@ export function connectWebSocket() {
         if (msg.release) s.upsertRelease(msg.release)
         break
       case 'release:deleted':
-        s.removeRelease(msg.version)
+        if (msg.id) s.removeRelease(msg.id)
         break
       case 'customer:updated':
         if (msg.customer) s.upsertCustomer(msg.customer)

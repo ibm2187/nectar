@@ -8,7 +8,7 @@ import { JiraLink } from '../../components/JiraLink'
 import { SortableHeader, useSortableData, useSortState, nextSortState, type SortState, type SortDir as SortableSortDir } from '../../components/SortableHeader'
 import { apiFetch } from '../../api/client'
 import type { ReleaseTruthReport, DeploymentImpactReport, VerifiedTicket, Health, HealthCategory, ZohoRef } from '../../api/client'
-import { cn, timeAgo, exportToCsv } from '../../lib/utils'
+import { cn, timeAgo, exportToCsv, releaseKey } from '../../lib/utils'
 import { useWsStore } from '../../stores/wsStore'
 import { NectarLoader, NectarSpinner } from '../../components/NectarLoader'
 import { CompareSelector } from './CompareSelector'
@@ -65,10 +65,10 @@ export function TruthView({ repo, version, prsByJiraKey: prsByJiraKeyProp = {}, 
   // Falls back to the prop if the fetch hasn't completed yet.
   const [fetchedPrs, setFetchedPrs] = useState<Record<string, PrInfo[]>>({})
   useEffect(() => {
-    apiFetch<Record<string, PrInfo[]>>(`/releases/${encodeURIComponent(version)}/prs`)
+    apiFetch<Record<string, PrInfo[]>>(`/releases/${encodeURIComponent(releaseKey({ repo, version }))}/prs`)
       .then(setFetchedPrs)
       .catch(() => {}) // silent — fall back to prop
-  }, [version])
+  }, [repo, version])
   const prsByJiraKey = Object.keys(fetchedPrs).length > 0 ? fetchedPrs : prsByJiraKeyProp
   // ── URL-driven state (everything here is shareable) ─────────
   const [searchParams, setSearchParams] = useSearchParams()
