@@ -4,6 +4,8 @@ const { z } = require('zod');
 const log = require('../core/log');
 const { aggregateFeatureFlags, aggregateIntegrations } = require('../core/feature-aggregator');
 const { getArtifactsS3 } = require('../core/s3-artifacts');
+const { authorizeMcpTool, extractPrincipal } = require('../core/authz');
+const { isValidCapability } = require('../core/capabilities');
 
 /**
  * Nectar MCP Server — exposes customer, environment, release, and truth
@@ -16,6 +18,15 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth, taskQueu
     name: 'nectar',
     version: '1.0.0',
   });
+
+  // Per-request auth context. Uses AsyncLocalStorage so concurrent MCP
+  // requests each see their own principal (no shared-closure race).
+  const { AsyncLocalStorage } = require('async_hooks');
+  const mcpAuthStore = new AsyncLocalStorage();
+  // Proxy object that tools read — delegates to the current async context
+  const reqCtx = {
+    get apiKey() { return mcpAuthStore.getStore()?.apiKey || null; },
+  };
 
   // ── Tool: get_customer ──────────────────────────────────
   server.tool(
@@ -382,12 +393,13 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth, taskQueu
     // ── Tool: claim_task ──────────────────────────────────
     server.tool(
       'claim_task',
-      'Claim a pending task — marks it as in-progress so no other worker picks it up.',
+      'Claim a pending task — marks it as in-progress so no other worker picks it up. Requires task.write capability.',
       {
         taskId: z.string().describe('Task ID to claim'),
       },
       async ({ taskId }) => {
         try {
+          authorizeMcpTool(reqCtx, 'task.write');
           const task = taskQueue.claim(taskId);
           return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] };
         } catch (err) {
@@ -399,7 +411,7 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth, taskQueu
     // ── Tool: complete_task ───────────────────────────────
     server.tool(
       'complete_task',
-      'Complete a task — deposit results (gammaUrl, notes, perTicketSummaries). Triggers completion callback (stores on release, notifies via Slack).',
+      'Complete a task — deposit results (gammaUrl, notes, perTicketSummaries). Triggers completion callback (stores on release, notifies via Slack). Requires task.write capability.',
       {
         taskId: z.string().describe('Task ID to complete'),
         gammaUrl: z.string().optional().describe('URL to the generated Gamma presentation'),
@@ -408,6 +420,7 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth, taskQueu
       },
       async ({ taskId, gammaUrl, notes, perTicketSummaries }) => {
         try {
+          authorizeMcpTool(reqCtx, 'task.write');
           const output = {};
           if (gammaUrl) output.gammaUrl = gammaUrl;
           if (notes) output.notes = notes;
@@ -458,16 +471,36 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth, taskQueu
     );
   }
 
-  const toolCount = taskQueue ? 15 : 12;
+  // ── Tool: check_capability ──────────────────────────────
+  server.tool(
+    'check_capability',
+    'Check whether the authenticated principal (API key) holds a given capability. Use this before attempting an action to avoid wasted turns on 403 errors.',
+    {
+      capability: z.string().describe('Capability ID to check (e.g. "release.write", "task.write")'),
+    },
+    async ({ capability }) => {
+      if (!isValidCapability(capability)) {
+        return { content: [{ type: 'text', text: JSON.stringify({ allowed: false, capability, error: 'Unknown capability' }, null, 2) }] };
+      }
+      try {
+        authorizeMcpTool(reqCtx, capability);
+        return { content: [{ type: 'text', text: JSON.stringify({ allowed: true, capability }, null, 2) }] };
+      } catch {
+        return { content: [{ type: 'text', text: JSON.stringify({ allowed: false, capability }, null, 2) }] };
+      }
+    }
+  );
+
+  const toolCount = taskQueue ? 16 : 13; // +1 for check_capability
   log.info(`MCP server initialized with ${toolCount} tools`);
-  return server;
+  return { server, mcpAuthStore };
 }
 
 /**
  * Mount the MCP server on an Express app at the given path.
  */
 async function mountMcp(app, path, deps) {
-  const server = createNectarMcpServer(deps);
+  const { server, mcpAuthStore } = createNectarMcpServer(deps);
   const { apiKeys } = deps;
 
   // MCP auth check — validates API key or WEB_TOKEN in the Authorization header.
@@ -508,21 +541,25 @@ async function mountMcp(app, path, deps) {
     res.status(401).json({ error: 'MCP authentication required' });
   };
 
-  // Stateless Streamable HTTP — each request gets its own transport
+  // Stateless Streamable HTTP — each request gets its own transport.
+  // mcpAuthStore.run() scopes the API key to this async context so
+  // concurrent requests each see their own principal (no shared-closure race).
   app.post(path, mcpAuth, async (req, res) => {
-    try {
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined, // stateless
-      });
-      res.on('close', () => { transport.close(); });
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      log.error('MCP request error:', err.message);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'MCP error' });
+    mcpAuthStore.run({ apiKey: req.apiKey || null }, async () => {
+      try {
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined, // stateless
+        });
+        res.on('close', () => { transport.close(); });
+        await server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      } catch (err) {
+        log.error('MCP request error:', err.message);
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'MCP error' });
+        }
       }
-    }
+    });
   });
 
   // GET + DELETE for SSE/session management (required by spec but we're stateless)

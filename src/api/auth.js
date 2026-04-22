@@ -163,10 +163,9 @@ function createAuthRoutes(opts = {}) {
     try {
       const user = jwt.verify(token, jwtSecret);
       // Re-evaluate role on each /me call (in case NECTAR_ADMINS changed)
-      const currentRole = isAdmin(user.email, userStore) ? 'admin' : 'user';
-      const permissions = userStore
-        ? userStore.getPermissions(user.email)
-        : null;
+      const currentRole = userStore ? userStore.getRole(user.email) : (isAdmin(user.email) ? 'admin' : 'user');
+      const capabilities = userStore ? userStore.getCapabilities(user.email) : [];
+      const roles = userStore ? userStore.getRoles(user.email) : [];
       res.json({
         authenticated: true,
         ssoEnabled: true,
@@ -175,8 +174,9 @@ function createAuthRoutes(opts = {}) {
           name: user.name,
           picture: user.picture,
           domain: user.domain,
-          role: currentRole,
-          permissions,
+          role: currentRole, // compat shim — use capabilities instead
+          capabilities,
+          roles,
         },
       });
     } catch {
@@ -367,17 +367,4 @@ function exchangeCode(code, clientId, clientSecret, redirectUri) {
   });
 }
 
-/**
- * Middleware: require admin role.
- * API key requests bypass this (service-to-service is always admin).
- * When SSO is disabled, everyone is admin.
- */
-function requireAdmin(req, res, next) {
-  // API keys and WEB_TOKEN are always admin-level
-  if (req.apiKey || !process.env.ENABLE_GOOGLE_SSO) return next();
-  // Check user role
-  if (req.user && req.user.role === 'admin') return next();
-  return res.status(403).json({ error: 'Admin access required' });
-}
-
-module.exports = { createAuthRoutes, createAuthMiddleware, requireAdmin };
+module.exports = { createAuthRoutes, createAuthMiddleware };

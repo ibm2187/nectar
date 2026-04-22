@@ -9,6 +9,7 @@ import type { Customer, Environment, EnvTier } from '../../api/client'
 import { cn, timeAgo, exportToCsv } from '../../lib/utils'
 import { SetVersionDialog } from './SetVersionDialog'
 import { NectarLoader } from '../../components/NectarLoader'
+import { CapGuard } from '../../components/CapGuard'
 
 // Tier ordering for display (production first, then staging, etc.)
 const TIER_ORDER: EnvTier[] = [
@@ -155,9 +156,11 @@ export function CustomersPage() {
           >
             Export CSV
           </Button>
-          <Button variant="outline" size="sm" onClick={handleScan} disabled={scanning}>
-            {scanning ? 'Scanning...' : 'Sync from webplatform'}
-          </Button>
+          <CapGuard cap="environment.write">
+            <Button variant="outline" size="sm" onClick={handleScan} disabled={scanning}>
+              {scanning ? 'Scanning...' : 'Sync from webplatform'}
+            </Button>
+          </CapGuard>
         </div>
       </div>
 
@@ -291,15 +294,17 @@ function CustomerCard({
           </CardTitle>
           <div className="flex items-center gap-2">
             {mainEnvs.length > 1 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onBulkSetMain}
-                className="text-xs h-7"
-                title={`Set version for all ${mainEnvs.length} ${customer.name} environments`}
-              >
-                Set all versions
-              </Button>
+              <CapGuard cap="environment.write">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onBulkSetMain}
+                  className="text-xs h-7"
+                  title={`Set version for all ${mainEnvs.length} ${customer.name} environments`}
+                >
+                  Set all versions
+                </Button>
+              </CapGuard>
             )}
             <span className="text-xs text-muted-foreground">
               {customer.domain}
@@ -335,15 +340,17 @@ function CustomerCard({
               >
                 {expanded ? '▼' : '▶'} {franchiseEnvs.length} franchise environments
               </button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onBulkSetFranchises}
-                className="text-xs h-7"
-                title={`Set version for all ${franchiseEnvs.length} franchises at once`}
-              >
-                Set all franchise versions
-              </Button>
+              <CapGuard cap="environment.write">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onBulkSetFranchises}
+                  className="text-xs h-7"
+                  title={`Set version for all ${franchiseEnvs.length} franchises at once`}
+                >
+                  Set all franchise versions
+                </Button>
+              </CapGuard>
             </div>
             {expanded && (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 mt-3">
@@ -450,17 +457,19 @@ function EnvTile({
       </button>
 
       {/* Edit icon button — always available */}
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); onEdit() }}
-        className="absolute top-2 right-2 p-1 rounded text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground hover:bg-accent transition-opacity"
-        title="Set version manually"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-        </svg>
-      </button>
+      <CapGuard cap="environment.write">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onEdit() }}
+          className="absolute top-2 right-2 p-1 rounded text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground hover:bg-accent transition-opacity"
+          title="Set version manually"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+          </svg>
+        </button>
+      </CapGuard>
     </div>
   )
 }

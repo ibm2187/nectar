@@ -6,6 +6,7 @@ import { Badge } from '../../components/ui/badge'
 import { cn } from '../../lib/utils'
 import { JiraLink } from '../../components/JiraLink'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog'
+import { CapGuard } from '../../components/CapGuard'
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -528,7 +529,9 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
               {filteredTotal} item{filteredTotal !== 1 ? 's' : ''}
             </span>
             {person.totalItems > 0 && (
-              <SendReminderButton personName={person.name} />
+              <CapGuard cap="notify.send">
+                <SendReminderButton personName={person.name} />
+              </CapGuard>
             )}
           </div>
         </div>

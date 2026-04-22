@@ -11,6 +11,7 @@ import { cn, timeAgo } from '../../lib/utils'
 import { NectarLoader } from '../../components/NectarLoader'
 import { SetVersionDialog } from './SetVersionDialog'
 import { UpgradeDetailDialog } from './UpgradeDetailDialog'
+import { CapGuard } from '../../components/CapGuard'
 
 type Tab = 'overview' | 'features' | 'integrations' | 'upgrades'
 
@@ -97,12 +98,16 @@ export function EnvironmentDetailPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handlePoll} disabled={polling}>
-            {polling ? 'Polling...' : 'Poll now'}
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setEditingVersion(true)}>
-            Set version
-          </Button>
+          <CapGuard cap="environment.write">
+            <Button variant="outline" size="sm" onClick={handlePoll} disabled={polling}>
+              {polling ? 'Polling...' : 'Poll now'}
+            </Button>
+          </CapGuard>
+          <CapGuard cap="environment.write">
+            <Button variant="outline" size="sm" onClick={() => setEditingVersion(true)}>
+              Set version
+            </Button>
+          </CapGuard>
         </div>
       </div>
 

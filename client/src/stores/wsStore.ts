@@ -169,6 +169,15 @@ export function connectWebSocket() {
         s.bumpPipelineSyncTick()
         s.bumpSyncTick()
         break
+      // Access control events — refresh auth + access stores
+      case 'role:updated':
+      case 'user:roles-updated':
+      case 'key:revoked': {
+        // Dynamic import to avoid circular dependency
+        import('../stores/authStore').then(m => m.useAuthStore.getState().loadAuth())
+        import('../stores/accessStore').then(m => m.useAccessStore.getState().loadAll())
+        break
+      }
     }
   }
 

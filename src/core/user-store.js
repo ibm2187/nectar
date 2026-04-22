@@ -1,5 +1,7 @@
 const log = require('./log');
 const { getDb } = require('./db');
+const { getAllCapabilityIds } = require('./capabilities');
+const { getBreakGlassEmails } = require('./authz');
 
 const DEFAULT_NOTIFICATION_PREFS = {
   dailyDigest: true,
@@ -7,20 +9,6 @@ const DEFAULT_NOTIFICATION_PREFS = {
 };
 
 const ALL_NOTIFICATION_PREF_KEYS = Object.keys(DEFAULT_NOTIFICATION_PREFS);
-
-const DEFAULT_PERMISSIONS = {
-  releases: true,
-  roadmap: true,
-  tickets: true,
-  environments: true,
-  health: true,
-  features: true,
-  integrations: true,
-  issues: true,
-  tasks: true,
-};
-
-const ALL_PERMISSION_KEYS = Object.keys(DEFAULT_PERMISSIONS);
 
 /**
  * UserStore -- manages user records persisted in the `users` SQLite table.
@@ -73,7 +61,6 @@ class UserStore {
       name: name || key,
       picture: picture || null,
       role: 'user',
-      permissions: { ...DEFAULT_PERMISSIONS },
       notificationPrefs: { ...DEFAULT_NOTIFICATION_PREFS },
       lastLoginAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
@@ -105,10 +92,10 @@ class UserStore {
   }
 
   /**
-   * Update a user's role, permissions, and/or notification prefs.
+   * Update a user's role and/or notification prefs.
    *
    * @param {string} email
-   * @param {object} updates - { role?, permissions?, notificationPrefs? }
+   * @param {object} updates - { role?, notificationPrefs? }
    * @returns {object|null} updated user or null if not found
    */
   updateUser(email, updates) {
@@ -118,14 +105,6 @@ class UserStore {
 
     if (updates.role && (updates.role === 'admin' || updates.role === 'user')) {
       user.role = updates.role;
-    }
-
-    if (updates.permissions && typeof updates.permissions === 'object') {
-      for (const pKey of ALL_PERMISSION_KEYS) {
-        if (typeof updates.permissions[pKey] === 'boolean') {
-          user.permissions[pKey] = updates.permissions[pKey];
-        }
-      }
     }
 
     if (updates.notificationPrefs && typeof updates.notificationPrefs === 'object') {
@@ -143,61 +122,66 @@ class UserStore {
 
   /**
    * Get the effective role for an email.
-   * NECTAR_ADMINS env var is the primary admin source. If the email is
-   * listed there, they are always 'admin'. Otherwise check stored role.
-   * Default is 'user'.
+   * Compatibility shim: returns 'admin' if the user holds any role with
+   * 'user.admin' capability, otherwise 'user'. NECTAR_ADMINS env var is
+   * the primary admin source.
+   *
+   * TODO: Remove once all consumers use capability checks.
    *
    * @param {string} email
    * @returns {'admin'|'user'}
    */
   getRole(email) {
     if (!email) return 'user';
-    const key = email.toLowerCase();
-
-    // Primary: NECTAR_ADMINS env var
-    const envAdmins = (process.env.NECTAR_ADMINS || '')
-      .split(',')
-      .map(e => e.trim().toLowerCase())
-      .filter(Boolean);
-
-    if (envAdmins.length === 0) return 'admin'; // No admins configured = everyone is admin
-    if (envAdmins.includes(key)) return 'admin';
-
-    // Secondary: stored user role
-    const user = this.users.get(key);
-    if (user && user.role === 'admin') return 'admin';
-
-    return 'user';
+    const caps = this.getCapabilities(email);
+    return caps.includes('user.admin') ? 'admin' : 'user';
   }
 
   /**
-   * Get effective permissions for an email.
-   * Admins always get all permissions = true.
+   * Get the role IDs assigned to a user.
+   * @param {string} email
+   * @returns {string[]} array of role IDs (e.g. ['admin', 'viewer'])
+   */
+  getRoles(email) {
+    if (!email) return [];
+    const rows = this.db.prepare('SELECT roleId FROM user_roles WHERE email = ?')
+      .all(email.toLowerCase());
+    return rows.map(r => r.roleId);
+  }
+
+  /**
+   * Get the resolved capabilities for a user (union of all assigned roles).
+   * Break-glass users (NECTAR_ADMINS) get all capabilities regardless of DB state.
    *
    * @param {string} email
-   * @returns {object} permissions object
+   * @returns {string[]} de-duplicated array of capability IDs
    */
-  getPermissions(email) {
-    const role = this.getRole(email);
-    if (role === 'admin') {
-      // Admins get all permissions
-      return { ...DEFAULT_PERMISSIONS };
-    }
+  getCapabilities(email) {
+    if (!email) return [];
+    const key = email.toLowerCase();
 
-    const user = this.getUser(email);
-    if (user && user.permissions) {
-      // Fill in any missing permission keys with defaults
-      const perms = { ...DEFAULT_PERMISSIONS };
-      for (const pKey of ALL_PERMISSION_KEYS) {
-        if (typeof user.permissions[pKey] === 'boolean') {
-          perms[pKey] = user.permissions[pKey];
+    // Break-glass: NECTAR_ADMINS always get full capabilities
+    const breakGlass = getBreakGlassEmails();
+    if (breakGlass.size === 0) return getAllCapabilityIds(); // No admins = everyone gets all
+    if (breakGlass.has(key)) return getAllCapabilityIds();
+
+    // Resolve from DB: union of all assigned roles' capabilities
+    const rows = this.db.prepare(`
+      SELECT r.capabilities FROM user_roles ur
+      JOIN roles r ON r.id = ur.roleId
+      WHERE ur.email = ?
+    `).all(key);
+
+    const caps = new Set();
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.capabilities);
+        if (Array.isArray(parsed)) {
+          for (const c of parsed) caps.add(c);
         }
-      }
-      return perms;
+      } catch { /* ignore malformed */ }
     }
-
-    // No stored record -- default all true
-    return { ...DEFAULT_PERMISSIONS };
+    return Array.from(caps);
   }
 
   /**
@@ -210,12 +194,9 @@ class UserStore {
    */
   isEnvAdmin(email) {
     if (!email) return false;
-    const envAdmins = (process.env.NECTAR_ADMINS || '')
-      .split(',')
-      .map(e => e.trim().toLowerCase())
-      .filter(Boolean);
-    if (envAdmins.length === 0) return true;
-    return envAdmins.includes(email.toLowerCase());
+    const breakGlass = getBreakGlassEmails();
+    if (breakGlass.size === 0) return true;
+    return breakGlass.has(email.toLowerCase());
   }
 
   /**
@@ -227,13 +208,12 @@ class UserStore {
 
   _upsertRow(user) {
     this.db.prepare(`
-      INSERT INTO users (email, name, picture, role, permissions, notificationPrefs, lastLoginAt, createdAt)
-      VALUES (@email, @name, @picture, @role, @permissions, @notificationPrefs, @lastLoginAt, @createdAt)
+      INSERT INTO users (email, name, picture, role, notificationPrefs, lastLoginAt, createdAt)
+      VALUES (@email, @name, @picture, @role, @notificationPrefs, @lastLoginAt, @createdAt)
       ON CONFLICT(email) DO UPDATE SET
         name              = excluded.name,
         picture           = excluded.picture,
         role              = excluded.role,
-        permissions       = excluded.permissions,
         notificationPrefs = excluded.notificationPrefs,
         lastLoginAt       = excluded.lastLoginAt
     `).run({
@@ -241,7 +221,6 @@ class UserStore {
       name: user.name ?? null,
       picture: user.picture ?? null,
       role: user.role || 'user',
-      permissions: JSON.stringify(user.permissions || {}),
       notificationPrefs: JSON.stringify(user.notificationPrefs || {}),
       lastLoginAt: user.lastLoginAt ?? null,
       createdAt: user.createdAt,
@@ -252,12 +231,6 @@ class UserStore {
     try {
       const rows = this.db.prepare('SELECT * FROM users').all();
       for (const row of rows) {
-        const permissions = safeParseObj(row.permissions, DEFAULT_PERMISSIONS);
-        // Fill in any missing permission keys with default true
-        for (const pKey of ALL_PERMISSION_KEYS) {
-          if (typeof permissions[pKey] !== 'boolean') permissions[pKey] = true;
-        }
-
         const notificationPrefs = safeParseObj(row.notificationPrefs, DEFAULT_NOTIFICATION_PREFS);
         for (const nKey of ALL_NOTIFICATION_PREF_KEYS) {
           if (typeof notificationPrefs[nKey] !== 'boolean') notificationPrefs[nKey] = DEFAULT_NOTIFICATION_PREFS[nKey];
@@ -268,7 +241,6 @@ class UserStore {
           name: row.name,
           picture: row.picture,
           role: row.role,
-          permissions,
           notificationPrefs,
           lastLoginAt: row.lastLoginAt,
           createdAt: row.createdAt,

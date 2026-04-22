@@ -52,6 +52,33 @@ function createWebServer(services, config) {
     next();
   });
 
+  // ── Dev login route (before auth middleware) ──────────
+  // Visit /dev/login/viewer@test.com to set a session cookie as that user.
+  // Only available when NODE_ENV !== 'production'.
+  if (process.env.NODE_ENV !== 'production') {
+    const jwtLib = require('jsonwebtoken');
+    const jwtSec = process.env.JWT_SECRET || 'nectar-default-jwt-secret';
+    app.get('/dev/login/:email', (req, res) => {
+      const email = decodeURIComponent(req.params.email);
+      const user = userStore ? userStore.getUser(email) : null;
+      const name = user ? user.name : email;
+      const role = userStore ? userStore.getRole(email) : 'user';
+      const token = jwtLib.sign({ email, name, picture: null, domain: 'test.com', role }, jwtSec, { expiresIn: '7d' });
+      res.cookie('nectar_session', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000, path: '/' });
+      res.redirect('/');
+    });
+    app.get('/dev/users', (req, res) => {
+      const users = userStore ? userStore.listUsers() : [];
+      const html = ['<h2>Dev Login — Pick a user</h2><ul>'];
+      for (const u of users) {
+        const caps = userStore.getCapabilities(u.email);
+        html.push(`<li><a href="/dev/login/${encodeURIComponent(u.email)}">${u.name}</a> (${u.email}) — ${caps.length} capabilities</li>`);
+      }
+      html.push('</ul>');
+      res.send(html.join('\n'));
+    });
+  }
+
   // ── Auth routes (before auth middleware) ──────────────
   const { createAuthRoutes, createAuthMiddleware } = require('../api/auth');
   app.use('/api/auth', createAuthRoutes({ userStore }));
@@ -153,6 +180,26 @@ function createWebServer(services, config) {
     }
   }
 
+  /**
+   * Send a message only to WebSocket clients whose authenticated email
+   * is in the given set. Clients without a resolved email (e.g. dev mode
+   * with no JWT cookie) will not receive targeted messages — this is
+   * intentional for access-control events which should only reach
+   * identified users.
+   *
+   * @param {string[]} emails - target email addresses
+   * @param {object} data - message payload
+   */
+  function broadcastTo(emails, data) {
+    const targets = new Set(emails.map(e => e.toLowerCase()));
+    const msg = JSON.stringify(data);
+    for (const ws of clients) {
+      if (ws.readyState === 1 && ws._nectarEmail && targets.has(ws._nectarEmail)) {
+        ws.send(msg);
+      }
+    }
+  }
+
   // Server-side heartbeat: ping every 30s, terminate unresponsive clients
   const HEARTBEAT_INTERVAL = 30000;
   const heartbeatTimer = setInterval(() => {
@@ -167,9 +214,33 @@ function createWebServer(services, config) {
     }
   }, HEARTBEAT_INTERVAL);
 
-  wss.on('connection', (ws) => {
+  // Helper: resolve user email from JWT cookie in a WS upgrade request
+  const jwt = require('jsonwebtoken');
+  const jwtSecret = process.env.JWT_SECRET || 'nectar-default-jwt-secret';
+
+  function resolveWsEmail(request) {
+    // Try JWT cookie from the upgrade request
+    try {
+      const cookieHeader = request.headers && request.headers.cookie;
+      if (cookieHeader) {
+        const match = cookieHeader.split(';').find(c => c.trim().startsWith('nectar_session='));
+        if (match) {
+          const token = match.split('=').slice(1).join('=').trim();
+          const payload = jwt.verify(token, jwtSecret);
+          return payload.email ? payload.email.toLowerCase() : null;
+        }
+      }
+    } catch { /* invalid JWT — ignore */ }
+    return null;
+  }
+
+  wss.on('connection', (ws, upgradeRequest) => {
     let authenticated = !token;
     ws._nectarAlive = true;
+    ws._nectarEmail = null;
+
+    // Try to resolve email immediately from the upgrade request cookie
+    ws._nectarEmail = resolveWsEmail(upgradeRequest);
 
     const authTimeout = token ? setTimeout(() => {
       if (!authenticated) {
@@ -187,6 +258,8 @@ function createWebServer(services, config) {
           authenticated = true;
           if (authTimeout) clearTimeout(authTimeout);
           clients.add(ws);
+          // Auth message may include email
+          if (msg.email) ws._nectarEmail = msg.email.toLowerCase();
           ws.send(JSON.stringify({ type: 'auth', ok: true }));
           sendInitialState(ws);
         } else {
@@ -403,6 +476,7 @@ function createWebServer(services, config) {
     httpServer,
     wss,
     broadcast,
+    broadcastTo,
     close: () => {
       clearInterval(heartbeatTimer);
       httpServer.close();

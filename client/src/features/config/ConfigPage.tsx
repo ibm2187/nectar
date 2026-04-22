@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '../../api/client'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
-import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { NectarLoader } from '../../components/NectarLoader'
@@ -10,20 +9,22 @@ import { IntegrationsConfigPage } from '../integrations-config/IntegrationsConfi
 import { UpdatePage } from '../admin/UpdatePage'
 import { ReleaseTrainTab } from './ReleaseTrainTab'
 import { AlertRulesPanel } from '../incidents/AlertRulesPanel'
+import { AccessPage } from '../access/AccessPage'
+import { useAuthStore } from '../../stores/authStore'
 import { SortableHeader, useSortableData, useSortState } from '../../components/SortableHeader'
 import { lightenHex } from '../../lib/color-utils'
+import { CapGuard } from '../../components/CapGuard'
 
 // ── Tab types ─────────────────────────────────────────
 
-type Tab = 'display' | 'release-train' | 'api-keys' | 'users' | 'connections' | 'notifications' | 'logs' | 'backfills' | 'update'
+type Tab = 'display' | 'release-train' | 'connections' | 'notifications' | 'access' | 'logs' | 'backfills' | 'update'
 
-const TABS: { key: Tab; label: string }[] = [
+const BASE_TABS: { key: Tab; label: string; cap?: string }[] = [
   { key: 'display', label: 'Display' },
   { key: 'release-train', label: 'Release Train' },
-  { key: 'api-keys', label: 'API Keys' },
-  { key: 'users', label: 'Users' },
   { key: 'connections', label: 'Connections' },
   { key: 'notifications', label: 'Notifications' },
+  { key: 'access', label: 'Access', cap: 'user.admin' },
   { key: 'logs', label: 'Logs' },
   { key: 'backfills', label: 'Backfills' },
   { key: 'update', label: 'Update' },
@@ -45,6 +46,10 @@ interface ThemeConfig {
 
 export function ConfigPage() {
   const [activeTab, setActiveTab] = useState<Tab>('display')
+  const hasCap = useAuthStore(s => s.hasCap)
+
+  // Filter tabs by capability
+  const tabs = BASE_TABS.filter(t => !t.cap || hasCap(t.cap))
 
   return (
     <div className="w-full space-y-6 max-w-4xl">
@@ -52,7 +57,7 @@ export function ConfigPage() {
       <div>
         <h2 className="text-2xl font-bold">Config</h2>
         <div className="flex items-center gap-1 mt-3">
-          {TABS.map(tab => (
+          {tabs.map(tab => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
@@ -77,10 +82,9 @@ export function ConfigPage() {
         </div>
       )}
       {activeTab === 'release-train' && <ReleaseTrainTab />}
-      {activeTab === 'api-keys' && <ApiKeysSection />}
-      {activeTab === 'users' && <UsersTab />}
       {activeTab === 'connections' && <IntegrationsConfigPage />}
       {activeTab === 'notifications' && <NotificationsTab />}
+      {activeTab === 'access' && <AccessPage embedded />}
       {activeTab === 'logs' && <LogsTab />}
       {activeTab === 'backfills' && <BackfillsTab />}
       {activeTab === 'update' && <UpdatePage />}
@@ -272,13 +276,19 @@ function ThemesTab() {
         <div className="flex items-center gap-2">
           {saveMsg && <span className="text-xs text-green-400">{saveMsg}</span>}
           {error && <span className="text-xs text-destructive">{error}</span>}
-          <Button variant="outline" size="sm" onClick={autoCategorize} disabled={saving || autoLoading}>
-            {autoLoading ? 'Categorizing...' : 'Auto-categorize'}
-          </Button>
-          <Button variant="outline" size="sm" onClick={load} disabled={saving}>Reset</Button>
-          <Button size="sm" onClick={save} disabled={saving || !dirty}>
-            {saving ? 'Saving...' : dirty ? 'Save Changes' : 'Saved'}
-          </Button>
+          <CapGuard cap="config.write">
+            <Button variant="outline" size="sm" onClick={autoCategorize} disabled={saving || autoLoading}>
+              {autoLoading ? 'Categorizing...' : 'Auto-categorize'}
+            </Button>
+          </CapGuard>
+          <CapGuard cap="config.write">
+            <Button variant="outline" size="sm" onClick={load} disabled={saving}>Reset</Button>
+          </CapGuard>
+          <CapGuard cap="config.write">
+            <Button size="sm" onClick={save} disabled={saving || !dirty}>
+              {saving ? 'Saving...' : dirty ? 'Save Changes' : 'Saved'}
+            </Button>
+          </CapGuard>
         </div>
       </div>
 
@@ -287,7 +297,9 @@ function ThemesTab() {
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">Roadmap Themes ({config.themes.length})</CardTitle>
-            <Button variant="outline" size="sm" onClick={addTheme}>+ Add Theme</Button>
+            <CapGuard cap="config.write">
+              <Button variant="outline" size="sm" onClick={addTheme}>+ Add Theme</Button>
+            </CapGuard>
           </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -328,16 +340,18 @@ function ThemesTab() {
                       />
                     </td>
                     <td className="px-3 py-2">
-                      <button
-                        type="button"
-                        onClick={() => deleteTheme(i)}
-                        className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
-                        title="Delete this theme"
-                      >
-                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                        </svg>
-                      </button>
+                      <CapGuard cap="config.write">
+                        <button
+                          type="button"
+                          onClick={() => deleteTheme(i)}
+                          className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
+                          title="Delete this theme"
+                        >
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                          </svg>
+                        </button>
+                      </CapGuard>
                     </td>
                   </tr>
                 ))}
@@ -502,10 +516,14 @@ function CustomersTab() {
         <div className="flex items-center gap-2">
           {saveMsg && <span className="text-xs text-green-400">{saveMsg}</span>}
           {error && <span className="text-xs text-destructive">{error}</span>}
-          <Button variant="outline" size="sm" onClick={load}>Reset</Button>
-          <Button size="sm" onClick={saveAll} disabled={dirty.size === 0 || savingId !== null}>
-            {savingId ? 'Saving...' : dirty.size > 0 ? `Save ${dirty.size} change${dirty.size > 1 ? 's' : ''}` : 'Saved'}
-          </Button>
+          <CapGuard cap="config.write">
+            <Button variant="outline" size="sm" onClick={load}>Reset</Button>
+          </CapGuard>
+          <CapGuard cap="config.write">
+            <Button size="sm" onClick={saveAll} disabled={dirty.size === 0 || savingId !== null}>
+              {savingId ? 'Saving...' : dirty.size > 0 ? `Save ${dirty.size} change${dirty.size > 1 ? 's' : ''}` : 'Saved'}
+            </Button>
+          </CapGuard>
         </div>
       </div>
 
@@ -713,522 +731,6 @@ function UnmappedChip({ component, themes, onAssign }: {
         </>
       )}
     </div>
-  )
-}
-
-// ── Users Tab ────────────────────────────────────────
-
-const PERMISSION_KEYS = [
-  { key: 'releases', label: 'Releases' },
-  { key: 'roadmap', label: 'Roadmap' },
-  { key: 'tickets', label: 'Tickets' },
-  { key: 'environments', label: 'Environments' },
-  { key: 'features', label: 'Features' },
-  { key: 'integrations', label: 'Integrations' },
-  { key: 'issues', label: 'Issues' },
-  { key: 'tasks', label: 'Tasks' },
-] as const
-
-interface UserRecord {
-  email: string
-  name: string
-  picture: string | null
-  role: 'admin' | 'user'
-  permissions: Record<string, boolean>
-  notificationPrefs?: Record<string, boolean>
-  isEnvAdmin: boolean
-  lastLoginAt: string | null
-  createdAt: string
-}
-
-const NOTIFICATION_PREF_KEYS = [
-  { key: 'dailyDigest', label: 'Daily Digest DM' },
-  { key: 'buildFailures', label: 'Build Failure DMs' },
-] as const
-
-function formatRelativeTime(dateStr: string | null): string {
-  if (!dateStr) return 'Never'
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 30) return `${days}d ago`
-  const months = Math.floor(days / 30)
-  return `${months}mo ago`
-}
-
-function countPermissions(perms: Record<string, boolean>): number {
-  return PERMISSION_KEYS.filter(p => perms[p.key]).length
-}
-
-function UsersTab() {
-  const [users, setUsers] = useState<UserRecord[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [editingEmail, setEditingEmail] = useState<string | null>(null)
-  const [editRole, setEditRole] = useState<'admin' | 'user'>('user')
-  const [editPermissions, setEditPermissions] = useState<Record<string, boolean>>({})
-  const [editNotifPrefs, setEditNotifPrefs] = useState<Record<string, boolean>>({})
-  const [saving, setSaving] = useState(false)
-  const [saveMsg, setSaveMsg] = useState<string | null>(null)
-
-  type UserSortKey = 'user' | 'role' | 'lastLogin' | 'permissions'
-  const [sortState, onSort] = useSortState<UserSortKey>('lastLogin', 'desc')
-  const accessors = useMemo(() => ({
-    user:        (u: UserRecord) => u.name || u.email,
-    role:        (u: UserRecord) => u.role,
-    lastLogin:   (u: UserRecord) => u.lastLoginAt,
-    permissions: (u: UserRecord) => u.role === 'admin' ? 99 : countPermissions(u.permissions),
-  }), [])
-  const sortedUsers = useSortableData<UserRecord, UserSortKey>(users, sortState, accessors)
-
-  async function loadUsers() {
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await apiFetch<UserRecord[]>('/users')
-      setUsers(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load users')
-      setUsers([])
-    }
-    setLoading(false)
-  }
-
-  useEffect(() => { loadUsers() }, [])
-
-  function startEdit(user: UserRecord) {
-    setEditingEmail(user.email)
-    setEditRole(user.role)
-    setEditPermissions({ ...user.permissions })
-    setEditNotifPrefs({ ...(user.notificationPrefs || { dailyDigest: true, buildFailures: true }) })
-    setSaveMsg(null)
-  }
-
-  function cancelEdit() {
-    setEditingEmail(null)
-    setSaveMsg(null)
-  }
-
-  async function saveUser() {
-    if (!editingEmail) return
-    setSaving(true)
-    setSaveMsg(null)
-    setError(null)
-    try {
-      const updated = await apiFetch<UserRecord>(`/users/${encodeURIComponent(editingEmail)}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ role: editRole, permissions: editPermissions, notificationPrefs: editNotifPrefs }),
-      })
-      setUsers(prev => prev.map(u => u.email === updated.email ? updated : u))
-      setEditingEmail(null)
-      setSaveMsg('User updated')
-      setTimeout(() => setSaveMsg(null), 3000)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update user')
-    }
-    setSaving(false)
-  }
-
-  function togglePermission(key: string) {
-    setEditPermissions(prev => ({ ...prev, [key]: !prev[key] }))
-  }
-
-  function toggleNotifPref(key: string) {
-    setEditNotifPrefs(prev => ({ ...prev, [key]: !prev[key] }))
-  }
-
-  if (loading) {
-    return <NectarLoader size="lg" message="Loading users..." className="mt-32" />
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          Manage user roles and per-page permissions. Users are recorded on login.
-        </p>
-        <div className="flex items-center gap-2">
-          {saveMsg && <span className="text-xs text-green-400">{saveMsg}</span>}
-          {error && <span className="text-xs text-destructive">{error}</span>}
-        </div>
-      </div>
-
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Users ({users.length})</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left">
-                  <SortableHeader label="User"        sortKey="user"        state={sortState} onSort={k => onSort(k as UserSortKey)} />
-                  <SortableHeader label="Role"        sortKey="role"        state={sortState} onSort={k => onSort(k as UserSortKey)} className="w-24" />
-                  <SortableHeader label="Last Login"  sortKey="lastLogin"   state={sortState} onSort={k => onSort(k as UserSortKey)} className="w-28" />
-                  <SortableHeader label="Permissions" sortKey="permissions" state={sortState} onSort={k => onSort(k as UserSortKey)} className="w-28" />
-                  <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-16"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedUsers.map(user => (
-                  <UserRow
-                    key={user.email}
-                    user={user}
-                    isEditing={editingEmail === user.email}
-                    editRole={editRole}
-                    editPermissions={editPermissions}
-                    editNotifPrefs={editNotifPrefs}
-                    saving={saving}
-                    onStartEdit={() => startEdit(user)}
-                    onCancelEdit={cancelEdit}
-                    onSave={saveUser}
-                    onRoleChange={setEditRole}
-                    onTogglePermission={togglePermission}
-                    onToggleNotifPref={toggleNotifPref}
-                  />
-                ))}
-                {users.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="px-3 py-8 text-center text-muted-foreground text-xs italic">
-                      No users have logged in yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
-
-function UserRow({ user, isEditing, editRole, editPermissions, editNotifPrefs, saving, onStartEdit, onCancelEdit, onSave, onRoleChange, onTogglePermission, onToggleNotifPref }: {
-  user: UserRecord
-  isEditing: boolean
-  editRole: 'admin' | 'user'
-  editPermissions: Record<string, boolean>
-  editNotifPrefs: Record<string, boolean>
-  saving: boolean
-  onStartEdit: () => void
-  onCancelEdit: () => void
-  onSave: () => void
-  onRoleChange: (role: 'admin' | 'user') => void
-  onTogglePermission: (key: string) => void
-  onToggleNotifPref: (key: string) => void
-}) {
-  const isAdmin = user.role === 'admin'
-  const permCount = countPermissions(user.permissions)
-  const totalPerms = PERMISSION_KEYS.length
-
-  return (
-    <>
-      <tr className={cn(
-        "border-b border-border/30 hover:bg-accent/20",
-        isEditing && "bg-accent/10"
-      )}>
-        <td className="px-3 py-2">
-          <div className="flex items-center gap-2.5">
-            {user.picture ? (
-              <img
-                src={user.picture}
-                alt=""
-                className="w-6 h-6 rounded-full shrink-0"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <div className="w-6 h-6 rounded-full bg-accent shrink-0 flex items-center justify-center text-xs font-medium">
-                {(user.name || user.email)[0].toUpperCase()}
-              </div>
-            )}
-            <div className="min-w-0">
-              <p className="text-sm font-medium truncate">{user.name}</p>
-              <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-            </div>
-          </div>
-        </td>
-        <td className="px-3 py-2">
-          {isAdmin ? (
-            <Badge variant="default" className="text-[10px]">Admin</Badge>
-          ) : (
-            <span className="text-xs text-muted-foreground">User</span>
-          )}
-        </td>
-        <td className="px-3 py-2 text-xs text-muted-foreground">
-          {formatRelativeTime(user.lastLoginAt)}
-        </td>
-        <td className="px-3 py-2 text-xs text-muted-foreground">
-          {isAdmin ? (
-            <span>All pages</span>
-          ) : (
-            <span>{permCount}/{totalPerms} pages</span>
-          )}
-        </td>
-        <td className="px-3 py-2">
-          {!isEditing && (
-            <button
-              onClick={onStartEdit}
-              className="text-xs text-primary hover:text-primary/80 transition-colors"
-            >
-              Edit
-            </button>
-          )}
-          {isEditing && (
-            <button
-              onClick={onCancelEdit}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Cancel
-            </button>
-          )}
-        </td>
-      </tr>
-
-      {/* Expanded edit row */}
-      {isEditing && (
-        <tr className="border-b border-border/30 bg-accent/5">
-          <td colSpan={5} className="px-3 py-3">
-            <div className="space-y-3">
-              {/* Permission toggles */}
-              <div className="grid grid-cols-4 gap-x-6 gap-y-2">
-                {PERMISSION_KEYS.map(p => (
-                  <label key={p.key} className="flex items-center gap-2 cursor-pointer group">
-                    <input
-                      type="checkbox"
-                      checked={editRole === 'admin' || editPermissions[p.key] !== false}
-                      disabled={editRole === 'admin'}
-                      onChange={() => onTogglePermission(p.key)}
-                      className="rounded border-border"
-                    />
-                    <span className={cn(
-                      "text-xs",
-                      editRole === 'admin' ? "text-muted-foreground" : "group-hover:text-foreground"
-                    )}>
-                      {p.label}
-                    </span>
-                  </label>
-                ))}
-              </div>
-
-              {/* Notification preferences */}
-              <div>
-                <p className="text-xs text-muted-foreground mb-1.5">Slack Notifications</p>
-                <div className="grid grid-cols-4 gap-x-6 gap-y-2">
-                  {NOTIFICATION_PREF_KEYS.map(p => (
-                    <label key={p.key} className="flex items-center gap-2 cursor-pointer group">
-                      <input
-                        type="checkbox"
-                        checked={editNotifPrefs[p.key] !== false}
-                        onChange={() => onToggleNotifPref(p.key)}
-                        className="rounded border-border"
-                      />
-                      <span className="text-xs group-hover:text-foreground">{p.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Role + Save */}
-              <div className="flex items-center gap-3 pt-1">
-                <label className="text-xs text-muted-foreground">Role:</label>
-                <select
-                  value={editRole}
-                  onChange={e => onRoleChange(e.target.value as 'admin' | 'user')}
-                  className="h-7 px-2 rounded border border-border bg-background text-xs"
-                >
-                  <option value="user">User</option>
-                  <option value="admin">Admin</option>
-                </select>
-                {editRole === 'admin' && (
-                  <span className="text-[10px] text-muted-foreground">
-                    Admins have all permissions
-                  </span>
-                )}
-                <div className="flex-1" />
-                <Button size="sm" onClick={onSave} disabled={saving}>
-                  {saving ? 'Saving...' : 'Save'}
-                </Button>
-              </div>
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
-  )
-}
-
-// ── API Keys section ──────────────────────────────────
-
-interface ApiKey {
-  id: string
-  label: string
-  createdAt: string
-  createdBy: string | null
-  lastUsedAt: string | null
-}
-
-function ApiKeysSection() {
-  const [keys, setKeys] = useState<ApiKey[]>([])
-  const [loading, setLoading] = useState(true)
-  const [newLabel, setNewLabel] = useState('')
-  const [creating, setCreating] = useState(false)
-  const [newRawKey, setNewRawKey] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  type ApiKeySortKey = 'label' | 'created' | 'lastUsed'
-  const [sortState, onSort] = useSortState<ApiKeySortKey>('created', 'desc')
-  const accessors = useMemo(() => ({
-    label:    (k: ApiKey) => k.label,
-    created:  (k: ApiKey) => k.createdAt,
-    lastUsed: (k: ApiKey) => k.lastUsedAt,
-  }), [])
-  const sortedKeys = useSortableData<ApiKey, ApiKeySortKey>(keys, sortState, accessors)
-
-  async function loadKeys() {
-    setLoading(true)
-    try {
-      const data = await apiFetch<ApiKey[]>('/keys')
-      setKeys(data)
-    } catch {
-      // API keys endpoint may not exist yet — silently handle
-      setKeys([])
-    }
-    setLoading(false)
-  }
-
-  useEffect(() => { loadKeys() }, [])
-
-  async function createKey() {
-    if (!newLabel.trim()) return
-    setCreating(true)
-    setError(null)
-    setNewRawKey(null)
-    try {
-      const result = await apiFetch<{ id: string; rawKey: string; label: string; createdAt: string }>('/keys', {
-        method: 'POST',
-        body: JSON.stringify({ label: newLabel.trim() }),
-      })
-      setNewRawKey(result.rawKey)
-      setNewLabel('')
-      loadKeys()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create key')
-    }
-    setCreating(false)
-  }
-
-  async function revokeKey(id: string) {
-    try {
-      await apiFetch(`/keys/${id}`, { method: 'DELETE' })
-      setKeys(prev => prev.filter(k => k.id !== id))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to revoke key')
-    }
-  }
-
-  function formatDate(d: string | null) {
-    if (!d) return 'Never'
-    return new Date(d).toLocaleDateString('en-US', {
-      month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',
-    })
-  }
-
-  return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">API Keys</CardTitle>
-        <p className="text-xs text-muted-foreground">
-          Create API keys for service-to-service authentication (Hive, MCP clients).
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {/* Create new key */}
-        <div className="flex items-center gap-2">
-          <Input
-            placeholder="Key label (e.g., hive-production)"
-            value={newLabel}
-            onChange={e => setNewLabel(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && createKey()}
-            className="h-8 text-sm max-w-xs"
-          />
-          <Button size="sm" onClick={createKey} disabled={creating || !newLabel.trim()}>
-            {creating ? 'Creating...' : 'Create Key'}
-          </Button>
-        </div>
-
-        {error && <p className="text-xs text-destructive">{error}</p>}
-
-        {/* Show newly created key (one time) */}
-        {newRawKey && (
-          <div className="rounded-md border border-green-500/30 bg-green-500/5 p-3 space-y-2">
-            <p className="text-xs text-green-400 font-medium">
-              Key created! Copy it now — it will not be shown again.
-            </p>
-            <div className="flex items-center gap-2">
-              <code className="text-xs font-mono bg-background px-2 py-1 rounded border flex-1 break-all select-all">
-                {newRawKey}
-              </code>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  navigator.clipboard.writeText(newRawKey)
-                }}
-              >
-                Copy
-              </Button>
-            </div>
-            <Button variant="outline" size="sm" onClick={() => setNewRawKey(null)}>
-              Dismiss
-            </Button>
-          </div>
-        )}
-
-        {/* Existing keys */}
-        {loading ? (
-          <p className="text-xs text-muted-foreground">Loading...</p>
-        ) : keys.length === 0 ? (
-          <p className="text-xs text-muted-foreground italic">No API keys created yet.</p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b text-left">
-                <SortableHeader label="Label"     sortKey="label"    state={sortState} onSort={k => onSort(k as ApiKeySortKey)} className="px-2 py-1.5" />
-                <SortableHeader label="Created"   sortKey="created"  state={sortState} onSort={k => onSort(k as ApiKeySortKey)} className="px-2 py-1.5" />
-                <SortableHeader label="Last Used" sortKey="lastUsed" state={sortState} onSort={k => onSort(k as ApiKeySortKey)} className="px-2 py-1.5" />
-                <th className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-16"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedKeys.map(key => (
-                <tr key={key.id} className="border-b border-border/30 hover:bg-accent/20">
-                  <td className="px-2 py-1.5">
-                    <span className="font-medium">{key.label}</span>
-                    {key.createdBy && (
-                      <span className="text-xs text-muted-foreground ml-2">by {key.createdBy}</span>
-                    )}
-                  </td>
-                  <td className="px-2 py-1.5 text-xs text-muted-foreground">{formatDate(key.createdAt)}</td>
-                  <td className="px-2 py-1.5 text-xs text-muted-foreground">{formatDate(key.lastUsedAt)}</td>
-                  <td className="px-2 py-1.5">
-                    <button
-                      onClick={() => revokeKey(key.id)}
-                      className="text-xs text-destructive hover:text-destructive/80 transition-colors"
-                    >
-                      Revoke
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </CardContent>
-    </Card>
   )
 }
 
@@ -1543,9 +1045,11 @@ function NotificationsTab() {
                 <option key={e.slackId} value={e.slackId}>{e.name} (@{e.username})</option>
               ))}
             </select>
-            <Button variant="outline" size="sm" onClick={testDigest} disabled={!testUser || testSending || !settings.enabled}>
-              {testSending ? 'Sending...' : 'Send Test'}
-            </Button>
+            <CapGuard cap="config.write">
+              <Button variant="outline" size="sm" onClick={testDigest} disabled={!testUser || testSending || !settings.enabled}>
+                {testSending ? 'Sending...' : 'Send Test'}
+              </Button>
+            </CapGuard>
           </div>
           {testResult && <p className="text-xs text-muted-foreground">{testResult}</p>}
         </CardContent>
@@ -1559,7 +1063,9 @@ function NotificationsTab() {
               <CardTitle className="text-base">
                 People Directory ({directory.entries.length} loaded)
               </CardTitle>
-              <Button variant="outline" size="sm" onClick={reloadDirectory}>Reload</Button>
+              <CapGuard cap="config.write">
+                <Button variant="outline" size="sm" onClick={reloadDirectory}>Reload</Button>
+              </CapGuard>
             </div>
           </CardHeader>
           <CardContent className="p-0">
@@ -1943,13 +1449,15 @@ function BackfillsTab() {
           </p>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Button
-            size="sm"
-            onClick={() => runBackfill('Datadog Impact', '/admin/datadog/backfill')}
-            disabled={running}
-          >
-            {running ? 'Running...' : 'Run Datadog Backfill'}
-          </Button>
+          <CapGuard cap="system.admin">
+            <Button
+              size="sm"
+              onClick={() => runBackfill('Datadog Impact', '/admin/datadog/backfill')}
+              disabled={running}
+            >
+              {running ? 'Running...' : 'Run Datadog Backfill'}
+            </Button>
+          </CapGuard>
 
           {error && (
             <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">

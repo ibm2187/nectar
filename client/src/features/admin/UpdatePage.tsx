@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/ca
 import { Button } from '../../components/ui/button'
 import { NectarLoader } from '../../components/NectarLoader'
 import { cn } from '../../lib/utils'
+import { CapGuard } from '../../components/CapGuard'
 
 interface VersionInfo {
   branch: string
@@ -156,29 +157,35 @@ export function UpdatePage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center gap-3">
-            <Button
-              size="sm"
-              onClick={handlePullAndRestart}
-              disabled={pulling || restarting}
-            >
-              {pulling ? 'Updating...' : restarting ? 'Restarting...' : 'Update & Restart'}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handlePull()}
-              disabled={pulling || restarting}
-            >
-              {pulling ? 'Updating...' : 'Update Only'}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleRestart}
-              disabled={pulling || restarting}
-            >
-              {restarting ? 'Restarting...' : 'Restart Only'}
-            </Button>
+            <CapGuard cap="system.admin">
+              <Button
+                size="sm"
+                onClick={handlePullAndRestart}
+                disabled={pulling || restarting}
+              >
+                {pulling ? 'Updating...' : restarting ? 'Restarting...' : 'Update & Restart'}
+              </Button>
+            </CapGuard>
+            <CapGuard cap="system.admin">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handlePull()}
+                disabled={pulling || restarting}
+              >
+                {pulling ? 'Updating...' : 'Update Only'}
+              </Button>
+            </CapGuard>
+            <CapGuard cap="system.admin">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRestart}
+                disabled={pulling || restarting}
+              >
+                {restarting ? 'Restarting...' : 'Restart Only'}
+              </Button>
+            </CapGuard>
             <Button
               variant="outline"
               size="sm"

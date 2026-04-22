@@ -14,6 +14,17 @@ describe('UserStore', () => {
     delete process.env.NECTAR_ADMINS;
 
     db = createTestDb();
+    // Seed roles so capability-based methods work
+    const now = new Date().toISOString();
+    const allCaps = JSON.stringify([
+      'config.write', 'release.write', 'environment.write',
+      'sync.trigger', 'task.write', 'notify.send', 'user.admin', 'system.admin',
+    ]);
+    db.prepare(`INSERT OR IGNORE INTO roles (id, name, description, capabilities, system, createdAt, updatedAt)
+      VALUES ('admin', 'Admin', 'Full access', ?, 1, ?, ?)`).run(allCaps, now, now);
+    db.prepare(`INSERT OR IGNORE INTO roles (id, name, description, capabilities, system, createdAt, updatedAt)
+      VALUES ('viewer', 'Viewer', 'Read-only', '[]', 1, ?, ?)`).run(now, now);
+
     store = new UserStore({ db });
   });
 
@@ -34,17 +45,9 @@ describe('UserStore', () => {
       expect(user.createdAt).toBeTruthy();
     });
 
-    it('sets default permissions on new user (all pages enabled)', () => {
+    it('new user does not have permissions field (removed in v13)', () => {
       const user = store.upsertOnLogin('new@test.com', 'New User', null);
-
-      expect(user.permissions.releases).toBe(true);
-      expect(user.permissions.roadmap).toBe(true);
-      expect(user.permissions.tickets).toBe(true);
-      expect(user.permissions.environments).toBe(true);
-      expect(user.permissions.features).toBe(true);
-      expect(user.permissions.integrations).toBe(true);
-      expect(user.permissions.issues).toBe(true);
-      expect(user.permissions.tasks).toBe(true);
+      expect(user.permissions).toBeUndefined();
     });
 
     it('updates existing user on subsequent login', () => {
@@ -55,11 +58,8 @@ describe('UserStore', () => {
 
       expect(updated.name).toBe('Updated Name');
       expect(updated.picture).toBe('https://new.pic');
-      // lastLoginAt is always updated (even if same ms, it was called)
       expect(updated.lastLoginAt).toBeTruthy();
-      // createdAt should not change
       expect(updated.createdAt).toBe(firstCreatedAt);
-      // Should still be same user record (1 user total)
       expect(store.listUsers()).toHaveLength(1);
     });
 
@@ -127,7 +127,6 @@ describe('UserStore', () => {
 
     it('returns users sorted by lastLoginAt descending', () => {
       store.upsertOnLogin('alice@test.com', 'Alice', null);
-      // Manually set Alice's lastLoginAt to an older timestamp
       const alice = store.getUser('alice@test.com');
       alice.lastLoginAt = '2026-01-01T00:00:00.000Z';
 
@@ -166,40 +165,6 @@ describe('UserStore', () => {
       expect(store.getUser('user@test.com').role).toBe('user');
     });
 
-    it('updates specific permissions', () => {
-      store.upsertOnLogin('user@test.com', 'Test', null);
-      store.updateUser('user@test.com', {
-        permissions: { releases: false, roadmap: false },
-      });
-
-      const user = store.getUser('user@test.com');
-      expect(user.permissions.releases).toBe(false);
-      expect(user.permissions.roadmap).toBe(false);
-      // Unchanged permissions should remain true
-      expect(user.permissions.tickets).toBe(true);
-      expect(user.permissions.environments).toBe(true);
-    });
-
-    it('ignores unknown permission keys', () => {
-      store.upsertOnLogin('user@test.com', 'Test', null);
-      store.updateUser('user@test.com', {
-        permissions: { unknownPage: true },
-      });
-
-      const user = store.getUser('user@test.com');
-      expect(user.permissions.unknownPage).toBeUndefined();
-    });
-
-    it('ignores non-boolean permission values', () => {
-      store.upsertOnLogin('user@test.com', 'Test', null);
-      store.updateUser('user@test.com', {
-        permissions: { releases: 'yes' },
-      });
-
-      // Should remain the default true
-      expect(store.getUser('user@test.com').permissions.releases).toBe(true);
-    });
-
     it('returns null for unknown user', () => {
       expect(store.updateUser('nonexistent@test.com', { role: 'admin' })).toBeNull();
     });
@@ -213,7 +178,7 @@ describe('UserStore', () => {
     });
   });
 
-  describe('getRole', () => {
+  describe('getRole (compatibility shim)', () => {
     it('returns admin when email is in NECTAR_ADMINS env var', () => {
       process.env.NECTAR_ADMINS = 'admin@test.com, other@test.com';
       expect(store.getRole('admin@test.com')).toBe('admin');
@@ -229,22 +194,24 @@ describe('UserStore', () => {
       expect(store.getRole('anyone@test.com')).toBe('admin');
     });
 
-    it('returns user role from stored record when not in env admins', () => {
+    it('returns user when not in env admins and no admin role assigned', () => {
       process.env.NECTAR_ADMINS = 'admin@test.com';
       store.upsertOnLogin('user@test.com', 'User', null);
 
       expect(store.getRole('user@test.com')).toBe('user');
     });
 
-    it('returns admin from stored role even when not in NECTAR_ADMINS', () => {
+    it('returns admin when user has admin role assigned in user_roles', () => {
       process.env.NECTAR_ADMINS = 'admin@test.com';
       store.upsertOnLogin('promoted@test.com', 'Promoted', null);
-      store.updateUser('promoted@test.com', { role: 'admin' });
+      // Assign admin role via user_roles table
+      db.prepare(`INSERT INTO user_roles (email, roleId, grantedBy, grantedAt)
+        VALUES ('promoted@test.com', 'admin', 'test', ?)`).run(new Date().toISOString());
 
       expect(store.getRole('promoted@test.com')).toBe('admin');
     });
 
-    it('defaults to user when not in env admins and no stored record', () => {
+    it('defaults to user when not in env admins and no roles assigned', () => {
       process.env.NECTAR_ADMINS = 'admin@test.com';
       expect(store.getRole('unknown@test.com')).toBe('user');
     });
@@ -261,54 +228,95 @@ describe('UserStore', () => {
     });
   });
 
-  describe('getPermissions', () => {
-    it('returns all permissions true for admins', () => {
-      process.env.NECTAR_ADMINS = 'admin@test.com';
-      const perms = store.getPermissions('admin@test.com');
-
-      expect(perms.releases).toBe(true);
-      expect(perms.roadmap).toBe(true);
-      expect(perms.tickets).toBe(true);
-      expect(perms.environments).toBe(true);
-      expect(perms.features).toBe(true);
-      expect(perms.integrations).toBe(true);
-      expect(perms.issues).toBe(true);
-      expect(perms.tasks).toBe(true);
-    });
-
-    it('returns stored permissions for regular users', () => {
-      process.env.NECTAR_ADMINS = 'admin@test.com';
+  describe('getRoles', () => {
+    it('returns role IDs for a user with one role', () => {
       store.upsertOnLogin('user@test.com', 'User', null);
-      store.updateUser('user@test.com', {
-        permissions: { releases: false, roadmap: false },
-      });
+      db.prepare(`INSERT INTO user_roles (email, roleId, grantedBy, grantedAt)
+        VALUES ('user@test.com', 'viewer', 'test', ?)`).run(new Date().toISOString());
 
-      const perms = store.getPermissions('user@test.com');
-      expect(perms.releases).toBe(false);
-      expect(perms.roadmap).toBe(false);
-      expect(perms.tickets).toBe(true); // default
+      expect(store.getRoles('user@test.com')).toEqual(['viewer']);
     });
 
-    it('returns default permissions for unknown users', () => {
-      process.env.NECTAR_ADMINS = 'admin@test.com';
-      const perms = store.getPermissions('unknown@test.com');
-
-      // Unknown users get all defaults (all true)
-      expect(perms.releases).toBe(true);
-      expect(perms.roadmap).toBe(true);
-    });
-
-    it('fills in missing permission keys with defaults', () => {
-      process.env.NECTAR_ADMINS = 'admin@test.com';
+    it('returns role IDs for a user with multiple roles', () => {
       store.upsertOnLogin('user@test.com', 'User', null);
-      // Simulate a user with only some permissions stored
-      const user = store.getUser('user@test.com');
-      user.permissions = { releases: false }; // missing other keys
+      const now = new Date().toISOString();
+      db.prepare(`INSERT INTO user_roles (email, roleId, grantedBy, grantedAt)
+        VALUES ('user@test.com', 'admin', 'test', ?)`).run(now);
+      db.prepare(`INSERT INTO user_roles (email, roleId, grantedBy, grantedAt)
+        VALUES ('user@test.com', 'viewer', 'test', ?)`).run(now);
 
-      const perms = store.getPermissions('user@test.com');
-      expect(perms.releases).toBe(false);
-      expect(perms.roadmap).toBe(true); // filled in as default
-      expect(perms.tickets).toBe(true);
+      const roles = store.getRoles('user@test.com');
+      expect(roles).toHaveLength(2);
+      expect(roles).toContain('admin');
+      expect(roles).toContain('viewer');
+    });
+
+    it('returns empty array for user with no roles', () => {
+      expect(store.getRoles('noroles@test.com')).toEqual([]);
+    });
+
+    it('returns empty array for null email', () => {
+      expect(store.getRoles(null)).toEqual([]);
+    });
+  });
+
+  describe('getCapabilities', () => {
+    it('returns all capabilities for break-glass user', () => {
+      process.env.NECTAR_ADMINS = 'admin@test.com';
+      const caps = store.getCapabilities('admin@test.com');
+      expect(caps).not.toContain('config.read');
+      expect(caps).toContain('user.admin');
+      expect(caps).toContain('system.admin');
+      expect(caps).toHaveLength(8);
+    });
+
+    it('returns all capabilities when no NECTAR_ADMINS configured', () => {
+      delete process.env.NECTAR_ADMINS;
+      const caps = store.getCapabilities('anyone@test.com');
+      expect(caps).toHaveLength(8);
+    });
+
+    it('returns capabilities union for user with multiple roles', () => {
+      process.env.NECTAR_ADMINS = 'superadmin@test.com';
+      const now = new Date().toISOString();
+      db.prepare(`INSERT INTO roles (id, name, capabilities, system, createdAt, updatedAt)
+        VALUES ('release_lead', 'Release Lead', '["release.write","notify.send"]', 0, ?, ?)`).run(now, now);
+
+      db.prepare(`INSERT INTO user_roles (email, roleId, grantedBy, grantedAt)
+        VALUES ('multi@test.com', 'viewer', 'test', ?)`).run(now);
+      db.prepare(`INSERT INTO user_roles (email, roleId, grantedBy, grantedAt)
+        VALUES ('multi@test.com', 'release_lead', 'test', ?)`).run(now);
+
+      const caps = store.getCapabilities('multi@test.com');
+      expect(caps).toContain('release.write'); // from release_lead
+      expect(caps).toContain('notify.send'); // from release_lead
+      expect(caps).not.toContain('user.admin'); // not in either role
+    });
+
+    it('de-duplicates capabilities from overlapping roles', () => {
+      process.env.NECTAR_ADMINS = 'superadmin@test.com';
+      const now = new Date().toISOString();
+      db.prepare(`INSERT INTO roles (id, name, capabilities, system, createdAt, updatedAt)
+        VALUES ('another', 'Another', '["release.write","config.write"]', 0, ?, ?)`).run(now, now);
+
+      db.prepare(`INSERT INTO user_roles (email, roleId, grantedBy, grantedAt)
+        VALUES ('user@test.com', 'viewer', 'test', ?)`).run(now);
+      db.prepare(`INSERT INTO user_roles (email, roleId, grantedBy, grantedAt)
+        VALUES ('user@test.com', 'another', 'test', ?)`).run(now);
+
+      const caps = store.getCapabilities('user@test.com');
+      // release.write should appear only once
+      const releaseWriteCount = caps.filter(c => c === 'release.write').length;
+      expect(releaseWriteCount).toBe(1);
+    });
+
+    it('returns empty array for user with no roles', () => {
+      process.env.NECTAR_ADMINS = 'superadmin@test.com';
+      expect(store.getCapabilities('noroles@test.com')).toEqual([]);
+    });
+
+    it('returns empty array for null email', () => {
+      expect(store.getCapabilities(null)).toEqual([]);
     });
   });
 
@@ -387,16 +395,13 @@ describe('UserStore', () => {
     });
 
     it('backfills notificationPrefs on old user without it', () => {
-      // Simulate an existing user missing the field, then update
       const legacyUser = {
         email: 'legacy@test.com',
         name: 'Legacy',
         picture: null,
         role: 'user',
-        permissions: { releases: true, roadmap: true, tickets: true, environments: true, health: true, features: true, integrations: true, issues: true, tasks: true },
         lastLoginAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
-        // No notificationPrefs
       };
       store.users.set('legacy@test.com', legacyUser);
 
@@ -424,45 +429,20 @@ describe('UserStore', () => {
     it('save/load round-trip preserves users', () => {
       store.upsertOnLogin('alice@test.com', 'Alice', 'https://alice.pic');
       store.upsertOnLogin('bob@test.com', 'Bob', null);
-      store.updateUser('alice@test.com', {
-        role: 'admin',
-        permissions: { releases: false },
-      });
+      store.updateUser('alice@test.com', { role: 'admin' });
 
-      // Create a new store that loads from the same DB
       const store2 = new UserStore({ db });
 
       expect(store2.getUser('alice@test.com')).not.toBeNull();
       expect(store2.getUser('alice@test.com').name).toBe('Alice');
       expect(store2.getUser('alice@test.com').role).toBe('admin');
-      expect(store2.getUser('alice@test.com').permissions.releases).toBe(false);
       expect(store2.getUser('bob@test.com')).not.toBeNull();
-    });
-
-    it('ensures all permission keys exist on loaded users', () => {
-      // Directly insert a user row with partial permissions to simulate a legacy row
-      db.prepare(`
-        INSERT INTO users (email, name, picture, role, permissions, notificationPrefs, lastLoginAt, createdAt)
-        VALUES ('old@test.com', 'Old User', NULL, 'user', '{"releases":true}', '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
-      `).run();
-
-      const store2 = new UserStore({ db });
-      const user = store2.getUser('old@test.com');
-
-      expect(user).not.toBeNull();
-      expect(user.permissions.releases).toBe(true);
-      // Missing keys should be filled with true
-      expect(user.permissions.roadmap).toBe(true);
-      expect(user.permissions.tickets).toBe(true);
-      expect(user.permissions.environments).toBe(true);
     });
 
     it('backfills notificationPrefs on loaded users that lack it', () => {
       db.prepare(`
-        INSERT INTO users (email, name, picture, role, permissions, notificationPrefs, lastLoginAt, createdAt)
-        VALUES ('old@test.com', 'Old User', NULL, 'user',
-                '{"releases":true,"roadmap":true,"tickets":true,"environments":true,"health":true,"features":true,"integrations":true,"issues":true,"tasks":true}',
-                '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+        INSERT INTO users (email, name, picture, role, notificationPrefs, lastLoginAt, createdAt)
+        VALUES ('old@test.com', 'Old User', NULL, 'user', '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
       `).run();
 
       const store2 = new UserStore({ db });

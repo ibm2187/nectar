@@ -3,7 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const { execSync, spawn } = require('child_process');
 const log = require('../core/log');
-const { requireAdmin } = require('./auth');
+const { requireCapability } = require('../core/authz');
+const { createAccessRoutes } = require('./access-routes');
 const ReleaseManager = require('../core/release');
 const { annotateReleases } = require('../core/release-status');
 const { aggregateFeatureFlags, aggregateIntegrations } = require('../core/feature-aggregator');
@@ -484,7 +485,7 @@ module.exports = function createRoutes(services, config) {
   });
 
   // Send notification about specific tickets
-  router.post('/notify/tickets', asyncHandler(async (req, res) => {
+  router.post('/notify/tickets', requireCapability('notify.send'), asyncHandler(async (req, res) => {
     const { ticketKeys, recipientType, channel, message, version, senderName } = req.body;
     if (!ticketKeys || !Array.isArray(ticketKeys) || ticketKeys.length === 0) {
       return res.status(400).json({ error: 'ticketKeys required (array of JIRA keys)' });
@@ -512,7 +513,7 @@ module.exports = function createRoutes(services, config) {
   }));
 
   // Send standup reminder to a specific person
-  router.post('/notify/standup', asyncHandler(async (req, res) => {
+  router.post('/notify/standup', requireCapability('notify.send'), asyncHandler(async (req, res) => {
     const { personName, message, senderName } = req.body;
     if (!personName) {
       return res.status(400).json({ error: 'personName required' });
@@ -588,7 +589,7 @@ module.exports = function createRoutes(services, config) {
   });
 
   // Notify release channel — sends status update to Slack
-  router.post('/releases/:version/notify', asyncHandler(async (req, res) => {
+  router.post('/releases/:version/notify', requireCapability('notify.send'), asyncHandler(async (req, res) => {
     const version = req.params.version;
     const release = releases.get(version);
     if (!release) return res.status(404).json({ error: 'Release not found' });
@@ -609,7 +610,7 @@ module.exports = function createRoutes(services, config) {
   }));
 
   // Per-release refresh — git fetch + JIRA sync + PR sync for one version
-  router.post('/releases/:version/refresh', asyncHandler(async (req, res) => {
+  router.post('/releases/:version/refresh', requireCapability('release.write'), asyncHandler(async (req, res) => {
     const version = req.params.version;
     const release = releases.get(version);
     if (!release) return res.status(404).json({ error: 'Release not found' });
@@ -699,7 +700,7 @@ module.exports = function createRoutes(services, config) {
     });
   });
 
-  router.post('/releases', (req, res) => {
+  router.post('/releases', requireCapability('release.write'), (req, res) => {
     try {
       const body = { ...req.body };
 
@@ -721,7 +722,7 @@ module.exports = function createRoutes(services, config) {
 
   // Set up or update release train — inline edits of type and/or shipDate.
   // Accepts partial updates; recomputes milestones preserving existing overrides.
-  router.patch('/releases/:version/train', (req, res) => {
+  router.patch('/releases/:version/train', requireCapability('release.write'), (req, res) => {
     try {
       const release = releases.get(req.params.version);
       if (!release) return res.status(404).json({ error: 'Release not found' });
@@ -762,7 +763,7 @@ module.exports = function createRoutes(services, config) {
   });
 
   // Legacy endpoint — kept for backwards compat
-  router.post('/releases/:version/setup-train', (req, res) => {
+  router.post('/releases/:version/setup-train', requireCapability('release.write'), (req, res) => {
     try {
       const release = releases.get(req.params.version);
       if (!release) return res.status(404).json({ error: 'Release not found' });
@@ -791,7 +792,7 @@ module.exports = function createRoutes(services, config) {
     }
   });
 
-  router.patch('/releases/:version', (req, res) => {
+  router.patch('/releases/:version', requireCapability('release.write'), (req, res) => {
     try {
       const { state, user, ...fields } = req.body;
       let release;
@@ -811,7 +812,7 @@ module.exports = function createRoutes(services, config) {
     }
   });
 
-  router.delete('/releases/:version', (req, res) => {
+  router.delete('/releases/:version', requireCapability('release.write'), (req, res) => {
     try {
       releases.delete(req.params.version, req.body.user);
       res.json({ ok: true });
@@ -822,7 +823,7 @@ module.exports = function createRoutes(services, config) {
 
   // ── Tickets ───────────────────────────────────────────
 
-  router.post('/releases/:version/tickets', (req, res) => {
+  router.post('/releases/:version/tickets', requireCapability('release.write'), (req, res) => {
     try {
       const release = releases.addTicket(req.params.version, req.body, req.body.user);
       res.json({ ...release, tickets: getTicketsForRelease(release) });
@@ -831,7 +832,7 @@ module.exports = function createRoutes(services, config) {
     }
   });
 
-  router.delete('/releases/:version/tickets/:key', (req, res) => {
+  router.delete('/releases/:version/tickets/:key', requireCapability('release.write'), (req, res) => {
     try {
       const release = releases.removeTicket(req.params.version, req.params.key, req.body.user);
       res.json({ ...release, tickets: getTicketsForRelease(release) });
@@ -842,7 +843,7 @@ module.exports = function createRoutes(services, config) {
 
   // ── Cherry-picks ──────────────────────────────────────
 
-  router.post('/releases/:version/cherry-pick', (req, res) => {
+  router.post('/releases/:version/cherry-pick', requireCapability('release.write'), (req, res) => {
     try {
       const release = releases.addCherryPick(req.params.version, req.body, req.body.user);
       res.json({ ...release, tickets: getTicketsForRelease(release) });
@@ -852,14 +853,14 @@ module.exports = function createRoutes(services, config) {
   });
 
   // POST /api/releases/:version/cherry-pick/sync — force-sync from GitHub
-  router.post('/releases/:version/cherry-pick/sync', asyncHandler(async (req, res) => {
+  router.post('/releases/:version/cherry-pick/sync', requireCapability('release.write'), asyncHandler(async (req, res) => {
     const count = await cherryPickWatcher.syncRelease(req.params.version);
     res.json({ ok: true, synced: count });
   }));
 
   // ── Approvals ─────────────────────────────────────────
 
-  router.post('/releases/:version/approve', (req, res) => {
+  router.post('/releases/:version/approve', requireCapability('release.write'), (req, res) => {
     try {
       const result = approvals.approve(req.params.version, req.body.user, req.body.role);
       res.json(result);
@@ -924,7 +925,7 @@ module.exports = function createRoutes(services, config) {
 
   // ── Deployments ───────────────────────────────────────
 
-  router.post('/releases/:version/deploy', (req, res) => {
+  router.post('/releases/:version/deploy', requireCapability('release.write'), (req, res) => {
     try {
       const release = releases.addDeployment(req.params.version, req.body, req.body.user);
       res.json({ ...release, tickets: getTicketsForRelease(release) });
@@ -999,7 +1000,7 @@ module.exports = function createRoutes(services, config) {
     res.json({ ...customer, environments });
   });
 
-  router.put('/customers/:id', requireAdmin, (req, res) => {
+  router.put('/customers/:id', requireCapability('config.write'), (req, res) => {
     const customer = customerStore.getCustomer(req.params.id);
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
     const allowed = ['name', 'shortName', 'color', 'hidden', 'sortOrder', 'notes'];
@@ -1035,7 +1036,7 @@ module.exports = function createRoutes(services, config) {
   // IMPORTANT: must be declared BEFORE /environments/:id/* routes to avoid
   // Express matching "bulk" as the :id parameter.
   // Body: { environmentIds: ['ck-615', 'ck-1097', ...], version: '4.2.1', setBy: 'nukulb' }
-  router.patch('/environments/bulk/version', (req, res) => {
+  router.patch('/environments/bulk/version', requireCapability('environment.write'), (req, res) => {
     const { environmentIds, version, branch, setBy } = req.body;
     if (!Array.isArray(environmentIds) || environmentIds.length === 0) {
       return res.status(400).json({ error: 'environmentIds must be a non-empty array' });
@@ -1051,7 +1052,7 @@ module.exports = function createRoutes(services, config) {
   });
 
   // Manually set the version for a single environment
-  router.patch('/environments/:id/version', (req, res) => {
+  router.patch('/environments/:id/version', requireCapability('environment.write'), (req, res) => {
     const { version, branch, setBy } = req.body;
     const env = customerStore.setManualVersion(req.params.id, { version, branch, setBy });
     if (!env) return res.status(404).json({ error: 'Environment not found' });
@@ -1071,7 +1072,7 @@ module.exports = function createRoutes(services, config) {
 
   // ── Webplatform scan ──────────────────────────────────
 
-  router.post('/webplatform/scan', asyncHandler(async (req, res) => {
+  router.post('/webplatform/scan', requireCapability('environment.write'), asyncHandler(async (req, res) => {
     const scanResults = await webplatformScanner.scan();
     const applied = customerStore.applyScanResults(scanResults);
     res.json({ ok: true, ...applied, scanStatus: webplatformScanner.getStatus() });
@@ -1083,7 +1084,7 @@ module.exports = function createRoutes(services, config) {
 
   // ── Environment poller ────────────────────────────────
 
-  router.post('/environments/poll', asyncHandler(async (req, res) => {
+  router.post('/environments/poll', requireCapability('environment.write'), asyncHandler(async (req, res) => {
     const results = await envPoller.run();
     res.json({ ok: true, ...results });
   }));
@@ -1352,7 +1353,7 @@ module.exports = function createRoutes(services, config) {
     res.json({ sync: meta, stats });
   });
 
-  router.post('/tickets/sync', asyncHandler(async (req, res) => {
+  router.post('/tickets/sync', requireCapability('sync.trigger'), asyncHandler(async (req, res) => {
     if (!jiraSync) return res.status(503).json({ error: 'JIRA sync not available' });
     const result = await jiraSync.runTicketSync();
     res.json(result || { error: 'Sync already running or ticket store not configured' });
@@ -1459,7 +1460,7 @@ module.exports = function createRoutes(services, config) {
     res.json(discovery.getStatus());
   });
 
-  router.post('/discover', asyncHandler(async (req, res) => {
+  router.post('/discover', requireCapability('sync.trigger'), asyncHandler(async (req, res) => {
     const results = await discovery.run();
     res.json(results);
   }));
@@ -1559,7 +1560,7 @@ module.exports = function createRoutes(services, config) {
     res.json(jiraSync.getStatus());
   });
 
-  router.post('/jira/sync', asyncHandler(async (req, res) => {
+  router.post('/jira/sync', requireCapability('sync.trigger'), asyncHandler(async (req, res) => {
     const results = await jiraSync.run();
     res.json(results);
   }));
@@ -1589,7 +1590,7 @@ module.exports = function createRoutes(services, config) {
     res.json(availability.snapshot());
   });
 
-  router.post('/availability/refresh', requireAdmin, asyncHandler(async (req, res) => {
+  router.post('/availability/refresh', requireCapability('config.write'), asyncHandler(async (req, res) => {
     const availability = services.availability;
     if (!availability) return res.status(503).json({ error: 'Availability not configured' });
     const result = await availability.refresh();
@@ -1610,7 +1611,7 @@ module.exports = function createRoutes(services, config) {
     });
   });
 
-  router.post('/people/directory/reload', requireAdmin, asyncHandler(async (req, res) => {
+  router.post('/people/directory/reload', requireCapability('config.write'), asyncHandler(async (req, res) => {
     const { peopleDirectory } = services;
     const count = peopleDirectory.reload();
     res.json({ ok: true, loaded: count });
@@ -1623,7 +1624,7 @@ module.exports = function createRoutes(services, config) {
     res.json({ ...notificationSettings.getAll(), schema: notificationSettings.getSchema() });
   });
 
-  router.put('/notifications/settings', requireAdmin, (req, res) => {
+  router.put('/notifications/settings', requireCapability('config.write'), (req, res) => {
     const { notificationSettings } = services;
     notificationSettings.update(req.body);
     res.json({ ...notificationSettings.getAll(), schema: notificationSettings.getSchema() });
@@ -1636,7 +1637,7 @@ module.exports = function createRoutes(services, config) {
     res.json({ notificationPrefs: user.notificationPrefs });
   });
 
-  router.post('/notifications/test-digest', requireAdmin, asyncHandler(async (req, res) => {
+  router.post('/notifications/test-digest', requireCapability('config.write'), asyncHandler(async (req, res) => {
     const { notificationEngine } = services;
     const { slackId } = req.body || {};
     if (!slackId) return res.status(400).json({ error: 'slackId is required — select a person to send to' });
@@ -1644,14 +1645,14 @@ module.exports = function createRoutes(services, config) {
     res.json(result);
   }));
 
-  router.post('/notifications/test-ticket-changes', requireAdmin, asyncHandler(async (req, res) => {
+  router.post('/notifications/test-ticket-changes', requireCapability('config.write'), asyncHandler(async (req, res) => {
     const { notificationEngine } = services;
     await notificationEngine.sendTicketChangeDigests();
     res.json({ ok: true, message: 'Ticket change digest triggered' });
   }));
 
   // Resolve an unresolved JIRA name by manually mapping it to a Slack user
-  router.post('/people/directory/resolve', requireAdmin, asyncHandler(async (req, res) => {
+  router.post('/people/directory/resolve', requireCapability('config.write'), asyncHandler(async (req, res) => {
     const { peopleDirectory } = services;
     const { jiraName, slackId } = req.body || {};
     if (!jiraName || !slackId) return res.status(400).json({ error: 'jiraName and slackId are required' });
@@ -1660,7 +1661,7 @@ module.exports = function createRoutes(services, config) {
   }));
 
   // Search Slack users by name (for resolving unmatched names)
-  router.post('/people/directory/search-slack', requireAdmin, asyncHandler(async (req, res) => {
+  router.post('/people/directory/search-slack', requireCapability('config.write'), asyncHandler(async (req, res) => {
     const { slack } = services;
     const { query } = req.body || {};
     if (!query) return res.status(400).json({ error: 'query is required' });
@@ -1690,7 +1691,7 @@ module.exports = function createRoutes(services, config) {
     res.json(services.prSync.getStatus());
   });
 
-  router.post('/pr/sync', asyncHandler(async (req, res) => {
+  router.post('/pr/sync', requireCapability('sync.trigger'), asyncHandler(async (req, res) => {
     if (!services.prSync) return res.status(503).json({ error: 'PR sync not configured' });
     const results = await services.prSync.run();
     res.json(results);
@@ -1708,7 +1709,7 @@ module.exports = function createRoutes(services, config) {
     res.json(services.pipelineSync.getBuildsPageData());
   });
 
-  router.post('/pipeline/sync', asyncHandler(async (req, res) => {
+  router.post('/pipeline/sync', requireCapability('sync.trigger'), asyncHandler(async (req, res) => {
     if (!services.pipelineSync) return res.status(503).json({ error: 'Pipeline sync not configured' });
     const results = await services.pipelineSync.run();
     res.json(results);
@@ -1721,7 +1722,7 @@ module.exports = function createRoutes(services, config) {
     res.json(services.zohoSync.getStatus());
   });
 
-  router.post('/zoho/sync', asyncHandler(async (req, res) => {
+  router.post('/zoho/sync', requireCapability('sync.trigger'), asyncHandler(async (req, res) => {
     if (!services.zohoSync) return res.status(503).json({ error: 'Zoho sync not configured' });
     const results = await services.zohoSync.run();
     res.json(results);
@@ -2064,7 +2065,7 @@ module.exports = function createRoutes(services, config) {
    * POST /api/admin/datadog/backfill — iterate through deployments within
    * Datadog's retention window and backfill impact data. Rate-limited.
    */
-  router.post('/admin/datadog/backfill', requireAdmin, asyncHandler(async (req, res) => {
+  router.post('/admin/datadog/backfill', requireCapability('system.admin'), asyncHandler(async (req, res) => {
     if (!datadog || !datadog.isConfigured()) {
       return res.status(400).json({ error: 'Datadog is not configured' });
     }
@@ -2521,7 +2522,7 @@ module.exports = function createRoutes(services, config) {
 
   // ── Theme configuration (roadmap) — admin only ────────
 
-  router.get('/config/themes', requireAdmin, (req, res) => {
+  router.get('/config/themes', requireCapability('config.write'), (req, res) => {
     // If themes haven't been configured yet, auto-generate from observed data
     if (themeConfig.themes.length === 0) {
       const components = new Set();
@@ -2537,7 +2538,7 @@ module.exports = function createRoutes(services, config) {
     res.json(themeConfig.getConfig());
   });
 
-  router.put('/config/themes', requireAdmin, (req, res) => {
+  router.put('/config/themes', requireCapability('config.write'), (req, res) => {
     try {
       themeConfig.setConfig(req.body);
       res.json(themeConfig.getConfig());
@@ -2547,7 +2548,7 @@ module.exports = function createRoutes(services, config) {
   });
 
   // Auto-categorize: suggest theme groupings from all observed JIRA components
-  router.post('/config/themes/auto', requireAdmin, (req, res) => {
+  router.post('/config/themes/auto', requireCapability('config.write'), (req, res) => {
     // Gather all observed components from active releases
     const components = new Set();
     for (const release of releases.list()) {
@@ -2566,7 +2567,7 @@ module.exports = function createRoutes(services, config) {
   // ── API Keys — admin only ────────────────────────────
 
   if (apiKeys) {
-    router.post('/keys', requireAdmin, (req, res) => {
+    router.post('/keys', requireCapability('user.admin'), (req, res) => {
       try {
         const { label } = req.body || {};
         const createdBy = req.user ? req.user.email : null;
@@ -2577,11 +2578,11 @@ module.exports = function createRoutes(services, config) {
       }
     });
 
-    router.get('/keys', requireAdmin, (req, res) => {
+    router.get('/keys', requireCapability('user.admin'), (req, res) => {
       res.json(apiKeys.list());
     });
 
-    router.delete('/keys/:id', requireAdmin, (req, res) => {
+    router.delete('/keys/:id', requireCapability('user.admin'), (req, res) => {
       const deleted = apiKeys.revoke(req.params.id);
       if (!deleted) return res.status(404).json({ error: 'Key not found' });
       res.json({ ok: true });
@@ -2591,13 +2592,14 @@ module.exports = function createRoutes(services, config) {
   // ── Users — admin only ────────────────────────────────
 
   if (userStore) {
-    router.get('/users', requireAdmin, (req, res) => {
+    router.get('/users', requireCapability('user.admin'), (req, res) => {
       const users = userStore.listUsers().map(u => ({
         email: u.email,
         name: u.name,
         picture: u.picture,
         role: userStore.getRole(u.email),
-        permissions: userStore.getPermissions(u.email),
+        capabilities: userStore.getCapabilities(u.email),
+        roles: userStore.getRoles(u.email),
         isEnvAdmin: userStore.isEnvAdmin(u.email),
         lastLoginAt: u.lastLoginAt,
         createdAt: u.createdAt,
@@ -2605,17 +2607,18 @@ module.exports = function createRoutes(services, config) {
       res.json(users);
     });
 
-    router.patch('/users/:email', requireAdmin, (req, res) => {
+    router.patch('/users/:email', requireCapability('user.admin'), (req, res) => {
       const email = decodeURIComponent(req.params.email);
-      const { role, permissions } = req.body || {};
-      const updated = userStore.updateUser(email, { role, permissions });
+      const { role } = req.body || {};
+      const updated = userStore.updateUser(email, { role });
       if (!updated) return res.status(404).json({ error: 'User not found' });
       res.json({
         email: updated.email,
         name: updated.name,
         picture: updated.picture,
         role: userStore.getRole(updated.email),
-        permissions: userStore.getPermissions(updated.email),
+        capabilities: userStore.getCapabilities(updated.email),
+        roles: userStore.getRoles(updated.email),
         isEnvAdmin: userStore.isEnvAdmin(updated.email),
         lastLoginAt: updated.lastLoginAt,
         createdAt: updated.createdAt,
@@ -2626,7 +2629,7 @@ module.exports = function createRoutes(services, config) {
   // ── Tasks ───────────────────────────────────────────
 
   if (taskQueue) {
-    router.post('/tasks', asyncHandler(async (req, res) => {
+    router.post('/tasks', requireCapability('task.write'), asyncHandler(async (req, res) => {
       const { type, version, slackUserId, compareVersion, prompt } = req.body || {};
 
       if (!type) {
@@ -2759,7 +2762,7 @@ module.exports = function createRoutes(services, config) {
       res.json(task);
     });
 
-    router.patch('/tasks/:id', (req, res) => {
+    router.patch('/tasks/:id', requireCapability('task.write'), (req, res) => {
       const task = taskQueue.getTask(req.params.id);
       if (!task) return res.status(404).json({ error: 'Task not found' });
 
@@ -2874,7 +2877,7 @@ module.exports = function createRoutes(services, config) {
   }));
 
   // PUT /api/releases/:version/draft — save edited draft and trigger re-render
-  router.put('/releases/:version/draft', asyncHandler(async (req, res) => {
+  router.put('/releases/:version/draft', requireCapability('release.write'), asyncHandler(async (req, res) => {
     const { version } = req.params;
     const { content, regenerate } = req.body || {};
 
@@ -3113,7 +3116,7 @@ module.exports = function createRoutes(services, config) {
   }
 
   // GET /api/config/integrations — admin only
-  router.get('/config/integrations', requireAdmin, (req, res) => {
+  router.get('/config/integrations', requireCapability('config.write'), (req, res) => {
     const env = readEnvFile();
     const result = {};
 
@@ -3146,7 +3149,7 @@ module.exports = function createRoutes(services, config) {
   });
 
   // POST /api/config/integrations/:name — admin only
-  router.post('/config/integrations/:name', requireAdmin, (req, res) => {
+  router.post('/config/integrations/:name', requireCapability('config.write'), (req, res) => {
     const def = INTEGRATIONS[req.params.name];
     if (!def) return res.status(404).json({ error: 'Unknown integration' });
 
@@ -3182,7 +3185,7 @@ module.exports = function createRoutes(services, config) {
   });
 
   // POST /api/config/integrations/:name/test — admin only
-  router.post('/config/integrations/:name/test', requireAdmin, asyncHandler(async (req, res) => {
+  router.post('/config/integrations/:name/test', requireCapability('config.write'), asyncHandler(async (req, res) => {
     const name = req.params.name;
     const def = INTEGRATIONS[name];
     if (!def) return res.status(404).json({ error: 'Unknown integration' });
@@ -3336,7 +3339,7 @@ module.exports = function createRoutes(services, config) {
 
   // ── Admin — Logs ────────────────────────────────────────
 
-  router.get('/admin/logs', requireAdmin, (req, res) => {
+  router.get('/admin/logs', requireCapability('config.write'), (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 200, 500);
     const level = req.query.level || null; // 'ERROR', 'WARN', 'INFO', or comma-separated
     const levelFilter = level ? level.split(',').map(l => l.trim().toUpperCase()) : null;
@@ -3357,7 +3360,7 @@ module.exports = function createRoutes(services, config) {
     return execSync(`git ${cmd}`, { cwd: NECTAR_ROOT, encoding: 'utf8', timeout: 60000 }).trim();
   }
 
-  router.get('/admin/version', requireAdmin, (req, res) => {
+  router.get('/admin/version', requireCapability('system.admin'), (req, res) => {
     try {
       const branch = git('rev-parse --abbrev-ref HEAD');
       const commit = git('rev-parse --short HEAD');
@@ -3369,7 +3372,7 @@ module.exports = function createRoutes(services, config) {
     }
   });
 
-  router.post('/admin/pull', requireAdmin, asyncHandler(async (req, res) => {
+  router.post('/admin/pull', requireCapability('system.admin'), asyncHandler(async (req, res) => {
     const steps = [];
     try {
       // 1. Record current HEAD
@@ -3444,7 +3447,7 @@ module.exports = function createRoutes(services, config) {
     }
   }));
 
-  router.post('/admin/restart', requireAdmin, (req, res) => {
+  router.post('/admin/restart', requireCapability('system.admin'), (req, res) => {
     log.info('Admin restart requested');
     res.json({ ok: true, message: 'Restarting...' });
 
@@ -3583,7 +3586,7 @@ module.exports = function createRoutes(services, config) {
     res.json(tmpl);
   });
 
-  router.put('/settings/release-templates/:key', (req, res) => {
+  router.put('/settings/release-templates/:key', requireCapability('config.write'), (req, res) => {
     const { templateStore } = services;
     if (!templateStore) return res.status(501).json({ error: 'Template store not initialized' });
     try {
@@ -3635,7 +3638,7 @@ module.exports = function createRoutes(services, config) {
   });
 
   // Apply current template to a release. Preserves gate activity + overrides.
-  router.post('/releases/:version/refresh-template', (req, res) => {
+  router.post('/releases/:version/refresh-template', requireCapability('release.write'), (req, res) => {
     const { templateStore } = services;
     if (!templateStore) return res.status(501).json({ error: 'Template store not initialized' });
 
@@ -3681,7 +3684,7 @@ module.exports = function createRoutes(services, config) {
     }
   });
 
-  router.patch('/releases/:version/milestones/:milestoneKey', (req, res) => {
+  router.patch('/releases/:version/milestones/:milestoneKey', requireCapability('release.write'), (req, res) => {
     try {
       const release = releases.get(req.params.version);
       if (!release) return res.status(404).json({ error: 'Release not found' });
@@ -3722,7 +3725,7 @@ module.exports = function createRoutes(services, config) {
     }
   });
 
-  router.post('/releases/:version/milestones/:milestoneKey/complete', (req, res) => {
+  router.post('/releases/:version/milestones/:milestoneKey/complete', requireCapability('release.write'), (req, res) => {
     try {
       const release = releases.get(req.params.version);
       if (!release) return res.status(404).json({ error: 'Release not found' });
@@ -3746,7 +3749,7 @@ module.exports = function createRoutes(services, config) {
     }
   });
 
-  router.post('/releases/:version/milestones/:milestoneKey/skip', (req, res) => {
+  router.post('/releases/:version/milestones/:milestoneKey/skip', requireCapability('release.write'), (req, res) => {
     try {
       const release = releases.get(req.params.version);
       if (!release) return res.status(404).json({ error: 'Release not found' });
@@ -3929,6 +3932,13 @@ module.exports = function createRoutes(services, config) {
     }
     res.status(status).json({ error: message });
   });
+
+  // ── Access control routes (after error handler setup) ──
+  const accessRouter = createAccessRoutes(services, {
+    audit: services.audit,
+    broadcastTo: services.broadcastTo,
+  });
+  router.use(accessRouter);
 
   return router;
 };
