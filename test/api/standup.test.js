@@ -130,6 +130,23 @@ describe('buildStandupData', () => {
     expect(result.people[0].totalItems).toBe(0);
   });
 
+  // ISSUE-52: canonical Jira status is "NO QA - Certified" (all-caps NO).
+  // The DONE_STATUSES list previously had "No QA - Certified" (lowercase o),
+  // so tickets in this status weren't filtered out and appeared in inDev.
+  it('excludes tickets in "NO QA - Certified" status from buckets (ISSUE-52)', () => {
+    const releases = [makeRelease('4.2.0')];
+    const tickets = [
+      makeTicket('DEV-1', { assignee: 'Alice Dev', jiraStatus: 'NO QA - Certified' }),
+    ];
+    const team = [{ name: 'Alice Dev', roles: ['dev'] }];
+    const services = createMockServices(releases, { '4.2.0': tickets }, new Map(), new Map(), team);
+    const result = buildStandupData(services, { horizon: '2026-04-27' });
+
+    expect(result.people).toHaveLength(1);
+    expect(result.people[0].totalItems).toBe(0);
+    expect(result.people[0].buckets.inDev).toHaveLength(0);
+  });
+
   it('includes all team members even those without any tickets', () => {
     const releases = [makeRelease('4.2.0')];
     const tickets = [makeTicket('DEV-1', { assignee: 'Alice Dev' })];

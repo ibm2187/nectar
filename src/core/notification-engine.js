@@ -5,7 +5,7 @@ const log = require('./log');
 const SlackNotifier = require('../integrations/slack');
 
 const DONE_STATUSES = new Set([
-  'QA Certified', 'No QA - Certified', 'QA Done', 'Done', 'Closed',
+  'QA Certified', 'NO QA - Certified', 'QA Done', 'Done', 'Closed',
   'Resolved', 'Released', 'Resolved Without Code',
 ]);
 

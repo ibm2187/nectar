@@ -299,6 +299,34 @@ describe('NotificationEngine', () => {
       expect(message).not.toContain('DEV-1');
     });
 
+    // ISSUE-52: canonical Jira status is "NO QA - Certified" (all-caps NO).
+    // The DONE_STATUSES list previously had "No QA - Certified" (lowercase o),
+    // so the daily digest was including these tickets.
+    it('filters out "NO QA - Certified" tickets from the daily digest (ISSUE-52)', async () => {
+      vi.useFakeTimers();
+      const future = new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10);
+      mockReleases.list.mockReturnValue([
+        {
+          version: '4.2.0', state: 'stabilizing', jiraReleaseDate: future,
+          tickets: [
+            { key: 'DEV-1', summary: 'Cert', assignee: 'Alice', jiraStatus: 'NO QA - Certified' },
+            { key: 'DEV-2', summary: 'Active', assignee: 'Alice', jiraStatus: 'In Progress' },
+          ],
+        },
+      ]);
+
+      mockPeople.resolveSlackId.mockReturnValue({ slackId: 'U_ALICE' });
+
+      const promise = engine.sendDailyDigests();
+      await vi.runAllTimersAsync();
+      await promise;
+
+      expect(mockSlack.dmUser).toHaveBeenCalledTimes(1);
+      const [, message] = mockSlack.dmUser.mock.calls[0];
+      expect(message).toContain('DEV-2');
+      expect(message).not.toContain('DEV-1');
+    });
+
     it('respects user notification preferences (opt-out)', async () => {
       vi.useFakeTimers();
       const future = new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10);
