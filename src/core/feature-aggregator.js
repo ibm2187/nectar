@@ -72,19 +72,17 @@ function aggregateFeatureFlags(environments) {
       }
 
       let enabledCount = 0;
-      let knownCount = 0;
+      const totalCount = envs.length;
       for (const env of envs) {
         const flag = env.features.dbFeatureFlags.find(f => f.key === key);
-        if (flag === undefined) continue;  // flag not present in this env (not polled yet, or env older)
-        knownCount++;
-        if (flag.enabled) enabledCount++;
+        if (flag && flag.enabled) enabledCount++;
       }
 
-      if (knownCount === 0) {
-        customerStates[customerId] = 'unknown';
-      } else if (enabledCount === 0) {
-        customerStates[customerId] = 'off';
-      } else if (enabledCount === knownCount) {
+      if (enabledCount === 0) {
+        // Flag not enabled in any env — but did it exist in at least one?
+        const anyPresent = envs.some(e => e.features.dbFeatureFlags.some(f => f.key === key));
+        customerStates[customerId] = anyPresent ? 'off' : 'unknown';
+      } else if (enabledCount === totalCount) {
         customerStates[customerId] = 'on';
       } else {
         customerStates[customerId] = 'partial';
@@ -101,20 +99,26 @@ function aggregateFeatureFlags(environments) {
       }
     }
 
-    // Classify into one of the four buckets
-    const stateValues = Object.values(customerStates).filter(s => s !== 'unknown');
+    // Classify into one of the four buckets.
+    // Unknown states count — a flag can only be "everywhere-on" or "everywhere-off"
+    // if every customer with prod envs has a definitive state.
+    const stateValues = Object.values(customerStates);
     const allOn = stateValues.length > 0 && stateValues.every(s => s === 'on');
     const allOff = stateValues.length > 0 && stateValues.every(s => s === 'off');
     const hasAny = stateValues.some(s => s === 'on' || s === 'partial');
+
+    const hasUnknown = stateValues.some(s => s === 'unknown');
 
     let bucket;
     if (allOn) {
       bucket = 'everywhere-on';
     } else if (allOff) {
       bucket = enabledInAnyNonProd ? 'dev-only' : 'everywhere-off';
-    } else if (hasAny) {
+    } else if (hasAny || hasUnknown) {
+      // Any mix of on/off/partial/unknown → mixed
       bucket = 'mixed';
     } else {
+      // No customers at all (shouldn't happen, but safe fallback)
       bucket = 'everywhere-off';
     }
 
@@ -241,21 +245,20 @@ function aggregateIntegrations(environments) {
       }
 
       let enabledCount = 0;
-      let knownCount = 0;
+      const totalCount = envs.length;
       let anyConfigured = false;
       for (const env of envs) {
         const entry = env.integrations.dbIntegrations[type];
-        if (entry === undefined) continue;
-        knownCount++;
-        if (entry.enabled) enabledCount++;
-        if (entry.configured) anyConfigured = true;
+        if (entry) {
+          if (entry.enabled) enabledCount++;
+          if (entry.configured) anyConfigured = true;
+        }
       }
 
-      if (knownCount === 0) {
-        customerStates[customerId] = 'unknown';
-      } else if (enabledCount === 0) {
-        customerStates[customerId] = 'off';
-      } else if (enabledCount === knownCount) {
+      if (enabledCount === 0) {
+        const anyPresent = envs.some(e => e.integrations.dbIntegrations[type] !== undefined);
+        customerStates[customerId] = anyPresent ? 'off' : 'unknown';
+      } else if (enabledCount === totalCount) {
         customerStates[customerId] = 'on';
       } else {
         customerStates[customerId] = 'partial';
@@ -273,17 +276,18 @@ function aggregateIntegrations(environments) {
       }
     }
 
-    const stateValues = Object.values(customerStates).filter(s => s !== 'unknown');
+    const stateValues = Object.values(customerStates);
     const allOn = stateValues.length > 0 && stateValues.every(s => s === 'on');
     const allOff = stateValues.length > 0 && stateValues.every(s => s === 'off');
     const hasAny = stateValues.some(s => s === 'on' || s === 'partial');
+    const hasUnknown = stateValues.some(s => s === 'unknown');
 
     let bucket;
     if (allOn) {
       bucket = 'everywhere-on';
     } else if (allOff) {
       bucket = enabledInAnyNonProd ? 'dev-only' : 'everywhere-off';
-    } else if (hasAny) {
+    } else if (hasAny || hasUnknown) {
       bucket = 'mixed';
     } else {
       bucket = 'everywhere-off';
