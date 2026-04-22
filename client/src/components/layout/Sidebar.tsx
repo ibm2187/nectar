@@ -6,32 +6,28 @@ import { useAuthStore } from '../../stores/authStore'
 import { useWsStore } from '../../stores/wsStore'
 import { apiFetch } from '../../api/client'
 
-import type { UserPermissions } from '../../stores/authStore'
-
-type PermKey = keyof UserPermissions
-
 const links: ReadonlyArray<{
   to: string
   label: string
   icon: string
-  adminOnly?: boolean
-  permKey?: PermKey
+  /** Capability required to see this link */
+  cap?: string
 }> = [
   { to: '/', label: 'Home', icon: '🏠' },
   { to: '/standup', label: 'Standup', icon: '🎯' },
   { to: '/builds', label: 'Builds', icon: '🔨' },
-  { to: '/releases', label: 'Releases', icon: '📦', permKey: 'releases' },
-  { to: '/roadmap', label: 'Roadmap', icon: '🗺', permKey: 'roadmap' },
-  { to: '/tickets', label: 'Tickets', icon: '🎯', permKey: 'tickets' },
-  { to: '/customers', label: 'Environments', icon: '🏢', permKey: 'environments' },
-  { to: '/health-dashboard', label: 'Health', icon: '💚', permKey: 'health' },
-  { to: '/incidents', label: 'Incidents', icon: '🚨', permKey: 'health' },
-  { to: '/features', label: 'Features', icon: '🚩', permKey: 'features' },
-  { to: '/integrations', label: 'Integrations', icon: '🔌', permKey: 'integrations' },
-  { to: '/issues', label: 'Issues', icon: '🐛', permKey: 'issues' },
-  { to: '/tasks-queue', label: 'Tasks', icon: '📋', permKey: 'tasks' },
-  { to: '/reports/process-health', label: 'Reports', icon: '📊', permKey: 'releases' },
-  { to: '/config', label: 'Config', icon: '⚙', adminOnly: true },
+  { to: '/releases', label: 'Releases', icon: '📦' },
+  { to: '/roadmap', label: 'Roadmap', icon: '🗺' },
+  { to: '/tickets', label: 'Tickets', icon: '🎯' },
+  { to: '/customers', label: 'Environments', icon: '🏢' },
+  { to: '/health-dashboard', label: 'Health', icon: '💚' },
+  { to: '/incidents', label: 'Incidents', icon: '🚨' },
+  { to: '/features', label: 'Features', icon: '🚩' },
+  { to: '/integrations', label: 'Integrations', icon: '🔌' },
+  { to: '/issues', label: 'Issues', icon: '🐛' },
+  { to: '/tasks-queue', label: 'Tasks', icon: '📋' },
+  { to: '/reports/process-health', label: 'Reports', icon: '📊' },
+  { to: '/config', label: 'Config', icon: '⚙', cap: 'config.write' },
 ]
 
 interface SidebarProps {
@@ -97,8 +93,7 @@ function useSidebarBadges() {
 }
 
 export function Sidebar({ open, onClose }: SidebarProps) {
-  const { user, ssoEnabled } = useAuthStore()
-  const isAdmin = !ssoEnabled || user?.role === 'admin'
+  const { ssoEnabled, hasCap } = useAuthStore()
   const { overdueCount, hasUnhealthyEnv, pendingTaskCount, activeIncidents } = useSidebarBadges()
 
   return (
@@ -127,12 +122,8 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </div>
         <nav className="flex-1 p-2 space-y-1">
           {links.filter(l => {
-            // Admin-only links (e.g., Config) require admin role
-            if (l.adminOnly && !isAdmin) return false
-            // Permission-gated pages: hide if user does not have access
-            if (l.permKey && user?.permissions && !isAdmin) {
-              if (!user.permissions[l.permKey]) return false
-            }
+            // Capability-gated links: hide if user lacks the required capability
+            if (l.cap && ssoEnabled && !hasCap(l.cap)) return false
             return true
           }).map(({ to, label, icon }) => {
             // Determine badge for this nav item

@@ -7,6 +7,7 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { NectarLoader } from '../../components/NectarLoader'
 import { timeAgo, cn } from '../../lib/utils'
+import { CapGuard } from '../../components/CapGuard'
 
 interface TaskOutput {
   gammaUrl?: string
@@ -326,14 +327,16 @@ export function TasksPage() {
 
                         {/* Cancel button for active tasks */}
                         {(task.status === 'pending' || task.status === 'in-progress') && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-xs h-6 text-destructive border-destructive/30 hover:bg-destructive/10"
-                            onClick={() => cancelTask(task.id)}
-                          >
-                            Cancel
-                          </Button>
+                          <CapGuard cap="task.write">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs h-6 text-destructive border-destructive/30 hover:bg-destructive/10"
+                              onClick={() => cancelTask(task.id)}
+                            >
+                              Cancel
+                            </Button>
+                          </CapGuard>
                         )}
 
                         {/* Spacer */}

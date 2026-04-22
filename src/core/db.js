@@ -94,7 +94,6 @@ function applySchema(db) {
       name               TEXT,
       picture            TEXT,
       role               TEXT NOT NULL DEFAULT 'user',
-      permissions        TEXT NOT NULL DEFAULT '{}',  -- JSON
       notificationPrefs  TEXT NOT NULL DEFAULT '{}',  -- JSON
       lastLoginAt        TEXT,
       createdAt          TEXT NOT NULL
@@ -105,11 +104,34 @@ function applySchema(db) {
       id           TEXT PRIMARY KEY,
       label        TEXT NOT NULL,
       hash         TEXT NOT NULL UNIQUE,
+      roleId       TEXT,
       createdAt    TEXT NOT NULL,
       createdBy    TEXT,
       lastUsedAt   TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(hash);
+
+    -- ── roles (access control) ─────────────────────────────────
+    CREATE TABLE IF NOT EXISTS roles (
+      id           TEXT PRIMARY KEY,
+      name         TEXT NOT NULL UNIQUE,
+      description  TEXT,
+      capabilities TEXT NOT NULL DEFAULT '[]',
+      system       INTEGER NOT NULL DEFAULT 0,
+      createdAt    TEXT NOT NULL,
+      updatedAt    TEXT NOT NULL
+    );
+
+    -- ── user_roles (access control) ──────────��─────────────────
+    CREATE TABLE IF NOT EXISTS user_roles (
+      email     TEXT NOT NULL,
+      roleId    TEXT NOT NULL,
+      grantedBy TEXT,
+      grantedAt TEXT NOT NULL,
+      PRIMARY KEY (email, roleId)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ur_email ON user_roles(email);
+    CREATE INDEX IF NOT EXISTS idx_ur_role ON user_roles(roleId);
 
     -- ── themes (singleton row) ──────────────────────────────────
     CREATE TABLE IF NOT EXISTS theme_config (
@@ -865,6 +887,69 @@ function applyMigrations(db) {
         CREATE INDEX IF NOT EXISTS idx_incident_events_incidentId ON incident_events(incidentId);
         CREATE INDEX IF NOT EXISTS idx_incident_events_at         ON incident_events(at DESC);
       `);
+    },
+    // v14: Access control engine — roles, user_roles, API key roles, audit extension
+    (db) => {
+      const now = new Date().toISOString();
+
+      // 1. Ensure roles and user_roles tables exist (fresh installs get them from schema)
+      db.prepare(`CREATE TABLE IF NOT EXISTS roles (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT,
+        capabilities TEXT NOT NULL DEFAULT '[]', system INTEGER NOT NULL DEFAULT 0,
+        createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+      )`).run();
+      db.prepare(`CREATE TABLE IF NOT EXISTS user_roles (
+        email TEXT NOT NULL, roleId TEXT NOT NULL, grantedBy TEXT, grantedAt TEXT NOT NULL,
+        PRIMARY KEY (email, roleId)
+      )`).run();
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_ur_email ON user_roles(email)').run();
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_ur_role ON user_roles(roleId)').run();
+
+      // 2. Add roleId column to api_keys if it doesn't exist
+      const apiKeyCols = db.prepare("PRAGMA table_info(api_keys)").all().map(c => c.name);
+      if (!apiKeyCols.includes('roleId')) {
+        db.prepare('ALTER TABLE api_keys ADD COLUMN roleId TEXT').run();
+      }
+
+      // 3. Seed the two system roles
+      const allCaps = JSON.stringify([
+        'config.write', 'release.write', 'environment.write',
+        'sync.trigger', 'task.write', 'notify.send', 'user.admin', 'system.admin',
+      ]);
+      db.prepare(`INSERT OR IGNORE INTO roles (id, name, description, capabilities, system, createdAt, updatedAt)
+        VALUES ('admin', 'Admin', 'Full system access', ?, 1, ?, ?)`).run(allCaps, now, now);
+      db.prepare(`INSERT OR IGNORE INTO roles (id, name, description, capabilities, system, createdAt, updatedAt)
+        VALUES ('viewer', 'Viewer', 'Read-only access', '[]', 1, ?, ?)`).run(now, now);
+
+      // 4. Assign ALL existing users the admin role so day-one behavior is
+      // identical to pre-migration (all write endpoints were open or
+      // admin-only, and most users could hit them). Admins can then
+      // restrict access by assigning viewer/custom roles post-migration.
+      const users = db.prepare('SELECT email FROM users').all();
+      const assignStmt = db.prepare(`INSERT OR IGNORE INTO user_roles (email, roleId, grantedBy, grantedAt)
+        VALUES (?, 'admin', 'migration', ?)`);
+      for (const user of users) {
+        assignStmt.run(user.email, now);
+      }
+
+      // 5. Assign all existing API keys the admin role
+      db.prepare("UPDATE api_keys SET roleId = 'admin' WHERE roleId IS NULL").run();
+
+      // 6. Drop the permissions column from users (SQLite 3.35+ native support)
+      const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+      if (userCols.includes('permissions')) {
+        db.prepare('ALTER TABLE users DROP COLUMN permissions').run();
+      }
+
+      // 7. Extend the audit table with resource and capability columns
+      const auditCols = db.prepare("PRAGMA table_info(audit)").all().map(c => c.name);
+      if (!auditCols.includes('resource')) {
+        db.prepare('ALTER TABLE audit ADD COLUMN resource TEXT').run();
+      }
+      if (!auditCols.includes('capability')) {
+        db.prepare('ALTER TABLE audit ADD COLUMN capability TEXT').run();
+      }
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_resource ON audit(resource)').run();
     },
   ];
 

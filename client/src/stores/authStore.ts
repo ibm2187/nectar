@@ -1,24 +1,13 @@
 import { create } from 'zustand'
 
-export interface UserPermissions {
-  releases: boolean
-  roadmap: boolean
-  tickets: boolean
-  environments: boolean
-  health: boolean
-  features: boolean
-  integrations: boolean
-  issues: boolean
-  tasks: boolean
-}
-
 export interface AuthUser {
   email: string
   name: string
   picture: string | null
   domain: string | null
   role: 'admin' | 'user'
-  permissions: UserPermissions | null
+  capabilities: string[]
+  roles: string[]
 }
 
 interface AuthState {
@@ -30,17 +19,26 @@ interface AuthState {
   ssoEnabled: boolean
   /** The authenticated user (null when not authenticated) */
   user: AuthUser | null
+  /** Check if the current user has a specific capability */
+  hasCap: (cap: string) => boolean
   /** Load auth state from /api/auth/me */
   loadAuth: () => Promise<void>
   /** Log out the current user */
   logout: () => Promise<void>
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
   loaded: false,
   authenticated: false,
   ssoEnabled: false,
   user: null,
+
+  hasCap: (cap: string) => {
+    const { user, ssoEnabled } = get()
+    // Dev mode (SSO disabled) = full access, matching backend behavior
+    if (!ssoEnabled) return true
+    return user?.capabilities.includes(cap) ?? false
+  },
 
   loadAuth: async () => {
     try {

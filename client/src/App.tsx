@@ -22,7 +22,7 @@ import { IncidentsPage } from './features/incidents/IncidentsPage'
 import { ProcessHealthPage } from './features/reports/ProcessHealthPage'
 import { LoginPage } from './features/auth/LoginPage'
 import { connectWebSocket, disconnectWebSocket, useWsStore } from './stores/wsStore'
-import { useAuthStore, type UserPermissions } from './stores/authStore'
+import { useAuthStore } from './stores/authStore'
 
 declare global {
   interface Window {
@@ -82,20 +82,20 @@ export default function App() {
             <Route path="/" element={<HomePage />} />
             <Route path="/standup" element={<StandupPage />} />
             <Route path="/builds" element={<BuildsPage />} />
-            <Route path="/releases" element={<PermissionGuard permKey="releases"><ReleasesPage /></PermissionGuard>} />
-            <Route path="/features" element={<PermissionGuard permKey="features"><FeaturesPage /></PermissionGuard>} />
-            <Route path="/integrations" element={<PermissionGuard permKey="integrations"><IntegrationsPage /></PermissionGuard>} />
-            <Route path="/releases/:key" element={<PermissionGuard permKey="releases"><ReleaseDetail /></PermissionGuard>} />
-            <Route path="/customers" element={<PermissionGuard permKey="environments"><CustomersPage /></PermissionGuard>} />
-            <Route path="/environments/:id" element={<PermissionGuard permKey="environments"><EnvironmentDetailPage /></PermissionGuard>} />
-            <Route path="/health-dashboard" element={<PermissionGuard permKey="health"><HealthDashboard /></PermissionGuard>} />
-            <Route path="/incidents" element={<PermissionGuard permKey="health"><IncidentsPage /></PermissionGuard>} />
-            <Route path="/health/:customerId" element={<PermissionGuard permKey="health"><CustomerStatusPage /></PermissionGuard>} />
-            <Route path="/issues" element={<PermissionGuard permKey="issues"><IssuesPage /></PermissionGuard>} />
-            <Route path="/tickets" element={<PermissionGuard permKey="tickets"><TicketsPage /></PermissionGuard>} />
-            <Route path="/roadmap" element={<PermissionGuard permKey="roadmap"><RoadmapPage /></PermissionGuard>} />
-            <Route path="/tasks-queue" element={<PermissionGuard permKey="tasks"><TasksPage /></PermissionGuard>} />
-            <Route path="/reports/process-health" element={<PermissionGuard permKey="releases"><ProcessHealthPage /></PermissionGuard>} />
+            <Route path="/releases" element={<ReleasesPage />} />
+            <Route path="/features" element={<FeaturesPage />} />
+            <Route path="/integrations" element={<IntegrationsPage />} />
+            <Route path="/releases/:key" element={<ReleaseDetail />} />
+            <Route path="/customers" element={<CustomersPage />} />
+            <Route path="/environments/:id" element={<EnvironmentDetailPage />} />
+            <Route path="/health-dashboard" element={<HealthDashboard />} />
+            <Route path="/incidents" element={<IncidentsPage />} />
+            <Route path="/health/:customerId" element={<CustomerStatusPage />} />
+            <Route path="/issues" element={<IssuesPage />} />
+            <Route path="/tickets" element={<TicketsPage />} />
+            <Route path="/roadmap" element={<RoadmapPage />} />
+            <Route path="/tasks-queue" element={<TasksPage />} />
+            <Route path="/reports/process-health" element={<ProcessHealthPage />} />
             <Route path="/config" element={<ConfigPage />} />
           </Route>
         </Routes>
@@ -127,33 +127,3 @@ function AuthGuard({ authLoaded, authenticated, ssoEnabled, children }: {
   return <>{children}</>
 }
 
-/**
- * Permission guard — checks the user's per-page permissions.
- * Admins always have access. When SSO is disabled, all pages are accessible.
- * Denied users see a 403 message.
- */
-function PermissionGuard({ permKey, children }: {
-  permKey: keyof UserPermissions
-  children: React.ReactNode
-}) {
-  const { user, ssoEnabled } = useAuthStore()
-
-  // SSO disabled or no user = open access
-  if (!ssoEnabled || !user) return <>{children}</>
-
-  // Admins always have access
-  if (user.role === 'admin') return <>{children}</>
-
-  // Check permission
-  if (user.permissions && !user.permissions[permKey]) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[50vh] text-center gap-3">
-        <p className="text-4xl font-bold text-muted-foreground">403</p>
-        <p className="text-sm text-muted-foreground">You don't have access to this page.</p>
-        <p className="text-xs text-muted-foreground">Contact an admin to request access.</p>
-      </div>
-    )
-  }
-
-  return <>{children}</>
-}

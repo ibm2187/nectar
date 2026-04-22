@@ -30,6 +30,14 @@ if (fs.existsSync(envPath)) {
   }
 }
 
+// ── Startup warnings ─────────────────────────────────────
+if (process.env.ENABLE_GOOGLE_SSO === 'true') {
+  const admins = (process.env.NECTAR_ADMINS || '').split(',').map(e => e.trim()).filter(Boolean);
+  if (admins.length === 0) {
+    log.warn('⚠ ENABLE_GOOGLE_SSO is true but NECTAR_ADMINS is empty — capability system is bypassed, ALL users get full access. Set NECTAR_ADMINS to at least one email to enable access control.');
+  }
+}
+
 // ── Load config ───────────────────────────────────────────
 const configPath = path.join(__dirname, '..', 'nectar.config.js');
 if (!fs.existsSync(configPath)) {
@@ -301,8 +309,11 @@ const services = {
   ticketStore, prStore,
   templateStore,
   alertRules, incidents, alertRouter,
+  audit,
 };
 const webServer = createWebServer(services, config);
+// Thread broadcastTo back into services so access routes can use it
+services.broadcastTo = webServer.broadcastTo;
 
 // Memory monitoring — log RSS + heap every 60s for OOM observability
 setInterval(() => {

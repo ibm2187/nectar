@@ -18,6 +18,7 @@ import { ReleaseScorecard } from './ReleaseScorecard'
 import { GenerateNotesDialog } from './GenerateNotesDialog'
 import { EditDraftDialog } from './EditDraftDialog'
 import { CustomerPills } from '../../components/CustomerPill'
+import { CapGuard } from '../../components/CapGuard'
 
 interface TaskArtifact {
   type: string
@@ -313,20 +314,28 @@ export function ReleaseDetail() {
         </div>
         <div className="flex flex-wrap gap-1 md:gap-1.5 overflow-x-auto">
           {nextStates.map(s => (
-            <Button key={s} variant="outline" size="sm" className="text-xs h-7" onClick={() => transition(s)}>
-              {s}
-            </Button>
+            <CapGuard key={s} cap="release.write">
+              <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => transition(s)}>
+                {s}
+              </Button>
+            </CapGuard>
           ))}
-          <Button variant="outline" size="sm" className="text-xs h-7" onClick={validate}>Validate</Button>
-          <Button variant="outline" size="sm" className="text-xs h-7" onClick={assessRisk}>Risk</Button>
-          <Button variant="outline" size="sm" className="text-xs h-7" onClick={async () => {
-            try {
-              const res = await apiFetch<{ ok: boolean; channel: string }>(`/releases/${encodeURIComponent(pathKey)}/notify`, { method: 'POST' })
-              if (res.ok) alert(`Posted to ${res.channel}`)
-            } catch (err) {
-              alert(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
-            }
-          }}>Notify Channel</Button>
+          <CapGuard cap="release.write">
+            <Button variant="outline" size="sm" className="text-xs h-7" onClick={validate}>Validate</Button>
+          </CapGuard>
+          <CapGuard cap="release.write">
+            <Button variant="outline" size="sm" className="text-xs h-7" onClick={assessRisk}>Risk</Button>
+          </CapGuard>
+          <CapGuard cap="notify.send">
+            <Button variant="outline" size="sm" className="text-xs h-7" onClick={async () => {
+              try {
+                const res = await apiFetch<{ ok: boolean; channel: string }>(`/releases/${encodeURIComponent(pathKey)}/notify`, { method: 'POST' })
+                if (res.ok) alert(`Posted to ${res.channel}`)
+              } catch (err) {
+                alert(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
+              }
+            }}>Notify Channel</Button>
+          </CapGuard>
           <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => setCommentPanel(true)}>
             {'\uD83D\uDCAC'} {comments.length} Comments
           </Button>
@@ -343,41 +352,49 @@ export function ReleaseDetail() {
                   <Button variant="outline" size="sm" className="text-xs h-7">Release Notes</Button>
                 </a>
               ))}
+              <CapGuard cap="release.write">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs h-7"
+                  onClick={() => setEditDraftOpen(true)}
+                >
+                  Edit Draft
+                </Button>
+              </CapGuard>
+              <CapGuard cap="release.write">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs h-7 text-muted-foreground"
+                  onClick={() => setNotesDialogOpen(true)}
+                >
+                  Regenerate Notes
+                </Button>
+              </CapGuard>
+            </>
+          ) : notesTask && notesTask.status === 'failed' ? (
+            <CapGuard cap="release.write">
               <Button
                 variant="outline"
                 size="sm"
                 className="text-xs h-7"
-                onClick={() => setEditDraftOpen(true)}
+                onClick={() => setNotesDialogOpen(true)}
               >
-                Edit Draft
+                Retry Notes
               </Button>
+            </CapGuard>
+          ) : (
+            <CapGuard cap="release.write">
               <Button
                 variant="outline"
                 size="sm"
-                className="text-xs h-7 text-muted-foreground"
+                className="text-xs h-7"
                 onClick={() => setNotesDialogOpen(true)}
               >
-                Regenerate Notes
+                Release Notes
               </Button>
-            </>
-          ) : notesTask && notesTask.status === 'failed' ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-xs h-7"
-              onClick={() => setNotesDialogOpen(true)}
-            >
-              Retry Notes
-            </Button>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-xs h-7"
-              onClick={() => setNotesDialogOpen(true)}
-            >
-              Release Notes
-            </Button>
+            </CapGuard>
           )}
         </div>
       </div>

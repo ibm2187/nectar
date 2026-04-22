@@ -23,6 +23,7 @@ class Audit extends EventEmitter {
     super();
     this._db = opts.db || getDb();
     this._entries = []; // mirror
+    this._hasNewColumns = this._checkNewColumns();
     this._load();
   }
 
@@ -103,17 +104,40 @@ class Audit extends EventEmitter {
   // ── Internal ────────────────────────────────────────────
 
   _insert(entry) {
-    this._db.prepare(`
-      INSERT INTO audit (id, version, action, detail, user, at)
-      VALUES (@id, @version, @action, @detail, @user, @at)
-    `).run({
+    const detail = entry.detail || {};
+    const params = {
       id: entry.id,
       version: entry.version ?? null,
       action: entry.action,
-      detail: JSON.stringify(entry.detail || {}),
+      detail: JSON.stringify(detail),
       user: entry.user ?? null,
       at: entry.at,
-    });
+    };
+
+    if (this._hasNewColumns) {
+      this._db.prepare(`
+        INSERT INTO audit (id, version, action, detail, user, at, resource, capability)
+        VALUES (@id, @version, @action, @detail, @user, @at, @resource, @capability)
+      `).run({
+        ...params,
+        resource: detail.resource || entry.resource || null,
+        capability: detail.capability || entry.capability || null,
+      });
+    } else {
+      this._db.prepare(`
+        INSERT INTO audit (id, version, action, detail, user, at)
+        VALUES (@id, @version, @action, @detail, @user, @at)
+      `).run(params);
+    }
+  }
+
+  _checkNewColumns() {
+    try {
+      const cols = this._db.prepare('PRAGMA table_info(audit)').all();
+      return cols.some(c => c.name === 'resource');
+    } catch {
+      return false;
+    }
   }
 
   _replaceAll(entries) {
