@@ -10,6 +10,7 @@ const { aggregateFeatureFlags, aggregateIntegrations } = require('../core/featur
 const { buildStandupData } = require('./standup');
 const { sendTicketNotification, sendStandupReminder, CANNED_MESSAGES } = require('./ticket-notify');
 const { computeMilestones, recomputeMilestones, refreshFromTemplate, hasGateActivity, autoComputeForRelease, inferReleaseType } = require('../core/milestone-engine');
+const { getArtifactsS3 } = require('../core/s3-artifacts');
 
 /**
  * Evaluate a gate's auto-check function against live release data.
@@ -2819,7 +2820,7 @@ module.exports = function createRoutes(services, config) {
       return res.status(400).json({ error: `Unknown artifact: ${filename}` });
     }
 
-    const s3 = _getArtifactsS3();
+    const s3 = getArtifactsS3();
     if (!s3) return res.status(503).json({ error: 'S3 release artifacts not configured' });
 
     const { GetObjectCommand } = require('@aws-sdk/client-s3');
@@ -2843,28 +2844,19 @@ module.exports = function createRoutes(services, config) {
   // ── Draft editing + regeneration ───────────────────────
   // GET raw draft content from S3, PUT edited content back, trigger re-render.
 
-  /**
-   * Helper: build an S3 client from the RELEASE_ARTIFACTS_* env vars.
-   * Returns null if not configured.
-   */
-  function _getArtifactsS3() {
-    const bucket = process.env.RELEASE_ARTIFACTS_BUCKET;
-    const region = process.env.RELEASE_ARTIFACTS_REGION || 'us-east-1';
-    const accessKeyId = process.env.RELEASE_ARTIFACTS_AWS_ACCESS_KEY_ID;
-    const secretAccessKey = process.env.RELEASE_ARTIFACTS_AWS_SECRET_ACCESS_KEY;
-    if (!bucket || !accessKeyId || !secretAccessKey) return null;
-    const { S3Client } = require('@aws-sdk/client-s3');
-    return {
-      client: new S3Client({ region, credentials: { accessKeyId, secretAccessKey } }),
-      bucket,
-    };
+  // Shared fallback: return release.notes as draft, or 404
+  function sendNotesFallback(res, version) {
+    const release = releases.get(version);
+    if (release && release.notes) {
+      return res.type('text/markdown').send(release.notes);
+    }
+    return res.status(404).json({ error: 'No draft found for this release. Generate release notes first.' });
   }
 
-  // GET /api/releases/:version/draft — return the raw draft markdown as text
   router.get('/releases/:version/draft', asyncHandler(async (req, res) => {
     const { version } = req.params;
-    const s3 = _getArtifactsS3();
-    if (!s3) return res.status(503).json({ error: 'S3 release artifacts not configured' });
+    const s3 = getArtifactsS3();
+    if (!s3) return sendNotesFallback(res, version);
 
     const { GetObjectCommand } = require('@aws-sdk/client-s3');
     const key = `releases/${version}/release-notes-draft.md`;
@@ -2875,7 +2867,7 @@ module.exports = function createRoutes(services, config) {
       res.type('text/markdown').send(body);
     } catch (err) {
       if (err.name === 'NoSuchKey' || err.$metadata?.httpStatusCode === 404) {
-        return res.status(404).json({ error: 'No draft found for this release. Generate release notes first.' });
+        return sendNotesFallback(res, version);
       }
       log.error(`Failed to fetch draft: ${err.message}`);
       res.status(500).json({ error: 'Failed to fetch draft' });
@@ -2894,44 +2886,50 @@ module.exports = function createRoutes(services, config) {
       return res.status(400).json({ error: 'Draft too large (max 500KB)' });
     }
 
-    const s3 = _getArtifactsS3();
-    if (!s3) return res.status(503).json({ error: 'S3 release artifacts not configured' });
+    // Always persist to release.notes so edits survive without S3
+    const release = releases.get(version);
+    if (!release) return res.status(404).json({ error: `Release not found: ${version}` });
+    releases.update(version, { notes: content }, req.user ? req.user.email : 'draft-edit');
 
-    // Save the edited draft to S3
-    const { PutObjectCommand } = require('@aws-sdk/client-s3');
-    const key = `releases/${version}/release-notes-draft.md`;
+    const s3 = getArtifactsS3();
+    if (s3) {
+      // Also save to S3 when configured
+      const { PutObjectCommand } = require('@aws-sdk/client-s3');
+      const key = `releases/${version}/release-notes-draft.md`;
 
-    try {
-      await s3.client.send(new PutObjectCommand({
-        Bucket: s3.bucket,
-        Key: key,
-        Body: content,
-        ContentType: 'text/markdown',
-      }));
-    } catch (err) {
-      log.error(`Failed to save draft: ${err.message}`);
-      return res.status(500).json({ error: 'Failed to save draft to S3' });
+      try {
+        await s3.client.send(new PutObjectCommand({
+          Bucket: s3.bucket,
+          Key: key,
+          Body: content,
+          ContentType: 'text/markdown',
+        }));
+      } catch (err) {
+        log.warn(`Failed to save draft to S3 (saved to release.notes): ${err.message}`);
+      }
     }
 
     // Optionally trigger re-render
     if (regenerate !== false && taskQueue) {
       // Cancel any existing pending/in-progress task for this release
       const existing = taskQueue.findByRelease('release-notes', version);
+      const promptFromPrev = existing?.input?.prompt;
+
       if (existing && (existing.status === 'pending' || existing.status === 'in-progress')) {
         taskQueue.fail(existing.id, 'Superseded by draft edit');
       }
 
       // Create a new task with editedDraft flag
+      const draftKey = `releases/${version}/release-notes-draft.md`;
       const input = {
         version,
         editedDraft: true,
-        draftS3Key: key,
+        draftS3Key: draftKey,
       };
 
       // Include prompt from previous task if available
-      const prevTask = taskQueue.findByRelease('release-notes', version);
-      if (prevTask && prevTask.input && prevTask.input.prompt) {
-        input.prompt = prevTask.input.prompt;
+      if (promptFromPrev) {
+        input.prompt = promptFromPrev;
       }
 
       const requestedBy = req.user ? req.user.email : null;
