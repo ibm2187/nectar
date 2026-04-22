@@ -55,6 +55,27 @@ describe('NotificationSettings (grouped model)', () => {
       expect(s.get('dailyDigest')).toBe(true);
       expect(s.get('buildFailures')).toBe(true);
       expect(s.get('cherryPickConflicts')).toBe(true);
+      // Environment alerts group (added 2026-04-22)
+      expect(s.get('envUnhealthy')).toBe(true);
+      expect(s.get('envRecovered')).toBe(true);
+      expect(s.get('envSustained')).toBe(true);
+    });
+
+    it('environmentAlerts group is present in schema', () => {
+      const s = freshSettings('production', db);
+      const schema = s.getSchema();
+      expect(schema.environmentAlerts).toBeDefined();
+      expect(schema.environmentAlerts.notifications.envUnhealthy).toBeDefined();
+      expect(schema.environmentAlerts.notifications.envRecovered).toBeDefined();
+      expect(schema.environmentAlerts.notifications.envSustained).toBeDefined();
+    });
+
+    it('disabling environmentAlerts group hides all env alert toggles', () => {
+      const s = freshSettings('production', db);
+      s.setGroup('environmentAlerts', false);
+      expect(s.get('envUnhealthy')).toBe(false);
+      expect(s.get('envRecovered')).toBe(false);
+      expect(s.get('envSustained')).toBe(false);
     });
 
     it('redirect fields default to null', () => {

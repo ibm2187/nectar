@@ -290,6 +290,160 @@ class SlackNotifier {
     return this.postMessage(channel, lines.join('\n'));
   }
 
+  // ── Alerting helpers ────────────────────────────────────
+
+  /**
+   * Validate that a channel exists and the bot is a member.
+   *
+   * Used by the alerting system to block rule saves until the target
+   * channel is reachable. Returns a structured result so callers can
+   * render a specific UI error (not-in-channel vs not-found).
+   *
+   * @param {string} channelName - channel name with or without '#', or channel ID
+   * @returns {Promise<{ ok: boolean, inChannel?: boolean, channelId?: string, name?: string, error?: string, code?: string }>}
+   */
+  async validateChannel(channelName) {
+    if (!this.ready) {
+      return { ok: false, error: 'Slack is not connected', code: 'not_connected' };
+    }
+    if (!channelName) {
+      return { ok: false, error: 'Channel name is required', code: 'empty' };
+    }
+
+    // Normalize: strip leading '#'
+    const raw = String(channelName).trim();
+    const bare = raw.startsWith('#') ? raw.slice(1) : raw;
+    const looksLikeId = /^[CG][A-Z0-9]{6,}$/.test(bare);
+
+    try {
+      let channelId = looksLikeId ? bare : null;
+
+      // If we were given a name, resolve to an ID via conversations.list.
+      // Slack requires an ID (not a name) for conversations.info.
+      if (!channelId) {
+        // Search public then private; stop when found
+        for (const types of ['public_channel', 'private_channel']) {
+          let cursor;
+          let found = null;
+          do {
+            const resp = await this.app.client.conversations.list({
+              types,
+              limit: 1000,
+              cursor,
+              exclude_archived: true,
+            });
+            found = (resp.channels || []).find(c => c.name === bare);
+            if (found) break;
+            cursor = resp.response_metadata?.next_cursor;
+          } while (cursor);
+          if (found) { channelId = found.id; break; }
+        }
+        if (!channelId) {
+          return { ok: false, error: `Channel #${bare} not found`, code: 'channel_not_found' };
+        }
+      }
+
+      const info = await this.app.client.conversations.info({ channel: channelId });
+      const channel = info.channel || {};
+      if (channel.is_archived) {
+        return { ok: false, error: 'Channel is archived', code: 'is_archived' };
+      }
+      const inChannel = !!channel.is_member;
+      if (!inChannel) {
+        return {
+          ok: false,
+          inChannel: false,
+          channelId,
+          name: channel.name,
+          error: `The Nectar bot is not a member of #${channel.name}. Add it to the channel with /invite @Nectar before saving.`,
+          code: 'not_in_channel',
+        };
+      }
+      return { ok: true, inChannel: true, channelId, name: channel.name };
+    } catch (err) {
+      const code = err.data?.error || err.message || 'unknown';
+      log.warn(`Slack validateChannel(${channelName}): ${code}`);
+      if (code === 'channel_not_found' || code === 'not_in_channel') {
+        return { ok: false, error: `Channel ${channelName}: ${code}`, code };
+      }
+      return { ok: false, error: `Slack error: ${code}`, code };
+    }
+  }
+
+  /**
+   * Post an alert to one or more channels. Returns an array of
+   * per-channel results so callers can track Slack message timestamps
+   * for threading.
+   *
+   * @param {object} opts
+   * @param {string[]} opts.channels - channel names (with or without '#')
+   * @param {string} opts.text - fallback text (also used as notification preview)
+   * @param {Array} [opts.blocks] - Slack Block Kit blocks
+   * @param {string} [opts.mention] - '@here' | '@channel' | '<@UXXX>' | '<!subteam^SXXX>'
+   * @param {string} [opts.threadTs] - post as a threaded reply (to a specific channel's anchor ts)
+   * @returns {Promise<Array<{ channel, ok, ts?, error? }>>}
+   */
+  async postAlert({ channels = [], text = '', blocks = null, mention = null, threadTs = null } = {}) {
+    if (!this.ready) {
+      return channels.map(c => ({ channel: c, ok: false, error: 'Slack not connected' }));
+    }
+    const prefixed = mention ? `${mention} ${text}` : text;
+    const results = [];
+    for (const channel of channels) {
+      const res = await this._postOne({ channel, text: prefixed, blocks, threadTs });
+      results.push({ channel, ...res });
+    }
+    return results;
+  }
+
+  /**
+   * Post a threaded reply. Used for ack/resolve/recovery updates on an
+   * existing incident post.
+   */
+  async postReply({ channel, ts, text, blocks = null } = {}) {
+    if (!this.ready) return { ok: false, error: 'Slack not connected' };
+    if (!channel || !ts) return { ok: false, error: 'channel and ts are required' };
+    return this._postOne({ channel, text, blocks, threadTs: ts });
+  }
+
+  /**
+   * Shared helper used by both postAlert and postReply. Respects the
+   * redirectChannel setting from NotificationSettings and tracks bogus
+   * channels in _badChannels to avoid retry storms.
+   */
+  async _postOne({ channel, text, blocks = null, threadTs = null }) {
+    let target = channel;
+    let body = text;
+
+    const redirect = this.notificationSettings?.redirectChannel;
+    if (redirect) {
+      body = `[-> ${target}] ${body}`;
+      target = redirect;
+    }
+
+    if (this._badChannels && this._badChannels.has(target)) {
+      return { ok: false, error: `Channel ${target} previously failed` };
+    }
+
+    try {
+      const opts = { channel: target, text: body };
+      if (blocks) opts.blocks = blocks;
+      if (threadTs) opts.thread_ts = threadTs;
+      const resp = await this.app.client.chat.postMessage(opts);
+      return { ok: true, ts: resp.ts, channel: resp.channel || target };
+    } catch (err) {
+      const code = err.data?.error || err.message;
+      if (String(code).includes('channel_not_found') || String(code).includes('not_in_channel')) {
+        if (!this._badChannels) this._badChannels = new Set();
+        this._badChannels.add(target);
+        log.warn(`Slack: disabled notifications to ${target} (${code})`);
+      } else {
+        log.error(`Slack postAlert to ${target} failed: ${code}`);
+      }
+      return { ok: false, error: String(code) };
+    }
+  }
+
   async stop() {
     if (this.app) {
       await this.app.stop().catch(() => {});

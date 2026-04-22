@@ -9,6 +9,7 @@ import { cn } from '../../lib/utils'
 import { IntegrationsConfigPage } from '../integrations-config/IntegrationsConfigPage'
 import { UpdatePage } from '../admin/UpdatePage'
 import { ReleaseTrainTab } from './ReleaseTrainTab'
+import { AlertRulesPanel } from '../incidents/AlertRulesPanel'
 import { SortableHeader, useSortableData, useSortState } from '../../components/SortableHeader'
 import { lightenHex } from '../../lib/color-utils'
 
@@ -1520,6 +1521,9 @@ function NotificationsTab() {
 
       {/* Notification Routing (redirect overrides) */}
       <NotificationRoutingCard settings={settings} saving={saving} updateSettings={updateSettings} />
+
+      {/* Alert Rules — configurable per-rule Slack routing for triggers like env-unhealthy */}
+      <AlertRulesPanel />
 
       {/* Test — send digest to a specific person */}
       <Card>

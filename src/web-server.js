@@ -39,6 +39,14 @@ const themeConfig = new ThemeConfig();
 const NotificationSettings = require('./core/notification-settings');
 const notificationSettings = new NotificationSettings();
 
+// Alerting system — CRUD + incident lifecycle. Web server handles
+// user-facing incident actions (ack/resolve/assign/note) and the
+// AlertRouter thread-replies back into Slack.
+const AlertRuleStore = require('./core/alert-rule-store');
+const alertRules = new AlertRuleStore();
+const IncidentStore = require('./core/incident-store');
+const incidents = new IncidentStore();
+
 const { TemplateStore } = require('./core/milestone-engine');
 const templateStore = new TemplateStore();
 log.info(`[web] Template store: ${templateStore.list().length} templates`);
@@ -137,6 +145,39 @@ const releaseNotifier = new ReleaseNotifier(releases, slack, config, notificatio
 const NotificationEngine = require('./core/notification-engine');
 const notificationEngine = new NotificationEngine({
   slack, releases, releaseNotifier, peopleDirectory, userStore, notificationSettings, availability, config,
+});
+
+// AlertRouter — the choke point for rule-based alerting. Wired here
+// so incident lifecycle actions (ack/resolve/assign/note) can thread
+// replies back into Slack from the web server process.
+const AlertRouter = require('./core/alert-router');
+const alertRouter = new AlertRouter({
+  alertRules, incidents, slack, notificationSettings,
+});
+incidents.on('incident:acknowledged', (inc, ev) => {
+  alertRouter.onIncidentAcknowledged(inc, ev).catch(err =>
+    log.warn(`[web] AlertRouter.onIncidentAcknowledged failed: ${err.message}`)
+  );
+});
+incidents.on('incident:resolved', (inc, ev) => {
+  alertRouter.onIncidentResolved(inc, ev).catch(err =>
+    log.warn(`[web] AlertRouter.onIncidentResolved failed: ${err.message}`)
+  );
+});
+incidents.on('incident:reopened', (inc, ev) => {
+  alertRouter.onIncidentReopened(inc, ev).catch(err =>
+    log.warn(`[web] AlertRouter.onIncidentReopened failed: ${err.message}`)
+  );
+});
+incidents.on('incident:assigned', (inc, ev) => {
+  alertRouter.onIncidentAssigned(inc, ev).catch(err =>
+    log.warn(`[web] AlertRouter.onIncidentAssigned failed: ${err.message}`)
+  );
+});
+incidents.on('incident:note-added', (inc, ev) => {
+  alertRouter.onIncidentNoteAdded(inc, ev).catch(err =>
+    log.warn(`[web] AlertRouter.onIncidentNoteAdded failed: ${err.message}`)
+  );
 });
 
 // Stub envPoller for routes that check status
@@ -247,6 +288,7 @@ const services = {
   peopleDirectory, notificationSettings, notificationEngine, availability,
   ticketStore, prStore, velocityEngine,
   templateStore,
+  alertRules, incidents, alertRouter,
 };
 
 const webServer = createWebServer(services, config);

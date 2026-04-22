@@ -81,7 +81,7 @@ const DONE_STATUSES_FOR_RISK = new Set([
  * @param {object} config
  */
 module.exports = function createRoutes(services, config) {
-  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig, apiKeys, taskQueue, userStore, datadog, datadogPoller, ticketStore, prStore, velocityEngine } = services;
+  const { releases, repoManager, github, risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth, customerStore, webplatformScanner, envPoller, themeConfig, apiKeys, taskQueue, userStore, datadog, datadogPoller, ticketStore, prStore, velocityEngine, alertRules, incidents, slack, alertRouter } = services;
 
   // Nectar's own repo — used by the Issues page so users can file bugs/feedback.
   const NECTAR_REPO = 'mavencare/nectar';
@@ -3911,6 +3911,12 @@ module.exports = function createRoutes(services, config) {
       transitions: ReleaseManager.TRANSITIONS,
     });
   });
+
+  // ── Alerts (rules + incidents) ───────────────────────
+  if (alertRules && incidents) {
+    const createAlertsRouter = require('./alerts');
+    router.use('/alerts', createAlertsRouter({ alertRules, incidents, slack, alertRouter }));
+  }
 
   // ── Global error handler ─────────────────────────────
   // Catches unhandled errors from asyncHandler and any throw in sync routes

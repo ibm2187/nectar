@@ -37,6 +37,15 @@ const GROUP_SCHEMA = {
       cherryPickConflicts: { label: 'Cherry-Pick Conflicts', description: 'DMs when a cherry-pick has a merge conflict' },
     },
   },
+  environmentAlerts: {
+    label: 'Environment Alerts',
+    description: 'Slack posts when an environment becomes unhealthy, recovers, or stays degraded. Routing is controlled by rules configured on this page.',
+    notifications: {
+      envUnhealthy: { label: 'Unhealthy Transitions', description: 'Fires when an environment transitions from healthy to unhealthy' },
+      envRecovered: { label: 'Recovery', description: 'Fires when a previously-unhealthy environment becomes healthy again' },
+      envSustained: { label: 'Sustained Degradation', description: 'Escalation fired when an environment stays unhealthy for N minutes' },
+    },
+  },
 };
 
 // Reverse lookup: notification key → group key

@@ -456,6 +456,90 @@ function applySchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_tt_version ON ticket_truth(repo, version);
     CREATE INDEX IF NOT EXISTS idx_tt_health ON ticket_truth(healthCategory);
+
+    -- ── alert_rules (configurable Slack alert routing) ─────
+    CREATE TABLE IF NOT EXISTS alert_rules (
+      id           TEXT PRIMARY KEY,
+      name         TEXT NOT NULL,
+      triggerType  TEXT NOT NULL,
+      filter       TEXT NOT NULL DEFAULT '{}',     -- JSON: { customerIds?, envIds?, envTier?, components?, sustainedMinutes? }
+      channels     TEXT NOT NULL DEFAULT '[]',     -- JSON array of channel names
+      mention      TEXT,                            -- '@here' | '<!subteam^S123>' | '<@U123>' | null
+      severity     TEXT NOT NULL DEFAULT 'critical',
+      enabled      INTEGER NOT NULL DEFAULT 1,
+      lastFiredAt  TEXT,
+      createdAt    TEXT NOT NULL,
+      updatedAt    TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_alert_rules_trigger ON alert_rules(triggerType);
+    CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
+
+    -- ── alert_state (transition detection + dedup) ─────────
+    CREATE TABLE IF NOT EXISTS alert_state (
+      key                TEXT PRIMARY KEY,            -- e.g. "env-health:<envId>"
+      status             TEXT,                         -- 'healthy' | 'degraded' | 'unhealthy' | etc.
+      failingComponents  TEXT NOT NULL DEFAULT '[]',   -- JSON array
+      firstFailedAt      TEXT,                         -- ISO, for sustained detection
+      lastAlertedAt      TEXT,                         -- ISO, for dedup window
+      consecutiveCount   INTEGER NOT NULL DEFAULT 0,   -- consecutive polls in current state (flap guard)
+      incidentId         TEXT,                         -- FK to current open incident
+      escalated          INTEGER NOT NULL DEFAULT 0,   -- 1 once sustained-degraded has fired for this streak
+      updatedAt          TEXT NOT NULL
+    );
+
+    -- ── alert_incidents (first-class tracked incident) ─────
+    CREATE TABLE IF NOT EXISTS alert_incidents (
+      id                 TEXT PRIMARY KEY,
+      ruleId             TEXT,                         -- null for manual incidents
+      triggerType        TEXT NOT NULL,                -- or 'manual'
+      source             TEXT NOT NULL DEFAULT 'auto', -- 'auto' | 'manual'
+      subjectKey         TEXT,                         -- e.g. "<envId>:Cache"
+      customerId         TEXT,                         -- denormalized for filtering
+      envId              TEXT,                         -- denormalized for filtering
+
+      summary            TEXT NOT NULL,
+      description        TEXT,
+      severity           TEXT NOT NULL DEFAULT 'critical',
+
+      status             TEXT NOT NULL DEFAULT 'open', -- 'open' | 'acknowledged' | 'resolved' | 'reopened'
+      assigneeUserId     TEXT,
+      assigneeSlackId    TEXT,
+
+      openedAt           TEXT NOT NULL,
+      acknowledgedAt     TEXT,
+      acknowledgedBy     TEXT,
+      resolvedAt         TEXT,
+      resolvedBy         TEXT,
+      resolution         TEXT,                         -- 'auto' | 'manual' | null
+
+      slackChannel       TEXT,
+      slackTs            TEXT,
+      slackPosts         TEXT NOT NULL DEFAULT '[]',   -- JSON: [{channel, ts}] — all channels the incident was posted to
+      payloadJson        TEXT NOT NULL DEFAULT '{}',   -- snapshot at open-time
+
+      createdAt          TEXT NOT NULL,
+      updatedAt          TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_alert_incidents_status     ON alert_incidents(status);
+    CREATE INDEX IF NOT EXISTS idx_alert_incidents_customerId ON alert_incidents(customerId);
+    CREATE INDEX IF NOT EXISTS idx_alert_incidents_envId      ON alert_incidents(envId);
+    CREATE INDEX IF NOT EXISTS idx_alert_incidents_openedAt   ON alert_incidents(openedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_alert_incidents_severity   ON alert_incidents(severity);
+    CREATE INDEX IF NOT EXISTS idx_alert_incidents_assignee   ON alert_incidents(assigneeUserId);
+
+    -- ── incident_events (audit trail for incident lifecycle) ─
+    CREATE TABLE IF NOT EXISTS incident_events (
+      id            TEXT PRIMARY KEY,
+      incidentId    TEXT NOT NULL,
+      type          TEXT NOT NULL,                -- 'opened' | 'acknowledged' | 'resolved' | 'reopened' | 'note' | 'assigned' | 'severity-changed' | 'recovery-detected' | 'sustained' | 'dedup-suppressed'
+      actorUserId   TEXT,                          -- null = system
+      actorName     TEXT,                          -- denormalized
+      payloadJson   TEXT NOT NULL DEFAULT '{}',
+      at            TEXT NOT NULL,
+      FOREIGN KEY (incidentId) REFERENCES alert_incidents(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_incident_events_incidentId ON incident_events(incidentId);
+    CREATE INDEX IF NOT EXISTS idx_incident_events_at         ON incident_events(at DESC);
   `);
 }
 
@@ -694,6 +778,93 @@ function applyMigrations(db) {
       // Force a full ticket re-sync on next worker pass — platform array will
       // be authoritative, computed from raw JIRA fixVersion names.
       db.prepare(`UPDATE jira_sync_meta SET lastTicketSyncTime = NULL WHERE id = 1`).run();
+    },
+    // v13: Add alerting system tables — alert_rules, alert_state,
+    // alert_incidents, incident_events. Fresh installs already have these
+    // via CREATE TABLE IF NOT EXISTS in applySchema; this migration is a
+    // no-op on fresh DBs but creates them for existing installs.
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS alert_rules (
+          id           TEXT PRIMARY KEY,
+          name         TEXT NOT NULL,
+          triggerType  TEXT NOT NULL,
+          filter       TEXT NOT NULL DEFAULT '{}',
+          channels     TEXT NOT NULL DEFAULT '[]',
+          mention      TEXT,
+          severity     TEXT NOT NULL DEFAULT 'critical',
+          enabled      INTEGER NOT NULL DEFAULT 1,
+          lastFiredAt  TEXT,
+          createdAt    TEXT NOT NULL,
+          updatedAt    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_alert_rules_trigger ON alert_rules(triggerType);
+        CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
+
+        CREATE TABLE IF NOT EXISTS alert_state (
+          key                TEXT PRIMARY KEY,
+          status             TEXT,
+          failingComponents  TEXT NOT NULL DEFAULT '[]',
+          firstFailedAt      TEXT,
+          lastAlertedAt      TEXT,
+          consecutiveCount   INTEGER NOT NULL DEFAULT 0,
+          incidentId         TEXT,
+          escalated          INTEGER NOT NULL DEFAULT 0,
+          updatedAt          TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS alert_incidents (
+          id                 TEXT PRIMARY KEY,
+          ruleId             TEXT,
+          triggerType        TEXT NOT NULL,
+          source             TEXT NOT NULL DEFAULT 'auto',
+          subjectKey         TEXT,
+          customerId         TEXT,
+          envId              TEXT,
+
+          summary            TEXT NOT NULL,
+          description        TEXT,
+          severity           TEXT NOT NULL DEFAULT 'critical',
+
+          status             TEXT NOT NULL DEFAULT 'open',
+          assigneeUserId     TEXT,
+          assigneeSlackId    TEXT,
+
+          openedAt           TEXT NOT NULL,
+          acknowledgedAt     TEXT,
+          acknowledgedBy     TEXT,
+          resolvedAt         TEXT,
+          resolvedBy         TEXT,
+          resolution         TEXT,
+
+          slackChannel       TEXT,
+          slackTs            TEXT,
+          slackPosts         TEXT NOT NULL DEFAULT '[]',
+          payloadJson        TEXT NOT NULL DEFAULT '{}',
+
+          createdAt          TEXT NOT NULL,
+          updatedAt          TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_alert_incidents_status     ON alert_incidents(status);
+        CREATE INDEX IF NOT EXISTS idx_alert_incidents_customerId ON alert_incidents(customerId);
+        CREATE INDEX IF NOT EXISTS idx_alert_incidents_envId      ON alert_incidents(envId);
+        CREATE INDEX IF NOT EXISTS idx_alert_incidents_openedAt   ON alert_incidents(openedAt DESC);
+        CREATE INDEX IF NOT EXISTS idx_alert_incidents_severity   ON alert_incidents(severity);
+        CREATE INDEX IF NOT EXISTS idx_alert_incidents_assignee   ON alert_incidents(assigneeUserId);
+
+        CREATE TABLE IF NOT EXISTS incident_events (
+          id            TEXT PRIMARY KEY,
+          incidentId    TEXT NOT NULL,
+          type          TEXT NOT NULL,
+          actorUserId   TEXT,
+          actorName     TEXT,
+          payloadJson   TEXT NOT NULL DEFAULT '{}',
+          at            TEXT NOT NULL,
+          FOREIGN KEY (incidentId) REFERENCES alert_incidents(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_incident_events_incidentId ON incident_events(incidentId);
+        CREATE INDEX IF NOT EXISTS idx_incident_events_at         ON incident_events(at DESC);
+      `);
     },
   ];
 

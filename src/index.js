@@ -86,6 +86,44 @@ const NotificationSettings = require('./core/notification-settings');
 const notificationSettings = new NotificationSettings();
 slack.notificationSettings = notificationSettings;
 
+const AlertRuleStore = require('./core/alert-rule-store');
+const alertRules = new AlertRuleStore();
+
+const IncidentStore = require('./core/incident-store');
+const incidents = new IncidentStore();
+
+const AlertRouter = require('./core/alert-router');
+const alertRouter = new AlertRouter({
+  alertRules, incidents, slack, notificationSettings,
+});
+
+// Round-trip: Nectar incident lifecycle actions → Slack thread replies
+incidents.on('incident:acknowledged', (inc, ev) => {
+  alertRouter.onIncidentAcknowledged(inc, ev).catch(err =>
+    log.warn(`AlertRouter.onIncidentAcknowledged failed: ${err.message}`)
+  );
+});
+incidents.on('incident:resolved', (inc, ev) => {
+  alertRouter.onIncidentResolved(inc, ev).catch(err =>
+    log.warn(`AlertRouter.onIncidentResolved failed: ${err.message}`)
+  );
+});
+incidents.on('incident:reopened', (inc, ev) => {
+  alertRouter.onIncidentReopened(inc, ev).catch(err =>
+    log.warn(`AlertRouter.onIncidentReopened failed: ${err.message}`)
+  );
+});
+incidents.on('incident:assigned', (inc, ev) => {
+  alertRouter.onIncidentAssigned(inc, ev).catch(err =>
+    log.warn(`AlertRouter.onIncidentAssigned failed: ${err.message}`)
+  );
+});
+incidents.on('incident:note-added', (inc, ev) => {
+  alertRouter.onIncidentNoteAdded(inc, ev).catch(err =>
+    log.warn(`AlertRouter.onIncidentNoteAdded failed: ${err.message}`)
+  );
+});
+
 const ZohoClient = require('./integrations/zoho');
 const zoho = new ZohoClient();
 if (zoho.isConfigured()) log.info('Zoho Desk client configured');
@@ -224,6 +262,19 @@ releases.on('deployment:updated', (release, deployment) => {
   if (!notificationSettings.get('deploys')) return;
   if (deployment.status === 'failed') {
     slack.notifyDeployFailed(release, deployment);
+    // Tier-2 trigger: feed into the AlertRouter so any configured
+    // deploy-failed rules can post to their own channels too. The
+    // subjectKey dedups so a multi-stage deploy that fails twice
+    // doesn't open two incidents for the same version.
+    alertRouter.handleTrigger({
+      triggerType: 'deploy-failed',
+      subjectKey: `deploy-failed:${release.version}:${deployment.customer}:${deployment.env}`,
+      customerId: deployment.customer,
+      envId: `${deployment.customer}-${deployment.env}`,
+      envTier: deployment.env === 'prod' || deployment.env === 'production' ? 'production' : 'staging',
+      summary: `Deploy of ${release.version} failed on ${deployment.customer} ${deployment.env}`,
+      payload: { version: release.version, customer: deployment.customer, env: deployment.env, at: deployment.at },
+    }).catch(err => log.warn(`AlertRouter.handleTrigger(deploy-failed) failed: ${err.message}`));
   } else {
     slack.notifyDeployment(release, deployment);
   }
@@ -249,6 +300,7 @@ const services = {
   peopleDirectory, notificationSettings, notificationEngine, availability,
   ticketStore, prStore,
   templateStore,
+  alertRules, incidents, alertRouter,
 };
 const webServer = createWebServer(services, config);
 
@@ -334,6 +386,87 @@ setInterval(() => {
     }
     pipelineSync.promoteToHot(newVersion);
   });
+
+  // Feed health observations into the AlertRouter for flap-guarded transitions
+  envPoller.on('env:health-observed', (obs) => {
+    alertRouter.observeEnvHealth(obs).catch(err =>
+      log.warn(`AlertRouter.observeEnvHealth failed for ${obs.envId}: ${err.message}`)
+    );
+  });
+
+  // Tier-2: feature flag / integration / upgrade change detection.
+  // The poller emits discrete change events (one per flag/integration/upgrade
+  // that transitioned). We fan them into the router's generic handler.
+
+  envPoller.on('env:feature-flag-changed', (ev) => {
+    alertRouter.handleTrigger({
+      triggerType: 'feature-flag-changed',
+      subjectKey: `flag:${ev.envId}:${ev.source}:${ev.key}`,
+      customerId: ev.customerId,
+      envId: ev.envId,
+      envTier: ev.envTier,
+      summary: `Feature flag "${ev.key}" ${ev.to === null ? 'removed' : ev.to ? 'enabled' : 'disabled'} on ${ev.envName || ev.envId}`,
+      description: `Source: ${ev.source} · Previous: ${String(ev.from)} → Current: ${String(ev.to)}`,
+      payload: { source: ev.source, key: ev.key, from: ev.from, to: ev.to },
+    }).catch(err => log.warn(`AlertRouter.handleTrigger(feature-flag-changed) failed: ${err.message}`));
+  });
+
+  envPoller.on('env:integration-changed', (ev) => {
+    alertRouter.handleTrigger({
+      triggerType: 'integration-config-changed',
+      subjectKey: `integration:${ev.envId}:${ev.source}:${ev.key}`,
+      customerId: ev.customerId,
+      envId: ev.envId,
+      envTier: ev.envTier,
+      summary: `Integration "${ev.key}" ${ev.to === null ? 'removed' : ev.to ? 'enabled' : 'disabled'} on ${ev.envName || ev.envId}`,
+      description: `Source: ${ev.source} · Previous: ${String(ev.from)} → Current: ${String(ev.to)}`,
+      payload: { source: ev.source, key: ev.key, from: ev.from, to: ev.to },
+    }).catch(err => log.warn(`AlertRouter.handleTrigger(integration-config-changed) failed: ${err.message}`));
+  });
+
+  envPoller.on('env:upgrade-failed', (ev) => {
+    alertRouter.handleTrigger({
+      triggerType: 'upgrade-failed',
+      subjectKey: `upgrade-failed:${ev.envId}:${ev.upgradeName}`,
+      customerId: ev.customerId,
+      envId: ev.envId,
+      envTier: ev.envTier,
+      summary: `Upgrade "${ev.upgradeName}" failed on ${ev.envName || ev.envId}`,
+      payload: { upgradeName: ev.upgradeName },
+    }).catch(err => log.warn(`AlertRouter.handleTrigger(upgrade-failed) failed: ${err.message}`));
+  });
+
+  // When a previously-failed upgrade recovers, auto-resolve any active
+  // incident opened for it — same pattern as env-recovered.
+  envPoller.on('env:upgrade-recovered', (ev) => {
+    try {
+      const subjectKey = `upgrade-failed:${ev.envId}:${ev.upgradeName}`;
+      const active = incidents.findActiveBySubject(subjectKey);
+      if (active) {
+        incidents.resolve(active.id, { resolution: 'auto' });
+      }
+    } catch (err) {
+      log.warn(`Auto-resolve upgrade incident failed: ${err.message}`);
+    }
+  });
+
+  // After each poll cycle, check sustained-degradation thresholds.
+  // The router reads firstFailedAt from its own alert_state table.
+  envPoller.on('poll:completed', () => {
+    const active = customerStore.listEnvironments()
+      .filter(e => e.health && e.health.status === 'unhealthy')
+      .map(e => ({
+        envId: e.id,
+        envName: e.name || e.id,
+        customerId: e.customerId,
+        envTier: e.tier,
+        components: [],
+      }));
+    alertRouter.checkSustained(active).catch(err =>
+      log.warn(`AlertRouter.checkSustained failed: ${err.message}`)
+    );
+  });
+
   envPoller.start();
 
   // Start Datadog monitor poller (every 2 minutes, if configured)

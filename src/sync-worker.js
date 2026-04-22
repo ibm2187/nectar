@@ -38,6 +38,16 @@ const apiKeys = new ApiKeyManager();
 const NotificationSettings = require('./core/notification-settings');
 const notificationSettings = new NotificationSettings();
 
+// Alerting — the sync worker runs the envPoller, so it hosts the
+// AlertRouter. Incident lifecycle actions originate in the web
+// process (which also has its own router for thread-replies); both
+// share state via the shared SQLite DB.
+const AlertRuleStore = require('./core/alert-rule-store');
+const alertRules = new AlertRuleStore();
+const IncidentStore = require('./core/incident-store');
+const incidents = new IncidentStore();
+// alertRouter is constructed later once slack is initialized
+
 const PeopleDirectory = require('./core/people-directory');
 const peopleDirectory = new PeopleDirectory(config);
 
@@ -62,6 +72,11 @@ const jenkins = new JenkinsClient(config);
 const SlackNotifier = require('./integrations/slack');
 const slack = new SlackNotifier(config);
 slack.notificationSettings = notificationSettings;
+
+const AlertRouter = require('./core/alert-router');
+const alertRouter = new AlertRouter({
+  alertRules, incidents, slack, notificationSettings,
+});
 
 const ZohoClient = require('./integrations/zoho');
 const zoho = new ZohoClient();
@@ -166,6 +181,17 @@ releases.on('deployment:updated', (release, deployment) => {
   if (!notificationSettings.get('deploys')) return;
   if (deployment.status === 'failed') {
     slack.notifyDeployFailed(release, deployment);
+    // Tier-2 alerting: feed into AlertRouter so custom rules can post
+    // to their own channels / mention specific groups.
+    alertRouter.handleTrigger({
+      triggerType: 'deploy-failed',
+      subjectKey: `deploy-failed:${release.version}:${deployment.customer}:${deployment.env}`,
+      customerId: deployment.customer,
+      envId: `${deployment.customer}-${deployment.env}`,
+      envTier: deployment.env === 'prod' || deployment.env === 'production' ? 'production' : 'staging',
+      summary: `Deploy of ${release.version} failed on ${deployment.customer} ${deployment.env}`,
+      payload: { version: release.version, customer: deployment.customer, env: deployment.env, at: deployment.at },
+    }).catch(err => log.warn(`[sync] AlertRouter(deploy-failed) failed: ${err.message}`));
   } else {
     slack.notifyDeployment(release, deployment);
   }
@@ -313,6 +339,76 @@ setInterval(() => {
     }
     pipelineSync.promoteToHot(newVersion);
   });
+
+  // ── Alerting: wire envPoller events → alertRouter ────────
+  envPoller.on('env:health-observed', (obs) => {
+    alertRouter.observeEnvHealth(obs).catch(err =>
+      log.warn(`[sync] AlertRouter.observeEnvHealth failed for ${obs.envId}: ${err.message}`)
+    );
+  });
+
+  envPoller.on('env:feature-flag-changed', (ev) => {
+    alertRouter.handleTrigger({
+      triggerType: 'feature-flag-changed',
+      subjectKey: `flag:${ev.envId}:${ev.source}:${ev.key}`,
+      customerId: ev.customerId,
+      envId: ev.envId,
+      envTier: ev.envTier,
+      summary: `Feature flag "${ev.key}" ${ev.to === null ? 'removed' : ev.to ? 'enabled' : 'disabled'} on ${ev.envName || ev.envId}`,
+      description: `Source: ${ev.source} · Previous: ${String(ev.from)} → Current: ${String(ev.to)}`,
+      payload: { source: ev.source, key: ev.key, from: ev.from, to: ev.to },
+    }).catch(err => log.warn(`[sync] AlertRouter(feature-flag-changed) failed: ${err.message}`));
+  });
+
+  envPoller.on('env:integration-changed', (ev) => {
+    alertRouter.handleTrigger({
+      triggerType: 'integration-config-changed',
+      subjectKey: `integration:${ev.envId}:${ev.source}:${ev.key}`,
+      customerId: ev.customerId,
+      envId: ev.envId,
+      envTier: ev.envTier,
+      summary: `Integration "${ev.key}" ${ev.to === null ? 'removed' : ev.to ? 'enabled' : 'disabled'} on ${ev.envName || ev.envId}`,
+      description: `Source: ${ev.source} · Previous: ${String(ev.from)} → Current: ${String(ev.to)}`,
+      payload: { source: ev.source, key: ev.key, from: ev.from, to: ev.to },
+    }).catch(err => log.warn(`[sync] AlertRouter(integration-config-changed) failed: ${err.message}`));
+  });
+
+  envPoller.on('env:upgrade-failed', (ev) => {
+    alertRouter.handleTrigger({
+      triggerType: 'upgrade-failed',
+      subjectKey: `upgrade-failed:${ev.envId}:${ev.upgradeName}`,
+      customerId: ev.customerId,
+      envId: ev.envId,
+      envTier: ev.envTier,
+      summary: `Upgrade "${ev.upgradeName}" failed on ${ev.envName || ev.envId}`,
+      payload: { upgradeName: ev.upgradeName },
+    }).catch(err => log.warn(`[sync] AlertRouter(upgrade-failed) failed: ${err.message}`));
+  });
+
+  envPoller.on('env:upgrade-recovered', (ev) => {
+    try {
+      const active = incidents.findActiveBySubject(`upgrade-failed:${ev.envId}:${ev.upgradeName}`);
+      if (active) incidents.resolve(active.id, { resolution: 'auto' });
+    } catch (err) {
+      log.warn(`[sync] Auto-resolve upgrade incident failed: ${err.message}`);
+    }
+  });
+
+  envPoller.on('poll:completed', () => {
+    const active = customerStore.listEnvironments()
+      .filter(e => e.health && e.health.status === 'unhealthy')
+      .map(e => ({
+        envId: e.id,
+        envName: e.name || e.id,
+        customerId: e.customerId,
+        envTier: e.tier,
+        components: [],
+      }));
+    alertRouter.checkSustained(active).catch(err =>
+      log.warn(`[sync] AlertRouter.checkSustained failed: ${err.message}`)
+    );
+  });
+
   envPoller.start();
 
   datadogPoller.start();

@@ -25,6 +25,7 @@ const links: ReadonlyArray<{
   { to: '/tickets', label: 'Tickets', icon: '🎯', permKey: 'tickets' },
   { to: '/customers', label: 'Environments', icon: '🏢', permKey: 'environments' },
   { to: '/health-dashboard', label: 'Health', icon: '💚', permKey: 'health' },
+  { to: '/incidents', label: 'Incidents', icon: '🚨', permKey: 'health' },
   { to: '/features', label: 'Features', icon: '🚩', permKey: 'features' },
   { to: '/integrations', label: 'Integrations', icon: '🔌', permKey: 'integrations' },
   { to: '/issues', label: 'Issues', icon: '🐛', permKey: 'issues' },
@@ -44,6 +45,7 @@ function useSidebarBadges() {
   const releases = useWsStore(s => s.releases)
   const environments = useWsStore(s => s.environments)
   const [pendingTaskCount, setPendingTaskCount] = useState(0)
+  const [activeIncidents, setActiveIncidents] = useState(0)
 
   // Count overdue releases — past release date, not done, not archived
   const today = new Date().toISOString().slice(0, 10)
@@ -77,13 +79,27 @@ function useSidebarBadges() {
     return () => { cancelled = true; clearInterval(interval) }
   }, [])
 
-  return { overdueCount, hasUnhealthyEnv, pendingTaskCount }
+  // Poll incident counts every 30s
+  useEffect(() => {
+    let cancelled = false
+    const fetchCounts = async () => {
+      try {
+        const data = await apiFetch<{ active: number }>('/alerts/incidents/counts')
+        if (!cancelled) setActiveIncidents(data.active || 0)
+      } catch { /* silent */ }
+    }
+    fetchCounts()
+    const interval = setInterval(fetchCounts, 30_000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [])
+
+  return { overdueCount, hasUnhealthyEnv, pendingTaskCount, activeIncidents }
 }
 
 export function Sidebar({ open, onClose }: SidebarProps) {
   const { user, ssoEnabled } = useAuthStore()
   const isAdmin = !ssoEnabled || user?.role === 'admin'
-  const { overdueCount, hasUnhealthyEnv, pendingTaskCount } = useSidebarBadges()
+  const { overdueCount, hasUnhealthyEnv, pendingTaskCount, activeIncidents } = useSidebarBadges()
 
   return (
     <>
@@ -135,6 +151,12 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               badge = (
                 <span className="ml-auto bg-blue-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-medium">
                   {pendingTaskCount}
+                </span>
+              )
+            } else if (to === '/incidents' && activeIncidents > 0) {
+              badge = (
+                <span className="ml-auto bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-medium">
+                  {activeIncidents}
                 </span>
               )
             }

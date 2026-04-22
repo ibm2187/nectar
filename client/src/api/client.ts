@@ -512,6 +512,113 @@ export interface EnvironmentDeploymentsResponse {
   deployments: EnvironmentDeployment[]
 }
 
+// ── Alerts + Incidents ────────────────────────────────────
+
+export type AlertSeverity = 'critical' | 'warning' | 'info'
+
+export type IncidentStatus = 'open' | 'acknowledged' | 'resolved' | 'reopened'
+
+export interface AlertFilterField {
+  key: string
+  label: string
+  description?: string
+  type: string
+  options?: string[]
+  default?: number
+  min?: number
+  max?: number
+}
+
+export interface AlertTrigger {
+  key: string
+  label: string
+  description: string
+  defaultSeverity: AlertSeverity
+  tier: number
+  filterFields: AlertFilterField[]
+}
+
+export interface AlertRuleFilter {
+  customerIds?: string[]
+  envIds?: string[]
+  envTier?: string[]
+  components?: string[]
+  sustainedMinutes?: number
+}
+
+export interface AlertRule {
+  id: string
+  name: string
+  triggerType: string
+  filter: AlertRuleFilter
+  channels: string[]
+  mention: string | null
+  severity: AlertSeverity
+  enabled: boolean
+  lastFiredAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ChannelValidationResult {
+  ok: boolean
+  inChannel?: boolean
+  channelId?: string
+  name?: string
+  error?: string
+  code?: string
+}
+
+export interface IncidentEvent {
+  id: string
+  incidentId: string
+  type: string
+  actorUserId: string | null
+  actorName: string | null
+  payload: Record<string, unknown>
+  at: string
+}
+
+export interface Incident {
+  id: string
+  ruleId: string | null
+  triggerType: string
+  source: 'auto' | 'manual'
+  subjectKey: string | null
+  customerId: string | null
+  envId: string | null
+  summary: string
+  description: string | null
+  severity: AlertSeverity
+  status: IncidentStatus
+  assigneeUserId: string | null
+  assigneeSlackId: string | null
+  openedAt: string
+  acknowledgedAt: string | null
+  acknowledgedBy: string | null
+  resolvedAt: string | null
+  resolvedBy: string | null
+  resolution: 'auto' | 'manual' | null
+  slackChannel: string | null
+  slackTs: string | null
+  slackPosts: Array<{ channel: string; ts: string }>
+  payload: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+}
+
+export interface IncidentWithEvents extends Incident {
+  events: IncidentEvent[]
+}
+
+export interface IncidentCounts {
+  open: number
+  acknowledged: number
+  resolved: number
+  reopened: number
+  active: number
+}
+
 export interface AuditEntry {
   id: string
   version: string

@@ -1,5 +1,63 @@
 const { EventEmitter } = require('events');
 const log = require('./log');
+const { diffFeatureFlags, diffIntegrations, diffFailedUpgrades } = require('./diff-detectors');
+
+/**
+ * Walk a health checks object and collect the names of any critical
+ * functionality or external services that aren't passing.
+ *
+ * The API shape we're parsing is:
+ *   {
+ *     criticalFunctionality: { services: { mongodb: {status}, redis: {status} } },
+ *     externalServices:      { services: { s3: {status}, sqs: {status} } },
+ *   }
+ *
+ * This mirrors what _deriveHealthStatus walks. We also accept the
+ * flatter shape (services keys directly under the section) for
+ * defensiveness — some older envs may ship it that way.
+ */
+function collectFailingComponents(checks = {}) {
+  const out = new Set();
+  const sections = [checks.criticalFunctionality, checks.externalServices].filter(Boolean);
+  for (const section of sections) {
+    // Prefer .services (canonical). Fall back to iterating the section
+    // directly if .services isn't present.
+    const services = section.services && typeof section.services === 'object'
+      ? section.services
+      : section;
+    for (const [name, svc] of Object.entries(services)) {
+      if (!svc || typeof svc !== 'object') continue;
+      // Skip the `services` key itself if we fell through to the
+      // section level (it'd be the nested object, not a service entry)
+      if (name === 'services') continue;
+      const s = svc.status;
+      if (s && s !== 'healthy' && s !== 'skipped' && s !== 'ok') {
+        out.add(prettyComponentName(name));
+      }
+    }
+  }
+  return [...out];
+}
+
+function prettyComponentName(raw) {
+  const key = String(raw || '').toLowerCase();
+  const map = {
+    mongodb: 'Database',
+    database: 'Database',
+    redis: 'Cache',
+    cache: 'Cache',
+    s3: 'File Storage',
+    filestorage: 'File Storage',
+    sqs: 'Message Queue',
+    messagequeue: 'Message Queue',
+    email: 'Email',
+    messaging: 'Messaging',
+    mqtt: 'Messaging',
+  };
+  if (map[key]) return map[key];
+  // Fallback: title-case whatever came in
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
 
 /**
  * Environment version poller.
@@ -233,6 +291,16 @@ class EnvironmentPoller extends EventEmitter {
     if (!env.url) return { versionChanged: false };
     const previousVersion = env.currentVersion;
 
+    // Snapshot previous state BEFORE customerStore writes so we can diff
+    // features/integrations/upgrades for change-detection events.
+    // getEnvironment may not exist on older customer-store mocks — guard.
+    const prevEnv = typeof this.customerStore.getEnvironment === 'function'
+      ? this.customerStore.getEnvironment(env.id)
+      : null;
+    const prevFeatures = prevEnv?.features || null;
+    const prevIntegrations = prevEnv?.integrations || null;
+    const prevUpgrades = prevEnv?.upgrades || null;
+
     // Kick off all four original endpoints in parallel (unchanged from before health feature).
     const [versionResult, featuresResult, integrationsResult, upgradesResult] = await Promise.allSettled([
       this._fetchEndpoint(env.url, '/api/status/version'),
@@ -262,7 +330,7 @@ class EnvironmentPoller extends EventEmitter {
     // /features → store as-is from the new API shape
     if (featuresResult.status === 'fulfilled') {
       const d = featuresResult.value;
-      this.customerStore.updateFeatures(env.id, {
+      const newFeatures = {
         dbFeatureFlags: d.dbFeatureFlags || [],
         configFeatures: d.configFeatures || {
           portalFeatureFlag: d.portalFeatureFlag || {},
@@ -270,24 +338,83 @@ class EnvironmentPoller extends EventEmitter {
           workflow: d.workflow || {},
         },
         toggles: d.toggles || {},
-      });
+      };
+      this.customerStore.updateFeatures(env.id, newFeatures);
+
+      // Detect feature-flag changes and emit discrete events — only
+      // after we've had a baseline poll (prevFeatures != null).
+      if (prevFeatures && (env.tier === 'production' || env.tier === 'staging')) {
+        const diffs = diffFeatureFlags(prevFeatures, newFeatures);
+        for (const d of diffs) {
+          this.emit('env:feature-flag-changed', {
+            envId: env.id,
+            envName: env.name || env.nodeEnv || env.id,
+            customerId: env.customerId,
+            envTier: env.tier,
+            source: d.source,
+            key: d.key,
+            from: d.from,
+            to: d.to,
+          });
+        }
+      }
     }
 
     // /integrations → store as-is from the new API shape
     if (integrationsResult.status === 'fulfilled') {
       const d = integrationsResult.value;
-      this.customerStore.updateIntegrations(env.id, {
+      const newIntegrations = {
         disableOutgoingCommunication: !!d.disableOutgoingCommunication,
         dbIntegrations: d.dbIntegrations || {},
         configIntegrations: d.configIntegrations || {},
         dataPublishing: d.dataPublishing || {},
         sqsQueues: d.sqsQueues || {},
-      });
+      };
+      this.customerStore.updateIntegrations(env.id, newIntegrations);
+
+      if (prevIntegrations && (env.tier === 'production' || env.tier === 'staging')) {
+        const diffs = diffIntegrations(prevIntegrations, newIntegrations);
+        for (const d of diffs) {
+          this.emit('env:integration-changed', {
+            envId: env.id,
+            envName: env.name || env.nodeEnv || env.id,
+            customerId: env.customerId,
+            envTier: env.tier,
+            source: d.source,
+            key: d.key,
+            from: d.from,
+            to: d.to,
+          });
+        }
+      }
     }
 
     // /upgrades → store merged pages as-is; all classification is done in the UI
     if (upgradesResult.status === 'fulfilled') {
       this.customerStore.updateUpgrades(env.id, upgradesResult.value);
+
+      // Detect newly-failed upgrades (and recoveries) only for prod/staging
+      if (env.tier === 'production' || env.tier === 'staging') {
+        const { newFailures, recovered } = diffFailedUpgrades(prevUpgrades, upgradesResult.value);
+        for (const upgradeName of newFailures) {
+          this.emit('env:upgrade-failed', {
+            envId: env.id,
+            envName: env.name || env.nodeEnv || env.id,
+            customerId: env.customerId,
+            envTier: env.tier,
+            upgradeName,
+          });
+        }
+        for (const upgradeName of recovered) {
+          this.emit('env:upgrade-recovered', {
+            envId: env.id,
+            envName: env.name || env.nodeEnv || env.id,
+            customerId: env.customerId,
+            envTier: env.tier,
+            upgradeName,
+          });
+        }
+      }
     }
 
     // /status (health) — separate from main poll, only for production + staging
@@ -297,6 +424,7 @@ class EnvironmentPoller extends EventEmitter {
         const status = this._deriveHealthStatus(healthData);
         const checks = healthData.checks || {};
         const summary = healthData.summary || {};
+        const failingComponents = collectFailingComponents(checks);
         this.customerStore.updateHealth(env.id, {
           status,
           checks: {
@@ -312,6 +440,19 @@ class EnvironmentPoller extends EventEmitter {
           },
           responseTimeMs,
           checkedAt: new Date().toISOString(),
+        });
+
+        // Emit raw observation so the AlertRouter (or other listeners)
+        // can apply flap guards and decide whether to alert.
+        this.emit('env:health-observed', {
+          envId: env.id,
+          envName: env.name || env.nodeEnv || env.id,
+          customerId: env.customerId,
+          envTier: env.tier,
+          status,
+          failingComponents,
+          version: versionResult.status === 'fulfilled' ? versionResult.value.version : null,
+          url: env.url,
         });
       } catch (err) {
         log.warn(`Health poll failed for ${env.id}: ${err.message}`);
