@@ -16,44 +16,18 @@ const STATUS_CATEGORIES = Object.freeze({
 });
 
 /**
- * Fine-grained status-name buckets. Mirrors client/src/lib/status-colors.ts.
+ * Jira status names that roll up to the "Done" category. Kept as a Set for
+ * callers that only have a status name and cannot rely on `statusCategory`
+ * being populated. Prefer `isDone(ticket)` whenever the ticket is available.
  *
- * These are NOT the authoritative done-check (use `isDone` for that — it
- * reads `statusCategory`, which Jira maintains centrally). The name lists
- * here are useful for richer bucketing (in-dev vs in-qa vs blocked) and
- * as a fallback list for callers that have a status name but no category.
- *
- * Adding a new Jira status? Add it to the matching bucket AND make sure
- * the client mirror is updated.
+ * Mirrors the `done` bucket in ticket-store.js `STATUS_GROUPS`. Keep the two
+ * lists in sync — if a new "Done" status is added in Jira, update both.
  */
-const STATUS_GROUPS = {
-  'in-dev': [
-    'Development In Progress', 'In Progress', 'In Review', 'Development',
-    'Waiting for Cherry Pick', 'Design In Progress', 'Design In Review', 'Design Review',
-    'Implementing', 'Remediation in Progress', 'Defect Remediation in Progress',
-    'Pending Dev Investigation', 'Pending Defect Remediation', 'Pending Configuration',
-    'Pending Prioritization', 'Investigating Issue', 'Escalated',
-    'Open', 'To Do', 'Backlog', 'Planning', 'Requirements', 'Needs Requirements',
-    'Ready to Develop', 'Ready For Estimation', 'Reopened', 'Pending',
-    'On Hold', 'Deprioritized', 'Future Development', 'Future Remediation',
-  ],
-  'blocked': ['Blocked', 'Testing Failed', 'Test Failed', 'Pending Bug Fix'],
-  'ready-for-qa': ['Ready For Testing', 'Cherry Picked', 'Cherrypick is Building', 'Retest After Cherrypick', 'DQA Required'],
-  'in-qa': ['In Testing', 'Testing in Branch', 'Testing', 'Re-verify Bug', 'Validating', 'Pending Customer QA/UAT'],
-  'done': [
-    'QA Certified', 'NO QA - Certified', 'Done', 'Closed', 'Resolved', 'Resolved Without Code',
-    'Completed', 'Released', 'Rollout', 'Approved', 'DQA Approved',
-    'Test Passed', 'TEST DEFERRED', 'Design Complete', 'Integration Complete',
-    'Release Night Activity', 'Canceled', 'Declined', 'Rejected',
-  ],
-};
-
-const DONE_STATUSES = new Set(STATUS_GROUPS['done']);
-const NOT_DONE_STATUSES = new Set([
-  ...STATUS_GROUPS['in-dev'],
-  ...STATUS_GROUPS['blocked'],
-  ...STATUS_GROUPS['ready-for-qa'],
-  ...STATUS_GROUPS['in-qa'],
+const DONE_STATUSES = new Set([
+  'QA Certified', 'NO QA - Certified', 'Done', 'Closed', 'Resolved', 'Resolved Without Code',
+  'Completed', 'Released', 'Rollout', 'Approved', 'DQA Approved',
+  'Test Passed', 'TEST DEFERRED', 'Design Complete', 'Integration Complete',
+  'Release Night Activity', 'Canceled', 'Declined', 'Rejected',
 ]);
 
 /**
@@ -71,10 +45,4 @@ function isDone(ticket) {
   return !!ticket && ticket.statusCategory === STATUS_CATEGORIES.DONE;
 }
 
-module.exports = {
-  STATUS_CATEGORIES,
-  STATUS_GROUPS,
-  DONE_STATUSES,
-  NOT_DONE_STATUSES,
-  isDone,
-};
+module.exports = { STATUS_CATEGORIES, DONE_STATUSES, isDone };

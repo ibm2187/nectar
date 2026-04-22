@@ -1,11 +1,32 @@
 const { EventEmitter } = require('events');
 const { getDb } = require('./db');
-const {
-  STATUS_CATEGORIES,
-  STATUS_GROUPS,
-  DONE_STATUSES,
-  NOT_DONE_STATUSES,
-} = require('./status-categories');
+const { STATUS_CATEGORIES } = require('./status-categories');
+
+// Status group mappings — mirrors client/src/lib/status-colors.ts.
+// The `done` bucket must stay in sync with DONE_STATUSES in status-categories.js.
+const STATUS_GROUPS = {
+  'in-dev': [
+    'Development In Progress', 'In Progress', 'In Review', 'Development',
+    'Waiting for Cherry Pick', 'Design In Progress', 'Design In Review', 'Design Review',
+    'Implementing', 'Remediation in Progress', 'Defect Remediation in Progress',
+    'Pending Dev Investigation', 'Pending Defect Remediation', 'Pending Configuration',
+    'Pending Prioritization', 'Investigating Issue', 'Escalated',
+    'Open', 'To Do', 'Backlog', 'Planning', 'Requirements', 'Needs Requirements',
+    'Ready to Develop', 'Ready For Estimation', 'Reopened', 'Pending',
+    'On Hold', 'Deprioritized', 'Future Development', 'Future Remediation',
+  ],
+  'blocked': ['Blocked', 'Testing Failed', 'Test Failed', 'Pending Bug Fix'],
+  'ready-for-qa': ['Ready For Testing', 'Cherry Picked', 'Cherrypick is Building', 'Retest After Cherrypick', 'DQA Required'],
+  'in-qa': ['In Testing', 'Testing in Branch', 'Testing', 'Re-verify Bug', 'Validating', 'Pending Customer QA/UAT'],
+  'done': [
+    'QA Certified', 'NO QA - Certified', 'Done', 'Closed', 'Resolved', 'Resolved Without Code',
+    'Completed', 'Released', 'Rollout', 'Approved', 'DQA Approved',
+    'Test Passed', 'TEST DEFERRED', 'Design Complete', 'Integration Complete',
+    'Release Night Activity', 'Canceled', 'Declined', 'Rejected',
+  ],
+};
+const DONE_STATUSES = new Set(STATUS_GROUPS['done']);
+const NOT_DONE_STATUSES = new Set([...STATUS_GROUPS['in-dev'], ...STATUS_GROUPS['blocked'], ...STATUS_GROUPS['ready-for-qa'], ...STATUS_GROUPS['in-qa']]);
 
 /**
  * Normalized JIRA ticket database.
