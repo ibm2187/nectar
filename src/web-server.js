@@ -27,6 +27,10 @@ const UserStore = require('./core/user-store');
 const userStore = new UserStore();
 log.info(`[web] User store: ${userStore.users.size} users`);
 
+const TeamStore = require('./core/team-store');
+const teamStore = new TeamStore();
+log.info(`[web] Team store: ${teamStore.list().length} teams`);
+
 const ApiKeyManager = require('./core/api-keys');
 const apiKeys = new ApiKeyManager();
 
@@ -278,7 +282,7 @@ const services = {
     },
   }),
   envPoller, themeConfig,
-  apiKeys, taskQueue, userStore,
+  apiKeys, taskQueue, userStore, teamStore,
   datadog, datadogPoller,
   zoho,
   zohoSync: makeSyncStub('zoho'),
