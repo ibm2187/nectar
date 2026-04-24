@@ -8,6 +8,26 @@ const { authorizeMcpTool, extractPrincipal } = require('../core/authz');
 const { isValidCapability } = require('../core/capabilities');
 
 /**
+ * Find a customer by id, shortName, or full name (case-insensitive).
+ * Agents often pass the display name ("Lumen", "Help at Home") instead of
+ * the canonical lowercase id, so we accept any of them.
+ *
+ * @param {Array<{id:string,name?:string,shortName?:string}>} customers
+ * @param {string} needle
+ * @returns {object|null}
+ */
+function findCustomer(customers, needle) {
+  if (!needle || typeof needle !== 'string') return null;
+  const n = needle.trim().toLowerCase();
+  if (!n) return null;
+  return customers.find(c =>
+    c.id?.toLowerCase() === n ||
+    c.shortName?.toLowerCase() === n ||
+    c.name?.toLowerCase() === n
+  ) || null;
+}
+
+/**
  * Nectar MCP Server — exposes customer, environment, release, and truth
  * data as MCP tools that Hive's Claude sessions can call.
  *
@@ -32,14 +52,20 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth, taskQueu
   server.tool(
     'get_customer',
     'Get customer metadata and environment summary',
-    { customerId: z.string().describe('Customer ID — use search_environments or list customers to find valid IDs') },
+    { customerId: z.string().describe('Customer ID, short name, or full name (case-insensitive). E.g. "lumen", "Lumen", or "Help at Home" all resolve to the same customer.') },
     async ({ customerId }) => {
       const customers = customerStore.listCustomers();
-      const customer = customers.find(c => c.id === customerId);
+      const customer = findCustomer(customers, customerId);
       if (!customer) {
-        return { content: [{ type: 'text', text: `Customer "${customerId}" not found. Available: ${customers.map(c => c.id).join(', ')}` }] };
+        const available = customers
+          .map(c => {
+            const aliases = [c.shortName, c.name].filter(a => a && a !== c.id);
+            return aliases.length ? `${c.id} (aka ${aliases.join(', ')})` : c.id;
+          })
+          .join('; ');
+        return { content: [{ type: 'text', text: `Customer "${customerId}" not found. Available: ${available}` }] };
       }
-      const envs = customerStore.listEnvironments().filter(e => e.customerId === customerId);
+      const envs = customerStore.listEnvironments().filter(e => e.customerId === customer.id);
       const prodEnvs = envs.filter(e => e.tier === 'production');
       return {
         content: [{
@@ -160,14 +186,21 @@ function createNectarMcpServer({ customerStore, releases, releaseTruth, taskQueu
     'search_environments',
     'Search environments by customer, version, tier, or name. Returns a summary list.',
     {
-      customer: z.string().optional().describe('Filter by customer ID'),
+      customer: z.string().optional().describe('Filter by customer ID, short name, or full name (case-insensitive)'),
       version: z.string().optional().describe('Filter by current deployed version'),
       tier: z.string().optional().describe('Filter by tier (production, staging, uat, etc.)'),
       query: z.string().optional().describe('Free text search across env ID and name'),
     },
     async ({ customer, version, tier, query }) => {
       let envs = customerStore.listEnvironments();
-      if (customer) envs = envs.filter(e => e.customerId === customer);
+      if (customer) {
+        const allCustomers = customerStore.listCustomers();
+        const resolved = findCustomer(allCustomers, customer);
+        if (!resolved) {
+          return { content: [{ type: 'text', text: `Customer "${customer}" not found. Available: ${allCustomers.map(c => c.id).join(', ')}` }] };
+        }
+        envs = envs.filter(e => e.customerId === resolved.id);
+      }
       if (version) envs = envs.filter(e => e.currentVersion === version);
       if (tier) envs = envs.filter(e => e.tier === tier);
       if (query) {
@@ -573,4 +606,4 @@ async function mountMcp(app, path, deps) {
   log.info(`MCP server mounted at ${path}`);
 }
 
-module.exports = { mountMcp };
+module.exports = { mountMcp, findCustomer };
