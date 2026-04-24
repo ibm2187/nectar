@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { buildStandupData, teamForRepo } = require('../../src/api/standup');
+const { buildStandupData } = require('../../src/api/standup');
 
 // ── Test helpers ────────────────────────────────────────
 
@@ -28,7 +28,18 @@ function makeRelease(version, overrides = {}) {
   };
 }
 
-function createMockServices(releases = [], ticketsByRelease = {}, prsByKey = new Map(), truthByKey = new Map(), teamMembers = []) {
+// Default users: all test personas are considered matched SSO users so the
+// jiraName gate doesn't hide them. Override with `usersForStandup` when a
+// test needs a different membership (e.g. assigning teamId).
+const DEFAULT_USERS_FOR_STANDUP = [
+  { email: 'alice@x.com', name: 'Alice Dev',  teamId: null, jiraName: 'Alice Dev'  },
+  { email: 'bob@x.com',   name: 'Bob QA',    teamId: null, jiraName: 'Bob QA'    },
+  { email: 'carol@x.com', name: 'Carol Dev', teamId: null, jiraName: 'Carol Dev' },
+];
+
+function createMockServices(releases = [], ticketsByRelease = {}, prsByKey = new Map(), truthByKey = new Map(), teamMembers = [], overrides = {}) {
+  const usersForStandup = overrides.usersForStandup || DEFAULT_USERS_FOR_STANDUP;
+  const teamsList = overrides.teams || [];
   return {
     releases: {
       list: () => releases,
@@ -50,6 +61,12 @@ function createMockServices(releases = [], ticketsByRelease = {}, prsByKey = new
         const map = { 'Alice Dev': { slackId: 'U001' }, 'Bob QA': { slackId: 'U002' }, 'Carol Dev': { slackId: 'U003' } };
         return map[name] || null;
       },
+    },
+    userStore: {
+      listForStandup: () => usersForStandup,
+    },
+    teamStore: {
+      list: () => teamsList,
     },
   };
 }
@@ -492,73 +509,83 @@ describe('buildStandupData', () => {
     });
   });
 
-  describe('team classification', () => {
-    it('tags QA role with qa team only, not platform teams', () => {
+  describe('team membership (user-defined)', () => {
+    it('attaches teamId + team object from the matching user row', () => {
       const releases = [makeRelease('4.2.0', { repo: 'webplatform' })];
-      const tickets = [makeTicket('DEV-1', { qaAssignee: 'Bob QA' })];
+      const tickets = [makeTicket('DEV-1', { assignee: 'Alice Dev' })];
+      const services = createMockServices(releases, { '4.2.0': tickets }, new Map(), new Map(), [], {
+        usersForStandup: [{ email: 'alice@x.com', name: 'Alice Dev', teamId: 'web', jiraName: 'Alice Dev' }],
+        teams: [{ id: 'web', name: 'Web Platform', color: '#60a5fa' }],
+      });
+      const result = buildStandupData(services, { horizon: '2026-04-27' });
+
+      const alice = result.people.find(p => p.name === 'Alice Dev');
+      expect(alice.teamId).toBe('web');
+      expect(alice.team).toEqual({ id: 'web', name: 'Web Platform', color: '#60a5fa' });
+    });
+
+    it('attaches team: null when user has no teamId', () => {
+      const releases = [makeRelease('4.2.0')];
+      const tickets = [makeTicket('DEV-1', { assignee: 'Alice Dev' })];
       const services = createMockServices(releases, { '4.2.0': tickets });
       const result = buildStandupData(services, { horizon: '2026-04-27' });
 
-      const bob = result.people.find(p => p.name === 'Bob QA');
-      expect(bob.teams).toEqual(['qa']);
+      const alice = result.people.find(p => p.name === 'Alice Dev');
+      expect(alice.teamId).toBeNull();
+      expect(alice.team).toBeNull();
     });
 
-    it('tags devs on android/ios repos as mobile', () => {
-      const releases = [
-        makeRelease('ios-2026.4.0', { repo: 'ios' }),
-        makeRelease('4.2.0',        { repo: 'android' }),
+    it('excludes JIRA people who have no matching SSO user with jiraName', () => {
+      const releases = [makeRelease('4.2.0')];
+      const tickets = [
+        makeTicket('DEV-1', { assignee: 'Alice Dev' }),
+        makeTicket('DEV-2', { assignee: 'Unknown Person' }),
       ];
-      const tickets = {
-        'ios-2026.4.0': [makeTicket('DEV-1', { assignee: 'Alice Dev' })],
-        '4.2.0':        [makeTicket('DEV-2', { assignee: 'Alice Dev' })],
-      };
-      const services = createMockServices(releases, tickets);
+      const services = createMockServices(releases, { '4.2.0': tickets });
+      const result = buildStandupData(services, { horizon: '2026-04-27' });
+
+      expect(result.people.map(p => p.name)).toContain('Alice Dev');
+      expect(result.people.map(p => p.name)).not.toContain('Unknown Person');
+    });
+
+    it('includes the top-level teams array in the response', () => {
+      const services = createMockServices([], {}, new Map(), new Map(), [], {
+        teams: [
+          { id: 'qa',  name: 'QA',    color: '#34d399' },
+          { id: 'web', name: 'Web',   color: '#60a5fa' },
+        ],
+      });
+      const result = buildStandupData(services, { horizon: '2026-04-27' });
+      expect(result.teams).toEqual([
+        { id: 'qa',  name: 'QA',    color: '#34d399' },
+        { id: 'web', name: 'Web',   color: '#60a5fa' },
+      ]);
+    });
+
+    it('all-clear fallback people are also gated by the jiraName match', () => {
+      const releases = [makeRelease('4.2.0')];
+      const team = [
+        { name: 'Alice Dev', roles: ['dev'] },
+        { name: 'Ghost Person', roles: ['dev'] },
+      ];
+      const services = createMockServices(releases, { '4.2.0': [] }, new Map(), new Map(), team);
+      const result = buildStandupData(services, { horizon: '2026-04-27' });
+
+      const names = result.people.map(p => p.name);
+      expect(names).toContain('Alice Dev');
+      expect(names).not.toContain('Ghost Person');
+    });
+
+    it('no longer emits the old `teams: Team[]` field on person rows', () => {
+      const releases = [makeRelease('4.2.0', { repo: 'webplatform' })];
+      const tickets = [makeTicket('DEV-1', { assignee: 'Alice Dev' })];
+      const services = createMockServices(releases, { '4.2.0': tickets });
       const result = buildStandupData(services, { horizon: '2026-04-27' });
 
       const alice = result.people.find(p => p.name === 'Alice Dev');
-      expect(alice.teams).toEqual(['mobile']);
-    });
-
-    it('tags devs on webplatform/bluesummit repos as web', () => {
-      const releases = [
-        makeRelease('4.2.0', { repo: 'webplatform' }),
-        makeRelease('5.0.0', { repo: 'bluesummit' }),
-      ];
-      const tickets = {
-        '4.2.0': [makeTicket('DEV-1', { assignee: 'Alice Dev' })],
-        '5.0.0': [makeTicket('DEV-2', { assignee: 'Alice Dev' })],
-      };
-      const services = createMockServices(releases, tickets);
-      const result = buildStandupData(services, { horizon: '2026-04-27' });
-
-      const alice = result.people.find(p => p.name === 'Alice Dev');
-      expect(alice.teams).toEqual(['web']);
-    });
-
-    it('tags a person spanning repos with multiple teams', () => {
-      const releases = [
-        makeRelease('4.2.0',        { repo: 'webplatform' }),
-        makeRelease('ios-2026.4.0', { repo: 'ios' }),
-      ];
-      const tickets = {
-        '4.2.0':        [makeTicket('DEV-1', { assignee: 'Alice Dev' })],
-        'ios-2026.4.0': [makeTicket('DEV-2', { assignee: 'Alice Dev' })],
-      };
-      const services = createMockServices(releases, tickets);
-      const result = buildStandupData(services, { horizon: '2026-04-27' });
-
-      const alice = result.people.find(p => p.name === 'Alice Dev');
-      expect(alice.teams.sort()).toEqual(['mobile', 'web']);
-    });
-
-    it('QA on mobile repo stays qa-only (does not join platform team)', () => {
-      const releases = [makeRelease('ios-2026.4.0', { repo: 'ios' })];
-      const tickets = [makeTicket('DEV-1', { qaAssignee: 'Bob QA' })];
-      const services = createMockServices(releases, { '4.2.0': tickets, 'ios-2026.4.0': tickets });
-      const result = buildStandupData(services, { horizon: '2026-04-27' });
-
-      const bob = result.people.find(p => p.name === 'Bob QA');
-      expect(bob.teams).toEqual(['qa']);
+      expect(alice.teams).toBeUndefined();
+      expect('teamId' in alice).toBe(true);
+      expect('team' in alice).toBe(true);
     });
 
     it('includes release.repo on ticket items', () => {
@@ -571,39 +598,30 @@ describe('buildStandupData', () => {
       expect(alice.buckets.inDev[0].release.repo).toBe('android');
     });
 
-    it('fallback people (no tickets) get qa team only if QA role', () => {
+    // Regression: when user.name (SSO) diverges from jiraName, the all-clear
+    // fallback used to compare getDistinctPeople names against the list of
+    // already-pushed display names, which would miss the match and push the
+    // same person a second time. Dedup against JIRA names instead.
+    it('does not duplicate a person whose SSO name differs from jiraName when they appear in getDistinctPeople', () => {
       const releases = [makeRelease('4.2.0')];
-      const team = [
-        { name: 'Alice Dev', roles: ['dev'] },
-        { name: 'Bob QA',    roles: ['qa']  },
-      ];
-      const services = createMockServices(releases, { '4.2.0': [] }, new Map(), new Map(), team);
+      // User's SSO name is "Alice Smith" but JIRA assignee is "alice.smith"
+      const services = createMockServices(
+        releases,
+        { '4.2.0': [makeTicket('DEV-1', { assignee: 'alice.smith' })] },
+        new Map(),
+        new Map(),
+        [{ name: 'alice.smith', roles: ['dev'] }],
+        {
+          usersForStandup: [
+            { email: 'alice@x.com', name: 'Alice Smith', teamId: null, jiraName: 'alice.smith' },
+          ],
+        },
+      );
       const result = buildStandupData(services, { horizon: '2026-04-27' });
 
-      const alice = result.people.find(p => p.name === 'Alice Dev');
-      const bob = result.people.find(p => p.name === 'Bob QA');
-      expect(alice.teams).toEqual([]);
-      expect(bob.teams).toEqual(['qa']);
-    });
-
-    it('accepts full "org/repo" names', () => {
-      expect(teamForRepo('mavencare/webplatform')).toBe('web');
-      expect(teamForRepo('mavencare/iOS')).toBe('mobile');
-      expect(teamForRepo('mavencare/android')).toBe('mobile');
-      expect(teamForRepo('mavencare/bluesummit')).toBe('web');
-    });
-
-    it('accepts short repo names', () => {
-      expect(teamForRepo('webplatform')).toBe('web');
-      expect(teamForRepo('ios')).toBe('mobile');
-      expect(teamForRepo('android')).toBe('mobile');
-      expect(teamForRepo('bluesummit')).toBe('web');
-    });
-
-    it('returns null for unknown/missing repos', () => {
-      expect(teamForRepo(null)).toBeNull();
-      expect(teamForRepo('')).toBeNull();
-      expect(teamForRepo('something-else')).toBeNull();
+      const aliceRows = result.people.filter(p => p.name === 'Alice Smith');
+      expect(aliceRows).toHaveLength(1);
+      expect(aliceRows[0].buckets.inDev).toHaveLength(1);
     });
   });
 

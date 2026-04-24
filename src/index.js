@@ -225,6 +225,10 @@ const UserStore = require('./core/user-store');
 const userStore = new UserStore();
 log.info(`User store initialized (${userStore.users.size} users loaded)`);
 
+const TeamStore = require('./core/team-store');
+const teamStore = new TeamStore();
+log.info(`Team store initialized (${teamStore.list().length} teams loaded)`);
+
 const TaskQueue = require('./core/task-queue');
 const taskQueue = new TaskQueue();
 log.info(`Task queue initialized (${taskQueue.tasks.size} tasks loaded)`);
@@ -299,7 +303,7 @@ const services = {
   releases, repoManager, jira, github, jenkins, slack,
   risk, validator, approvals, customers, cherryPickWatcher, discovery, jiraSync, releaseTruth,
   customerStore, webplatformScanner, envPoller, themeConfig,
-  apiKeys, taskQueue, userStore,
+  apiKeys, taskQueue, userStore, teamStore,
   datadog, datadogPoller,
   zoho, zohoSync,
   prSync,

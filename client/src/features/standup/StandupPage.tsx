@@ -54,13 +54,18 @@ interface PersonRelease {
   ticketCount: number
 }
 
-type Team = 'qa' | 'mobile' | 'web'
+interface StandupTeam {
+  id: string
+  name: string
+  color: string
+}
 
 interface StandupPerson {
   name: string
   slackId: string | null
   roles: string[]
-  teams: Team[]
+  teamId: string | null
+  team: StandupTeam | null
   isOoo: boolean
   buckets: PersonBuckets
   urgencyScore: number
@@ -81,6 +86,7 @@ interface ReleaseSummary {
 interface StandupData {
   people: StandupPerson[]
   releasesDueThisWeek: ReleaseSummary[]
+  teams: StandupTeam[]
   generatedAt: string
 }
 
@@ -114,19 +120,15 @@ const SORT_OPTIONS: { key: SortMode; label: string }[] = [
 ]
 
 // ── Team filters ──────────────────────────────────────────
+// Pills are rendered dynamically from the API response's `teams` array.
+// Special-case values: 'all' (default) and 'other' (users with no teamId).
 
-type TeamFilter = 'all' | Team
-
-const TEAM_FILTERS: { key: TeamFilter; label: string }[] = [
-  { key: 'all',    label: 'All' },
-  { key: 'qa',     label: 'QA' },
-  { key: 'mobile', label: 'Mobile' },
-  { key: 'web',    label: 'Web' },
-]
+type TeamFilter = 'all' | 'other' | string
 
 function matchesTeam(person: StandupPerson, filter: TeamFilter): boolean {
   if (filter === 'all') return true
-  return person.teams.includes(filter)
+  if (filter === 'other') return person.teamId === null
+  return person.teamId === filter
 }
 
 function sortPeople(people: StandupPerson[], mode: SortMode): StandupPerson[] {
@@ -167,8 +169,15 @@ export function StandupPage() {
   const [sortMode, setSortMode] = useState<SortMode>('urgency')
   const [allExpanded, setAllExpanded] = useState<boolean | null>(null) // null = per-bucket default
 
-  // Team filter — read from URL so it persists across reloads and is shareable
-  const teamFilter = (searchParams.get('team') as TeamFilter | null) || 'all'
+  // Team filter — read from URL so it persists across reloads and is shareable.
+  // Validate against loaded teams so stale bookmarks fall back to 'all'.
+  const rawTeamFilter = searchParams.get('team')
+  const validFilters = useMemo(() => {
+    const ids = new Set<string>(['all', 'other'])
+    for (const t of data?.teams ?? []) ids.add(t.id)
+    return ids
+  }, [data])
+  const teamFilter: TeamFilter = (rawTeamFilter && validFilters.has(rawTeamFilter)) ? rawTeamFilter : 'all'
   const setTeamFilter = useCallback((next: TeamFilter) => {
     const params = new URLSearchParams(searchParams)
     if (next === 'all') params.delete('team')
@@ -205,11 +214,13 @@ export function StandupPage() {
 
   // Team counts (pre-filter) — used to label filter pills
   const teamCounts = useMemo(() => {
-    const counts: Record<TeamFilter, number> = { all: 0, qa: 0, mobile: 0, web: 0 }
+    const counts: Record<string, number> = { all: 0, other: 0 }
     if (!data) return counts
     counts.all = data.people.length
+    for (const t of data.teams) counts[t.id] = 0
     for (const p of data.people) {
-      for (const t of p.teams) counts[t]++
+      if (p.teamId && counts[p.teamId] !== undefined) counts[p.teamId]++
+      else counts.other++
     }
     return counts
   }, [data])
@@ -306,26 +317,38 @@ export function StandupPage() {
             ))}
           </select>
         </div>
-        {/* Team filter pills */}
+        {/* Team filter pills — one per loaded team, plus "All" and "Other" */}
         <div className="px-2 py-2 border-b bg-muted/10 flex flex-wrap gap-1">
-          {TEAM_FILTERS.map(f => {
-            const active = teamFilter === f.key
-            const count = teamCounts[f.key]
-            return (
-              <button
-                key={f.key}
-                onClick={() => setTeamFilter(f.key)}
-                className={cn(
-                  'text-[10px] font-medium px-2 py-0.5 rounded border transition-colors',
-                  active
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/30'
-                )}
-              >
-                {f.label} <span className="opacity-70">({count})</span>
-              </button>
-            )
-          })}
+          {(() => {
+            const pills: { key: TeamFilter; label: string; color?: string; dashed?: boolean }[] = [
+              { key: 'all', label: 'All' },
+              ...(data?.teams ?? []).map(t => ({ key: t.id, label: t.name, color: t.color })),
+              { key: 'other', label: 'Other', dashed: true },
+            ]
+            return pills.map(p => {
+              const active = teamFilter === p.key
+              const count = teamCounts[p.key] ?? 0
+              const style = active && p.color
+                ? { backgroundColor: `${p.color}2E`, borderColor: p.color, color: p.color }
+                : undefined
+              return (
+                <button
+                  key={p.key}
+                  onClick={() => setTeamFilter(p.key)}
+                  style={style}
+                  className={cn(
+                    'text-[10px] font-medium px-2 py-0.5 rounded border transition-colors',
+                    p.dashed && 'border-dashed',
+                    active && !p.color
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : !active && 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/30'
+                  )}
+                >
+                  {p.label} <span className="opacity-70">({count})</span>
+                </button>
+              )
+            })
+          })()}
         </div>
         <div className="flex-1 overflow-y-auto">
           {sortedPeople.map((person, i) => {

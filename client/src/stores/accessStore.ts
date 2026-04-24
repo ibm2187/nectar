@@ -24,8 +24,19 @@ export interface AccessUser {
   picture: string | null
   roleIds: string[]
   capabilities: string[]
+  teamId: string | null
+  jiraName: string | null
   lastLoginAt: string | null
   createdAt: string
+}
+
+export interface Team {
+  id: string
+  name: string
+  description: string | null
+  color: string
+  createdAt: string
+  updatedAt: string
 }
 
 export interface AccessKey {
@@ -43,6 +54,7 @@ interface AccessState {
   roles: Role[]
   users: AccessUser[]
   keys: AccessKey[]
+  teams: Team[]
   loading: boolean
   error: string | null
 
@@ -54,6 +66,12 @@ interface AccessState {
   createKey: (data: { label: string; roleId: string }) => Promise<{ id: string; rawKey: string; label: string; roleId: string }>
   updateKeyRole: (keyId: string, roleId: string) => Promise<void>
   revokeKey: (keyId: string) => Promise<void>
+
+  createTeam: (input: { name: string; description?: string; color: string }) => Promise<Team>
+  updateTeam: (id: string, patch: Partial<Pick<Team, 'name' | 'description' | 'color'>>) => Promise<Team>
+  deleteTeam: (id: string) => Promise<void>
+  updateUserTeam: (email: string, teamId: string | null) => Promise<void>
+  updateUserJiraName: (email: string, jiraName: string | null) => Promise<void>
 }
 
 export const useAccessStore = create<AccessState>((set, get) => ({
@@ -61,19 +79,21 @@ export const useAccessStore = create<AccessState>((set, get) => ({
   roles: [],
   users: [],
   keys: [],
+  teams: [],
   loading: false,
   error: null,
 
   loadAll: async () => {
     set({ loading: true, error: null })
     try {
-      const [capabilities, roles, users, keys] = await Promise.all([
+      const [capabilities, roles, users, keys, teams] = await Promise.all([
         apiFetch<Capability[]>('/access/capabilities'),
         apiFetch<Role[]>('/access/roles'),
         apiFetch<AccessUser[]>('/access/users'),
         apiFetch<AccessKey[]>('/access/keys'),
+        apiFetch<Team[]>('/access/teams'),
       ])
-      set({ capabilities, roles, users, keys, loading: false })
+      set({ capabilities, roles, users, keys, teams, loading: false })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load access data'
       set({ error: message, loading: false })
@@ -141,5 +161,44 @@ export const useAccessStore = create<AccessState>((set, get) => ({
   revokeKey: async (keyId) => {
     await apiFetch<void>(`/access/keys/${keyId}`, { method: 'DELETE' })
     set({ keys: get().keys.filter((k) => k.id !== keyId) })
+  },
+
+  createTeam: async (data) => {
+    const team = await apiFetch<Team>('/access/teams', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+    set({ teams: [...get().teams, team].sort((a, b) => a.name.localeCompare(b.name)) })
+    return team
+  },
+
+  updateTeam: async (id, patch) => {
+    const updated = await apiFetch<Team>(`/access/teams/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    })
+    set({ teams: get().teams.map((t) => (t.id === id ? updated : t)) })
+    return updated
+  },
+
+  deleteTeam: async (id) => {
+    await apiFetch<void>(`/access/teams/${id}`, { method: 'DELETE' })
+    set({ teams: get().teams.filter((t) => t.id !== id) })
+  },
+
+  updateUserTeam: async (email, teamId) => {
+    await apiFetch<void>(`/access/users/${encodeURIComponent(email)}/team`, {
+      method: 'PUT',
+      body: JSON.stringify({ teamId }),
+    })
+    set({ users: get().users.map((u) => (u.email === email ? { ...u, teamId } : u)) })
+  },
+
+  updateUserJiraName: async (email, jiraName) => {
+    await apiFetch<void>(`/access/users/${encodeURIComponent(email)}/jira-name`, {
+      method: 'PUT',
+      body: JSON.stringify({ jiraName }),
+    })
+    set({ users: get().users.map((u) => (u.email === email ? { ...u, jiraName } : u)) })
   },
 }))

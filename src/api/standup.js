@@ -31,25 +31,22 @@ const URGENCY_WEIGHTS = {
   inDev: 0,
 };
 
-// Map a repo (short name or "org/repo") to a team. Unknown repos → null.
-function teamForRepo(repo) {
-  if (!repo) return null;
-  const short = String(repo).toLowerCase().split('/').pop();
-  if (short === 'android' || short === 'ios') return 'mobile';
-  if (short === 'webplatform' || short === 'bluesummit') return 'web';
-  return null;
-}
-
 /**
  * Build the standup data for all people with active work.
  *
- * @param {object} services - { releases, ticketStore, prStore, availability, peopleDirectory }
+ * @param {object} services - { releases, ticketStore, prStore, availability, peopleDirectory, userStore, teamStore }
  * @param {object} opts - { horizon }
- * @returns {object} { people, releasesDueThisWeek, generatedAt }
+ * @returns {object} { people, releasesDueThisWeek, teams, generatedAt }
  */
 function buildStandupData(services, opts = {}) {
-  const { releases, ticketStore, prStore, availability, peopleDirectory } = services;
-  const today = new Date().toISOString().slice(0, 10);
+  const { releases, ticketStore, prStore, availability, peopleDirectory, userStore, teamStore } = services;
+
+  // Team lookup + sorted list for the response's `teams` array. Needed for
+  // every path (including the empty-releases early return below), so build
+  // it first.
+  const teamById = new Map();
+  const teamsSorted = teamStore ? teamStore.list() : [];
+  for (const t of teamsSorted) teamById.set(t.id, { id: t.id, name: t.name, color: t.color });
   const horizon = opts.horizon || _defaultHorizon(availability);
 
   // 1. ALL active releases — standup shows everyone's full workload.
@@ -65,8 +62,23 @@ function buildStandupData(services, opts = {}) {
   );
 
   if (activeReleases.length === 0) {
-    return { people: [], releasesDueThisWeek: [], generatedAt: new Date().toISOString() };
+    return {
+      people: [],
+      releasesDueThisWeek: [],
+      teams: teamsSorted.map(t => ({ id: t.id, name: t.name, color: t.color })),
+      generatedAt: new Date().toISOString(),
+    };
   }
+
+  // Only people with a jiraName set appear in standup — everyone else is
+  // filtered out (reported as hiddenCount at the end for observability).
+  const jiraNameToUser = new Map();
+  if (userStore) {
+    for (const u of userStore.listForStandup()) {
+      jiraNameToUser.set(u.jiraName, u);
+    }
+  }
+  let hiddenCount = 0;
 
   // 2. Gather all undone tickets across ALL active releases, grouped by person
   const byPerson = new Map(); // name → { asAssignee: [{ ticket, release }], asQa: [{ ticket, release }] }
@@ -98,6 +110,17 @@ function buildStandupData(services, opts = {}) {
   const people = [];
 
   for (const [personName, work] of byPerson) {
+    // Gate every person on having a matching SSO user with a jiraName.
+    // This replaces the old qa/mobile/web repo heuristic with an explicit
+    // user-defined membership model.
+    const user = jiraNameToUser.get(personName);
+    if (!user) { hiddenCount++; continue; }
+    const team = user.teamId ? (teamById.get(user.teamId) || null) : null;
+    // Display name comes from the Nectar users table (SSO name), not the
+    // JIRA assignee name. Availability/Slack/etc. still key off the JIRA
+    // name since that's what those services recognize.
+    const displayName = user.name || personName;
+
     // Determine role
     const roles = [];
     if (work.asAssignee.length > 0) roles.push('dev');
@@ -263,22 +286,12 @@ function buildStandupData(services, opts = {}) {
     const hasImminentTickets = allItems.some(i => imminentVersions.has(i.release.version));
     const defaultFilter = hasImminentTickets ? 'imminent' : 'all';
 
-    // Derive teams: QA role → qa only. Non-QA → platform team by ticket repo.
-    const teams = new Set();
-    if (roles.includes('qa')) {
-      teams.add('qa');
-    } else {
-      for (const { release } of allItems) {
-        const t = teamForRepo(release.repo);
-        if (t) teams.add(t);
-      }
-    }
-
     people.push({
-      name: personName,
+      name: displayName,
       slackId,
       roles,
-      teams: [...teams],
+      teamId: user.teamId || null,
+      team,
       isOoo,
       buckets,
       urgencyScore,
@@ -293,22 +306,29 @@ function buildStandupData(services, opts = {}) {
   // Pull from ticketStore.getDistinctPeople() which knows all devs/QA from JIRA history.
   if (ticketStore && ticketStore.getDistinctPeople) {
     const allTeam = ticketStore.getDistinctPeople();
-    const included = new Set(people.map(p => p.name));
+    // Dedup against JIRA names (what's in `byPerson`), NOT the display name
+    // we just pushed, since user.name (SSO) can differ from the JIRA name.
+    const includedJiraNames = new Set(byPerson.keys());
     for (const member of allTeam) {
-      if (included.has(member.name)) continue;
+      if (includedJiraNames.has(member.name)) continue;
       // Only include dev and qa roles in standup
       const standupRoles = member.roles.filter(r => r === 'dev' || r === 'qa');
       if (standupRoles.length === 0) continue;
 
+      // Must match a logged-in SSO user with a jiraName
+      const user = jiraNameToUser.get(member.name);
+      if (!user) { hiddenCount++; continue; }
+      const team = user.teamId ? (teamById.get(user.teamId) || null) : null;
+      const displayName = user.name || member.name;
+
       const isOoo = availability ? availability.isPersonOut(member.name) : false;
       const resolved = peopleDirectory ? peopleDirectory.resolveSlackId(member.name) : null;
-      // Without active tickets we can only infer team from role.
-      const teams = standupRoles.includes('qa') ? ['qa'] : [];
       people.push({
-        name: member.name,
+        name: displayName,
         slackId: resolved ? resolved.slackId : null,
         roles: standupRoles,
-        teams,
+        teamId: user.teamId || null,
+        team,
         isOoo,
         buckets: {
           releaseCritical: [],
@@ -326,6 +346,10 @@ function buildStandupData(services, opts = {}) {
         imminentVersions: [],
       });
     }
+  }
+
+  if (hiddenCount > 0) {
+    log.info(`standup: hid ${hiddenCount} JIRA names with no SSO user`);
   }
 
   // Default sort: OOO people last, then by urgency score descending
@@ -346,6 +370,7 @@ function buildStandupData(services, opts = {}) {
   return {
     people,
     releasesDueThisWeek,
+    teams: teamsSorted.map(t => ({ id: t.id, name: t.name, color: t.color })),
     generatedAt: new Date().toISOString(),
   };
 }
@@ -368,4 +393,4 @@ function _defaultHorizon(availability) {
   return end.toISOString().slice(0, 10);
 }
 
-module.exports = { buildStandupData, URGENCY_WEIGHTS, teamForRepo };
+module.exports = { buildStandupData, URGENCY_WEIGHTS };

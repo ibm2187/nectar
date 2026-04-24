@@ -373,3 +373,255 @@ describe('Access Routes (unit)', () => {
     });
   });
 });
+
+// ── Teams routes ──────────────────────────────────────────
+// Integration-style tests that spin up an Express app with the router
+// mounted, then invoke via http.request.
+describe('Access Routes — Teams', () => {
+  const express = require('express');
+  const http = require('http');
+  const TeamStore = require('../../src/core/team-store');
+
+  let server, baseUrl, db, userStore, teamStore, audit, onStandupInvalidate, invalidateCount, savedEnv;
+
+  beforeEach(async () => {
+    // ENABLE_GOOGLE_SSO + NECTAR_ADMINS required: without SSO enabled
+    // authz treats every request as dev-mode (full access), and without
+    // NECTAR_ADMINS being non-empty break-glass grants everyone admin.
+    savedEnv = {
+      NECTAR_ADMINS: process.env.NECTAR_ADMINS,
+      ENABLE_GOOGLE_SSO: process.env.ENABLE_GOOGLE_SSO,
+    };
+    process.env.NECTAR_ADMINS = 'admin@viv.com';
+    process.env.ENABLE_GOOGLE_SSO = 'true';
+    db = createTestDb();
+    // Seed admin user + role so requireCapability passes
+    const now = new Date().toISOString();
+    const allCaps = JSON.stringify([
+      'config.write', 'release.write', 'environment.write',
+      'sync.trigger', 'task.write', 'notify.send', 'user.admin', 'system.admin',
+    ]);
+    db.prepare(`INSERT OR IGNORE INTO roles (id, name, description, capabilities, system, createdAt, updatedAt)
+      VALUES ('admin', 'Admin', 'Full', ?, 1, ?, ?)`).run(allCaps, now, now);
+    db.prepare(`INSERT OR IGNORE INTO roles (id, name, description, capabilities, system, createdAt, updatedAt)
+      VALUES ('viewer', 'Viewer', 'Read', '[]', 1, ?, ?)`).run(now, now);
+
+    userStore = new UserStore({ db });
+    teamStore = new TeamStore({ db });
+    userStore.upsertOnLogin('admin@viv.com', 'Admin User', null);
+    db.prepare(`INSERT INTO user_roles (email, roleId, grantedBy, grantedAt)
+      VALUES ('admin@viv.com', 'admin', 'test', ?)`).run(now);
+    userStore.upsertOnLogin('viewer@viv.com', 'View User', null);
+    db.prepare(`INSERT INTO user_roles (email, roleId, grantedBy, grantedAt)
+      VALUES ('viewer@viv.com', 'viewer', 'test', ?)`).run(now);
+
+    // Audit mock with spy-able record
+    const calls = [];
+    audit = { record: (...args) => calls.push(args), _calls: calls };
+
+    invalidateCount = 0;
+    onStandupInvalidate = () => { invalidateCount++; };
+
+    // Build mini app
+    const app = express();
+    app.use(express.json());
+    // Inject a test user onto the req before the router runs
+    app.use((req, res, next) => {
+      const email = req.headers['x-test-email'] || 'admin@viv.com';
+      req.user = { email };
+      next();
+    });
+    const router = createAccessRoutes({ db, userStore, teamStore }, { audit, onStandupInvalidate });
+    app.use(router);
+
+    server = http.createServer(app);
+    await new Promise(r => server.listen(0, r));
+    const { port } = server.address();
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterEach(async () => {
+    if (server) await new Promise(r => server.close(r));
+    for (const k of Object.keys(savedEnv)) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+  });
+
+  async function req(method, path, body, headers = {}) {
+    const res = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: { 'content-type': 'application/json', ...headers },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    const text = await res.text();
+    const json = text ? JSON.parse(text) : null;
+    return { status: res.status, body: json };
+  }
+
+  describe('GET /access/teams', () => {
+    it('returns an array (not envelope)', async () => {
+      const r = await req('GET', '/access/teams');
+      expect(r.status).toBe(200);
+      expect(Array.isArray(r.body)).toBe(true);
+    });
+
+    it('403 when caller lacks user.admin', async () => {
+      const r = await req('GET', '/access/teams', undefined, { 'x-test-email': 'viewer@viv.com' });
+      expect(r.status).toBe(403);
+    });
+  });
+
+  describe('POST /access/teams', () => {
+    it('creates with slug id and records audit', async () => {
+      const r = await req('POST', '/access/teams', { name: 'Web Platform', color: '#60a5fa' });
+      expect(r.status).toBe(201);
+      expect(r.body.id).toBe('web-platform');
+      expect(audit._calls.find(c => c[1] === 'team:created')).toBeTruthy();
+    });
+
+    it('400 on missing name', async () => {
+      const r = await req('POST', '/access/teams', { color: '#60a5fa' });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toBe('invalid_name');
+    });
+
+    it('400 on missing color', async () => {
+      const r = await req('POST', '/access/teams', { name: 'X' });
+      expect(r.status).toBe(400);
+    });
+
+    it('400 on invalid (non-swatch) color', async () => {
+      const r = await req('POST', '/access/teams', { name: 'X', color: '#000000' });
+      expect(r.status).toBe(400);
+    });
+  });
+
+  describe('PATCH /access/teams/:id', () => {
+    it('updates a team', async () => {
+      await req('POST', '/access/teams', { name: 'A', color: '#60a5fa' });
+      const r = await req('PATCH', '/access/teams/a', { name: 'A2', color: '#a78bfa' });
+      expect(r.status).toBe(200);
+      expect(r.body.name).toBe('A2');
+      expect(r.body.color).toBe('#a78bfa');
+    });
+
+    it('404 on unknown id', async () => {
+      const r = await req('PATCH', '/access/teams/nope', { name: 'Z' });
+      expect(r.status).toBe(404);
+    });
+
+    it('400 on invalid color', async () => {
+      await req('POST', '/access/teams', { name: 'A', color: '#60a5fa' });
+      const r = await req('PATCH', '/access/teams/a', { color: 'blue' });
+      expect(r.status).toBe(400);
+    });
+
+    it('400 on name collision with friendly message', async () => {
+      await req('POST', '/access/teams', { name: 'A', color: '#60a5fa' });
+      await req('POST', '/access/teams', { name: 'B', color: '#a78bfa' });
+      const r = await req('PATCH', '/access/teams/a', { name: 'B' });
+      expect(r.status).toBe(400);
+      expect(r.body.message).toMatch(/already exists/i);
+    });
+  });
+
+  describe('DELETE /access/teams/:id', () => {
+    it('204 when team has 0 members', async () => {
+      await req('POST', '/access/teams', { name: 'A', color: '#60a5fa' });
+      const r = await req('DELETE', '/access/teams/a');
+      expect(r.status).toBe(204);
+    });
+
+    it('409 with memberCount + sample when team has members', async () => {
+      await req('POST', '/access/teams', { name: 'A', color: '#60a5fa' });
+      await req('PUT', '/access/users/admin%40viv.com/team', { teamId: 'a' });
+      const r = await req('DELETE', '/access/teams/a');
+      expect(r.status).toBe(409);
+      expect(r.body.memberCount).toBe(1);
+      expect(Array.isArray(r.body.sample)).toBe(true);
+    });
+
+    it('404 on unknown id', async () => {
+      const r = await req('DELETE', '/access/teams/nope');
+      expect(r.status).toBe(404);
+    });
+  });
+
+  describe('PUT /access/users/:email/team', () => {
+    it('updates teamId and calls onStandupInvalidate', async () => {
+      await req('POST', '/access/teams', { name: 'A', color: '#60a5fa' });
+      invalidateCount = 0;
+      const r = await req('PUT', '/access/users/admin%40viv.com/team', { teamId: 'a' });
+      expect(r.status).toBe(200);
+      expect(r.body.teamId).toBe('a');
+      expect(invalidateCount).toBe(1);
+    });
+
+    it('accepts null to clear teamId', async () => {
+      await req('POST', '/access/teams', { name: 'A', color: '#60a5fa' });
+      await req('PUT', '/access/users/admin%40viv.com/team', { teamId: 'a' });
+      const r = await req('PUT', '/access/users/admin%40viv.com/team', { teamId: null });
+      expect(r.status).toBe(200);
+      expect(r.body.teamId).toBeNull();
+    });
+
+    it('400 on unknown teamId', async () => {
+      const r = await req('PUT', '/access/users/admin%40viv.com/team', { teamId: 'ghost' });
+      expect(r.status).toBe(400);
+    });
+  });
+
+  describe('PUT /access/users/:email/jira-name', () => {
+    it('updates jiraName and calls onStandupInvalidate', async () => {
+      invalidateCount = 0;
+      const r = await req('PUT', '/access/users/admin%40viv.com/jira-name', { jiraName: 'Admin User' });
+      expect(r.status).toBe(200);
+      expect(r.body.jiraName).toBe('Admin User');
+      expect(invalidateCount).toBe(1);
+    });
+
+    it('accepts null to clear', async () => {
+      await req('PUT', '/access/users/admin%40viv.com/jira-name', { jiraName: 'Admin' });
+      const r = await req('PUT', '/access/users/admin%40viv.com/jira-name', { jiraName: null });
+      expect(r.status).toBe(200);
+      expect(r.body.jiraName).toBeNull();
+    });
+  });
+
+  describe('GET /access/users enrichment', () => {
+    it('includes teamId and jiraName on each user row', async () => {
+      await req('POST', '/access/teams', { name: 'A', color: '#60a5fa' });
+      await req('PUT', '/access/users/admin%40viv.com/team', { teamId: 'a' });
+      await req('PUT', '/access/users/admin%40viv.com/jira-name', { jiraName: 'Admin User' });
+      const r = await req('GET', '/access/users');
+      expect(r.status).toBe(200);
+      const adminRow = r.body.find(u => u.email === 'admin@viv.com');
+      expect(adminRow.teamId).toBe('a');
+      expect(adminRow.jiraName).toBe('Admin User');
+      const viewerRow = r.body.find(u => u.email === 'viewer@viv.com');
+      expect(viewerRow.teamId).toBeNull();
+      expect(viewerRow.jiraName).toBeNull();
+    });
+  });
+
+  describe('audit', () => {
+    it('records team:created / team:updated / team:deleted / user:team-updated / user:jira-name-updated with actor', async () => {
+      await req('POST', '/access/teams', { name: 'A', color: '#60a5fa' });
+      await req('PATCH', '/access/teams/a', { color: '#a78bfa' });
+      await req('PUT', '/access/users/admin%40viv.com/team', { teamId: 'a' });
+      await req('PUT', '/access/users/admin%40viv.com/jira-name', { jiraName: 'A' });
+      await req('PUT', '/access/users/admin%40viv.com/team', { teamId: null });
+      await req('DELETE', '/access/teams/a');
+      const actions = audit._calls.map(c => c[1]);
+      expect(actions).toContain('team:created');
+      expect(actions).toContain('team:updated');
+      expect(actions).toContain('user:team-updated');
+      expect(actions).toContain('user:jira-name-updated');
+      expect(actions).toContain('team:deleted');
+      // Actor email populated
+      const created = audit._calls.find(c => c[1] === 'team:created');
+      expect(created[3]).toBe('admin@viv.com');
+    });
+  });
+});

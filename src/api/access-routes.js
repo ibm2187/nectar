@@ -13,19 +13,21 @@ const KEY_PREFIX = 'nectar_';
  * All routes require 'user.admin' capability.
  *
  * @param {object} services
+ * @param {object} [services.teamStore] - TeamStore instance
  * @param {object} [opts]
  * @param {function} [opts.broadcastTo] - targeted WS broadcast
  * @param {object} [opts.audit] - Audit instance
+ * @param {function} [opts.onStandupInvalidate] - called after team/jiraName writes so cached standup refreshes
  * @returns {Router}
  */
 function createAccessRoutes(services, opts = {}) {
-  const { userStore } = services;
-  const { broadcastTo, audit } = opts;
+  const { userStore, teamStore } = services;
+  const { broadcastTo, audit, onStandupInvalidate } = opts;
   const router = Router();
   const db = services.db || getDb();
 
   // All access routes require user.admin
-  router.use(requireCapability('user.admin', { audit }));
+  router.use(requireCapability('user.admin', { audit, db }));
 
   // ── Capabilities ────────────────────────────────────────
 
@@ -232,6 +234,8 @@ function createAccessRoutes(services, opts = {}) {
         picture: u.picture,
         roleIds: entry.roleIds,
         capabilities: Array.from(entry.caps),
+        teamId: u.teamId ?? null,
+        jiraName: u.jiraName ?? null,
         lastLoginAt: u.lastLoginAt,
         createdAt: u.createdAt,
       };
@@ -404,6 +408,114 @@ function createAccessRoutes(services, opts = {}) {
     }
 
     res.json({ ok: true });
+  });
+
+  // ── Teams ─────────────────────────────────────────────
+  router.get('/access/teams', (req, res) => {
+    if (!teamStore) return res.json([]);
+    res.json(teamStore.list());
+  });
+
+  // Any team or user-team mutation must invalidate the standup cache so the
+  // UI picks up the change on next fetch instead of waiting 30s.
+  const invalidateStandup = () => {
+    if (typeof onStandupInvalidate === 'function') onStandupInvalidate();
+  };
+
+  router.post('/access/teams', (req, res) => {
+    if (!teamStore) return res.status(500).json({ error: 'teamstore_unavailable' });
+    const { name, description, color } = req.body || {};
+    if (!name || !name.trim()) return res.status(400).json({ error: 'invalid_name', message: 'name is required' });
+    try {
+      const t = teamStore.create({ name: name.trim(), description: description || null, color });
+      if (audit) audit.record(null, 'team:created', { id: t.id, name: t.name, color: t.color }, getActorEmail(req));
+      invalidateStandup();
+      res.status(201).json(t);
+    } catch (err) {
+      res.status(400).json({ error: 'team_create_failed', message: err.message });
+    }
+  });
+
+  router.patch('/access/teams/:id', (req, res) => {
+    if (!teamStore) return res.status(500).json({ error: 'teamstore_unavailable' });
+    const { id } = req.params;
+    if (!teamStore.get(id)) return res.status(404).json({ error: 'not_found', message: 'Team not found' });
+    try {
+      const updated = teamStore.update(id, req.body || {});
+      if (audit) audit.record(null, 'team:updated', { id, changes: req.body || {} }, getActorEmail(req));
+      invalidateStandup();
+      res.json(updated);
+    } catch (err) {
+      res.status(400).json({ error: 'team_update_failed', message: err.message });
+    }
+  });
+
+  router.delete('/access/teams/:id', (req, res) => {
+    if (!teamStore) return res.status(500).json({ error: 'teamstore_unavailable' });
+    const { id } = req.params;
+    try {
+      const result = db.transaction(() => {
+        const count = teamStore.countMembers(id);
+        if (count > 0) {
+          return {
+            conflict: true,
+            memberCount: count,
+            sample: teamStore.listMembers(id),
+          };
+        }
+        // Defensive NULLIFY: countMembers should already be 0 here, but if a
+        // race added a member between check and delete, null out their
+        // teamId in the same transaction so no row is left with a dangling
+        // foreign-ish reference.
+        db.prepare('UPDATE users SET teamId = NULL WHERE teamId = ?').run(id);
+        const removed = teamStore.remove(id);
+        return { conflict: false, removed };
+      })();
+      if (result.conflict) {
+        return res.status(409).json({
+          error: 'team_has_members',
+          message: 'Team has members — reassign before deleting',
+          memberCount: result.memberCount,
+          sample: result.sample,
+        });
+      }
+      if (!result.removed) return res.status(404).json({ error: 'not_found', message: 'Team not found' });
+      if (audit) audit.record(null, 'team:deleted', { id }, getActorEmail(req));
+      invalidateStandup();
+      res.status(204).end();
+    } catch (err) {
+      res.status(500).json({ error: 'team_delete_failed', message: err.message });
+    }
+  });
+
+  router.put('/access/users/:email/team', (req, res) => {
+    if (!teamStore) return res.status(500).json({ error: 'teamstore_unavailable' });
+    const email = decodeURIComponent(req.params.email).toLowerCase();
+    const { teamId } = req.body || {};
+    if (teamId != null && !teamStore.get(teamId)) {
+      return res.status(400).json({ error: 'unknown_team', message: 'Unknown teamId' });
+    }
+    try {
+      const user = userStore.setTeam(email, teamId);
+      if (audit) audit.record(null, 'user:team-updated', { email, teamId }, getActorEmail(req));
+      invalidateStandup();
+      res.json(user);
+    } catch (err) {
+      res.status(404).json({ error: 'user_not_found', message: err.message });
+    }
+  });
+
+  router.put('/access/users/:email/jira-name', (req, res) => {
+    const email = decodeURIComponent(req.params.email).toLowerCase();
+    const { jiraName } = req.body || {};
+    try {
+      const user = userStore.setJiraName(email, jiraName);
+      if (audit) audit.record(null, 'user:jira-name-updated', { email, jiraName }, getActorEmail(req));
+      invalidateStandup();
+      res.json(user);
+    } catch (err) {
+      res.status(404).json({ error: 'user_not_found', message: err.message });
+    }
   });
 
   return router;

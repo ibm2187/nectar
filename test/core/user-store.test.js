@@ -464,3 +464,46 @@ describe('UserStore', () => {
     });
   });
 });
+
+describe('UserStore teams extensions', () => {
+  const TeamStore = require('../../src/core/team-store');
+  let db, users, teams;
+  beforeEach(() => {
+    db = createTestDb();
+    users = new UserStore({ db });
+    teams = new TeamStore({ db });
+    users.upsertOnLogin('a@x.com', 'Alice Smith', null);
+  });
+
+  it('setTeam updates teamId and clears with null', () => {
+    const t = teams.create({ name: 'Web', color: '#60a5fa' });
+    users.setTeam('a@x.com', t.id);
+    expect(users.getUser('a@x.com').teamId).toBe(t.id);
+    users.setTeam('a@x.com', null);
+    expect(users.getUser('a@x.com').teamId).toBeNull();
+  });
+
+  it('setJiraName updates jiraName and clears with null', () => {
+    users.setJiraName('a@x.com', 'Alice Smith');
+    expect(users.getUser('a@x.com').jiraName).toBe('Alice Smith');
+    users.setJiraName('a@x.com', null);
+    expect(users.getUser('a@x.com').jiraName).toBeNull();
+  });
+
+  it('listForStandup returns only users with a jiraName', () => {
+    users.upsertOnLogin('b@x.com', 'Bob Jones', null);
+    users.setJiraName('a@x.com', 'Alice Smith');
+    const rows = users.listForStandup();
+    expect(rows.map(r => r.jiraName)).toEqual(['Alice Smith']);
+  });
+
+  it('upsertOnLogin preserves teamId and jiraName across re-logins', () => {
+    const t = teams.create({ name: 'Web', color: '#60a5fa' });
+    users.setTeam('a@x.com', t.id);
+    users.setJiraName('a@x.com', 'Alice S');
+    users.upsertOnLogin('a@x.com', 'Alice Smith', null);
+    const u = users.getUser('a@x.com');
+    expect(u.teamId).toBe(t.id);
+    expect(u.jiraName).toBe('Alice S');
+  });
+});

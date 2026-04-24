@@ -457,6 +457,7 @@ module.exports = function createRoutes(services, config) {
   // Override with ?horizon=YYYY-MM-DD if needed.
   // Cached for 30s — standup data doesn't change mid-meeting.
   let _standupCache = { data: null, expiresAt: 0, key: null };
+  function invalidateStandupCache() { _standupCache = { data: null, expiresAt: 0, key: null }; }
 
   router.get('/standup', (req, res) => {
     const cacheKey = req.query.horizon || 'default';
@@ -472,6 +473,8 @@ module.exports = function createRoutes(services, config) {
       prStore,
       availability: services.availability,
       peopleDirectory: services.peopleDirectory,
+      userStore: services.userStore,
+      teamStore: services.teamStore,
     };
     const data = buildStandupData(standupServices, opts);
     _standupCache = { data, expiresAt: Date.now() + 30_000, key: cacheKey };
@@ -525,6 +528,8 @@ module.exports = function createRoutes(services, config) {
       prStore,
       availability: services.availability,
       peopleDirectory: services.peopleDirectory,
+      userStore: services.userStore,
+      teamStore: services.teamStore,
     };
     const standupData = buildStandupData(standupServices);
     const person = standupData.people.find(p => p.name === personName);
@@ -3937,6 +3942,7 @@ module.exports = function createRoutes(services, config) {
   const accessRouter = createAccessRoutes(services, {
     audit: services.audit,
     broadcastTo: services.broadcastTo,
+    onStandupInvalidate: invalidateStandupCache,
   });
   router.use(accessRouter);
 

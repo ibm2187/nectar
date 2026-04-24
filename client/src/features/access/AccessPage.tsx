@@ -8,17 +8,30 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog'
 import { NectarLoader } from '../../components/NectarLoader'
-import { cn } from '../../lib/utils'
+import { cn, timeAgo } from '../../lib/utils'
 
 // ── Tab types ─────────────────────────────────────────
 
-type Tab = 'users' | 'roles' | 'api-keys'
+type Tab = 'users' | 'roles' | 'teams' | 'api-keys'
 
 const TABS: ReadonlyArray<{ key: Tab; label: string }> = [
   { key: 'users', label: 'Users' },
   { key: 'roles', label: 'Roles' },
+  { key: 'teams', label: 'Teams' },
   { key: 'api-keys', label: 'API Keys' },
 ]
+
+// 8 swatch colors — must mirror TEAM_COLORS in src/core/team-store.js
+export const TEAM_COLORS = [
+  '#60a5fa', // blue
+  '#a78bfa', // violet
+  '#34d399', // emerald
+  '#f472b6', // pink
+  '#fbbf24', // amber
+  '#fb7185', // rose
+  '#2dd4bf', // teal
+  '#a3a3a3', // slate
+] as const
 
 // ── Shared helpers ────────────────────────────────────
 
@@ -120,7 +133,198 @@ export function AccessPage({ embedded }: { embedded?: boolean } = {}) {
       {/* Tab content */}
       {activeTab === 'users' && <UsersTab />}
       {activeTab === 'roles' && <RolesTab />}
+      {activeTab === 'teams' && <TeamsTab />}
       {activeTab === 'api-keys' && <ApiKeysTab />}
+    </div>
+  )
+}
+
+// ── Teams Tab ────────────────────────────────────────
+type TeamDialog =
+  | { kind: 'closed' }
+  | { kind: 'edit'; id?: string; name: string; description: string; color: string; error: string | null }
+  | { kind: 'deleteBlocked'; name: string; memberCount: number; sample: { email: string; name: string }[] }
+  | { kind: 'deleteConfirm'; id: string; name: string; error: string | null }
+
+function TeamsTab() {
+  const { teams, users, createTeam, updateTeam, deleteTeam } = useAccessStore()
+  const [dialog, setDialog] = useState<TeamDialog>({ kind: 'closed' })
+  const close = () => setDialog({ kind: 'closed' })
+
+  const openCreate = () => setDialog({ kind: 'edit', name: '', description: '', color: TEAM_COLORS[0], error: null })
+  const openEdit = (t: typeof teams[number]) =>
+    setDialog({ kind: 'edit', id: t.id, name: t.name, description: t.description ?? '', color: t.color, error: null })
+
+  const save = async () => {
+    if (dialog.kind !== 'edit') return
+    const { id, name, description, color } = dialog
+    try {
+      if (id) await updateTeam(id, { name, description: description || undefined, color })
+      else await createTeam({ name, description: description || undefined, color })
+      close()
+    } catch (err) {
+      setDialog({ ...dialog, error: err instanceof Error ? err.message : 'Failed to save team' })
+    }
+  }
+
+  const tryDelete = (t: typeof teams[number]) => {
+    const members = users.filter(u => u.teamId === t.id)
+    if (members.length > 0) {
+      setDialog({
+        kind: 'deleteBlocked',
+        name: t.name,
+        memberCount: members.length,
+        sample: members.slice(0, 20).map(u => ({ email: u.email, name: u.name })),
+      })
+      return
+    }
+    setDialog({ kind: 'deleteConfirm', id: t.id, name: t.name, error: null })
+  }
+
+  const confirmDelete = async () => {
+    if (dialog.kind !== 'deleteConfirm') return
+    try {
+      await deleteTeam(dialog.id)
+      close()
+    } catch (err) {
+      setDialog({ ...dialog, error: err instanceof Error ? err.message : 'Delete failed' })
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-semibold">Teams</h3>
+          <p className="text-sm text-muted-foreground">Group users for standup filtering</p>
+        </div>
+        <Button onClick={openCreate}>New team</Button>
+      </div>
+
+      {teams.length === 0 ? (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            No teams yet — create one to group users for standup.
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            <table className="w-full text-sm">
+              <thead className="border-b text-left text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-2">Team</th>
+                  <th className="px-4 py-2">Description</th>
+                  <th className="px-4 py-2">Members</th>
+                  <th className="px-4 py-2 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {teams.map(t => {
+                  const memberCount = users.filter(u => u.teamId === t.id).length
+                  return (
+                    <tr key={t.id} className="border-b last:border-b-0">
+                      <td className="px-4 py-2">
+                        <span className="inline-flex items-center gap-2">
+                          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: t.color }} />
+                          <span className="font-medium">{t.name}</span>
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-muted-foreground">{t.description || ''}</td>
+                      <td className="px-4 py-2">{memberCount}</td>
+                      <td className="px-4 py-2 text-right">
+                        <button onClick={() => openEdit(t)} className="text-xs text-muted-foreground hover:text-foreground mr-3">Edit</button>
+                        <button onClick={() => tryDelete(t)} className="text-xs text-rose-500 hover:text-rose-400">Delete</button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog open={dialog.kind === 'edit'} onOpenChange={(open) => !open && close()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{dialog.kind === 'edit' && dialog.id ? 'Edit team' : 'New team'}</DialogTitle>
+          </DialogHeader>
+          {dialog.kind === 'edit' && (
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs uppercase text-muted-foreground">Name</label>
+                <Input value={dialog.name} onChange={e => setDialog({ ...dialog, name: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs uppercase text-muted-foreground">Description</label>
+                <Input value={dialog.description} onChange={e => setDialog({ ...dialog, description: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs uppercase text-muted-foreground">Color</label>
+                <div className="flex gap-2 mt-1">
+                  {TEAM_COLORS.map(c => (
+                    <button
+                      key={c}
+                      onClick={() => setDialog({ ...dialog, color: c })}
+                      className={cn(
+                        'h-7 w-7 rounded-full border-2 transition',
+                        dialog.color === c ? 'border-foreground' : 'border-transparent',
+                      )}
+                      style={{ backgroundColor: c }}
+                      aria-label={`Color ${c}`}
+                    />
+                  ))}
+                </div>
+              </div>
+              {dialog.error && <div className="text-sm text-rose-500">{dialog.error}</div>}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={close}>Cancel</Button>
+            <Button onClick={save} disabled={dialog.kind !== 'edit' || !dialog.name.trim()}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={dialog.kind === 'deleteBlocked'} onOpenChange={(open) => !open && close()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Team has members</DialogTitle>
+          </DialogHeader>
+          {dialog.kind === 'deleteBlocked' && (
+            <div className="space-y-3 text-sm">
+              <p>Cannot delete <strong>{dialog.name}</strong> — {dialog.memberCount} member{dialog.memberCount === 1 ? '' : 's'} assigned. Reassign them to another team first.</p>
+              <ul className="text-xs text-muted-foreground space-y-0.5">
+                {dialog.sample.map(m => (
+                  <li key={m.email}>{m.name} ({m.email})</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <DialogFooter>
+            <Button onClick={close}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={dialog.kind === 'deleteConfirm'} onOpenChange={(open) => !open && close()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete team</DialogTitle>
+          </DialogHeader>
+          {dialog.kind === 'deleteConfirm' && (
+            <div className="space-y-3 text-sm">
+              <p>Delete team <strong>{dialog.name}</strong>? This can't be undone.</p>
+              {dialog.error && <div className="text-sm text-rose-500">{dialog.error}</div>}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={close}>Cancel</Button>
+            <Button onClick={confirmDelete}>Delete</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -131,17 +335,32 @@ interface AccessUser {
   email: string
   name: string
   roleIds: string[]
+  teamId: string | null
+  jiraName: string | null
   lastLoginAt: string | null
   createdAt: string
 }
 
 function UsersTab() {
-  const { users, roles, updateUserRoles } = useAccessStore()
+  const { users, roles, teams, updateUserRoles, updateUserTeam, updateUserJiraName } = useAccessStore()
   const [expandedEmail, setExpandedEmail] = useState<string | null>(null)
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
+  // Banner for failures of the inline Team / JIRA Name edits, which otherwise
+  // fail silently (the select/input snaps back to the store value with no
+  // feedback that the PUT rejected).
+  const [fieldError, setFieldError] = useState<string | null>(null)
+
+  const withFieldError = async (fn: () => Promise<unknown>, fallback: string) => {
+    setFieldError(null)
+    try {
+      await fn()
+    } catch (err) {
+      setFieldError(err instanceof Error ? err.message : fallback)
+    }
+  }
 
   function expandUser(user: AccessUser) {
     if (expandedEmail === user.email) {
@@ -185,6 +404,12 @@ function UsersTab() {
         </p>
       </CardHeader>
       <CardContent className="p-0">
+        {fieldError && (
+          <div className="px-3 py-2 bg-rose-500/10 border-b border-rose-500/30 text-xs text-rose-300 flex items-center justify-between">
+            <span>{fieldError}</span>
+            <button onClick={() => setFieldError(null)} className="text-rose-400 hover:text-rose-200">Dismiss</button>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -192,8 +417,9 @@ function UsersTab() {
                 <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Name</th>
                 <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Email</th>
                 <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Roles</th>
+                <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Team</th>
+                <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">JIRA Name</th>
                 <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-32">Last Login</th>
-                <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground w-32">Created</th>
               </tr>
             </thead>
             <tbody>
@@ -204,6 +430,7 @@ function UsersTab() {
                     key={user.email}
                     user={user}
                     allRoles={roles}
+                    teams={teams}
                     isExpanded={isExpanded}
                     selectedRoleIds={isExpanded ? selectedRoleIds : user.roleIds}
                     saving={saving}
@@ -212,12 +439,14 @@ function UsersTab() {
                     onExpand={() => expandUser(user)}
                     onToggleRole={toggleRole}
                     onSave={() => saveRoles(user.email)}
+                    onTeamChange={(teamId) => withFieldError(() => updateUserTeam(user.email, teamId), 'Failed to update team')}
+                    onJiraNameChange={(jiraName) => withFieldError(() => updateUserJiraName(user.email, jiraName), 'Failed to update JIRA name')}
                   />
                 )
               })}
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-3 py-8 text-center text-muted-foreground text-xs italic">
+                  <td colSpan={6} className="px-3 py-8 text-center text-muted-foreground text-xs italic">
                     No users have logged in yet.
                   </td>
                 </tr>
@@ -238,9 +467,16 @@ interface AccessRole {
   system: boolean
 }
 
-function UserRow({ user, allRoles, isExpanded, selectedRoleIds, saving, error, successMsg, onExpand, onToggleRole, onSave }: {
+interface TeamLite {
+  id: string
+  name: string
+  color: string
+}
+
+function UserRow({ user, allRoles, teams, isExpanded, selectedRoleIds, saving, error, successMsg, onExpand, onToggleRole, onSave, onTeamChange, onJiraNameChange }: {
   user: AccessUser
   allRoles: AccessRole[]
+  teams: TeamLite[]
   isExpanded: boolean
   selectedRoleIds: string[]
   saving: boolean
@@ -249,9 +485,14 @@ function UserRow({ user, allRoles, isExpanded, selectedRoleIds, saving, error, s
   onExpand: () => void
   onToggleRole: (roleId: string) => void
   onSave: () => void
+  onTeamChange: (teamId: string | null) => void | Promise<void>
+  onJiraNameChange: (jiraName: string | null) => void | Promise<void>
 }) {
   const roleNames = user.roleIds
     .map(rid => allRoles.find(r => r.id === rid)?.name ?? rid)
+  const userTeam = user.teamId ? teams.find(t => t.id === user.teamId) : null
+  const [jiraDraft, setJiraDraft] = useState(user.jiraName ?? '')
+  useEffect(() => { setJiraDraft(user.jiraName ?? '') }, [user.jiraName])
 
   return (
     <>
@@ -262,7 +503,14 @@ function UserRow({ user, allRoles, isExpanded, selectedRoleIds, saving, error, s
           isExpanded && 'bg-accent/10',
         )}
       >
-        <td className="px-3 py-2 font-medium">{user.name || '(unnamed)'}</td>
+        <td className="px-3 py-2 font-medium">
+          <span className="inline-flex items-center gap-2">
+            {userTeam && (
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: userTeam.color }} />
+            )}
+            {user.name || '(unnamed)'}
+          </span>
+        </td>
         <td className="px-3 py-2 text-muted-foreground">{user.email}</td>
         <td className="px-3 py-2">
           <div className="flex flex-wrap gap-1">
@@ -273,12 +521,42 @@ function UserRow({ user, allRoles, isExpanded, selectedRoleIds, saving, error, s
             )}
           </div>
         </td>
-        <td className="px-3 py-2 text-xs text-muted-foreground">{formatDate(user.lastLoginAt)}</td>
-        <td className="px-3 py-2 text-xs text-muted-foreground">{formatDate(user.createdAt)}</td>
+        <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
+          <select
+            aria-label={`Team for ${user.email}`}
+            className="bg-background border border-border rounded px-2 py-1 text-xs"
+            value={user.teamId ?? ''}
+            onChange={e => onTeamChange(e.target.value || null)}
+          >
+            <option value="">No team</option>
+            {teams.map(t => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+        </td>
+        <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
+          <input
+            aria-label={`JIRA name for ${user.email}`}
+            className={cn(
+              'bg-background border rounded px-2 py-1 text-xs w-40',
+              user.jiraName ? 'border-border' : 'border-amber-500/50',
+            )}
+            value={jiraDraft}
+            onChange={e => setJiraDraft(e.target.value)}
+            onBlur={() => {
+              const next = jiraDraft.trim() === '' ? null : jiraDraft.trim()
+              if (next !== (user.jiraName ?? null)) onJiraNameChange(next)
+            }}
+            placeholder={user.jiraName ? '' : 'no match'}
+          />
+        </td>
+        <td className="px-3 py-2 text-xs text-muted-foreground" title={user.lastLoginAt ?? ''}>
+          {user.lastLoginAt ? timeAgo(user.lastLoginAt) : 'Never'}
+        </td>
       </tr>
       {isExpanded && (
         <tr>
-          <td colSpan={5} className="px-3 py-4 bg-accent/5 border-b border-border/30">
+          <td colSpan={6} className="px-3 py-4 bg-accent/5 border-b border-border/30">
             <div className="space-y-3">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Assign Roles</p>
               <div className="flex flex-wrap gap-2">

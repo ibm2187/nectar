@@ -51,8 +51,12 @@ export function ConfigPage() {
   // Filter tabs by capability
   const tabs = BASE_TABS.filter(t => !t.cap || hasCap(t.cap))
 
+  // Access tab's Users table has 7 columns after teams feature — needs wider
+  // container than the default max-w-4xl used by other config tabs.
+  const widthClass = activeTab === 'access' ? 'max-w-7xl' : 'max-w-4xl'
+
   return (
-    <div className="w-full space-y-6 max-w-4xl">
+    <div className={cn('w-full space-y-6', widthClass)}>
       {/* Tab bar */}
       <div>
         <h2 className="text-2xl font-bold">Config</h2>

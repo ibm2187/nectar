@@ -133,6 +133,16 @@ function applySchema(db) {
     CREATE INDEX IF NOT EXISTS idx_ur_email ON user_roles(email);
     CREATE INDEX IF NOT EXISTS idx_ur_role ON user_roles(roleId);
 
+    -- ── teams ───────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS teams (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL UNIQUE,
+      description TEXT,
+      color       TEXT NOT NULL,
+      createdAt   TEXT NOT NULL,
+      updatedAt   TEXT NOT NULL
+    );
+
     -- ── themes (singleton row) ──────────────────────────────────
     CREATE TABLE IF NOT EXISTS theme_config (
       id              INTEGER PRIMARY KEY CHECK (id = 1),
@@ -950,6 +960,28 @@ function applyMigrations(db) {
         db.prepare('ALTER TABLE audit ADD COLUMN capability TEXT').run();
       }
       db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_resource ON audit(resource)').run();
+    },
+    // v15: Teams — new teams table + teamId/jiraName columns on users
+    (db) => {
+      db.prepare(`CREATE TABLE IF NOT EXISTS teams (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        color TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      )`).run();
+
+      const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+      if (!userCols.includes('teamId'))   db.prepare('ALTER TABLE users ADD COLUMN teamId TEXT').run();
+      if (!userCols.includes('jiraName')) db.prepare('ALTER TABLE users ADD COLUMN jiraName TEXT').run();
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_users_teamId ON users(teamId)').run();
+
+      // Populate jiraName for existing users by fuzzy-matching their SSO name
+      // against distinct JIRA assignees. Fresh installs with no jira_tickets
+      // rows are a no-op.
+      const backfillJiraNames = require('./backfill-jira-names');
+      backfillJiraNames(db);
     },
   ];
 

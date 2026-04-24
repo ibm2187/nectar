@@ -64,6 +64,8 @@ class UserStore {
       notificationPrefs: { ...DEFAULT_NOTIFICATION_PREFS },
       lastLoginAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
+      teamId: null,
+      jiraName: null,
     };
 
     this.users.set(key, user);
@@ -200,6 +202,47 @@ class UserStore {
   }
 
   /**
+   * Assign (or clear) the user's team. Pass null to remove.
+   * @param {string} email
+   * @param {string|null} teamId
+   * @returns {object} updated user
+   */
+  setTeam(email, teamId) {
+    const key = email.toLowerCase();
+    const user = this.users.get(key);
+    if (!user) throw new Error(`User ${email} not found`);
+    const next = { ...user, teamId: teamId ?? null };
+    this.users.set(key, next);
+    this.db.prepare('UPDATE users SET teamId = ? WHERE email = ?').run(next.teamId, key);
+    return next;
+  }
+
+  /**
+   * Set (or clear) the user's JIRA display name used to match standup people.
+   * @param {string} email
+   * @param {string|null} jiraName
+   * @returns {object} updated user
+   */
+  setJiraName(email, jiraName) {
+    const key = email.toLowerCase();
+    const user = this.users.get(key);
+    if (!user) throw new Error(`User ${email} not found`);
+    const next = { ...user, jiraName: jiraName ?? null };
+    this.users.set(key, next);
+    this.db.prepare('UPDATE users SET jiraName = ? WHERE email = ?').run(next.jiraName, key);
+    return next;
+  }
+
+  /**
+   * Users who can appear in standup — those with a non-empty jiraName.
+   * @returns {Array<{email:string, name:string, teamId:string|null, jiraName:string}>}
+   */
+  listForStandup() {
+    return this.db.prepare(`SELECT email, name, teamId, jiraName
+      FROM users WHERE jiraName IS NOT NULL AND jiraName != ''`).all();
+  }
+
+  /**
    * No-op retained for backward compatibility. Writes are synchronous.
    */
   flush() { /* no-op with SQLite */ }
@@ -244,6 +287,8 @@ class UserStore {
           notificationPrefs,
           lastLoginAt: row.lastLoginAt,
           createdAt: row.createdAt,
+          teamId: row.teamId ?? null,
+          jiraName: row.jiraName ?? null,
         });
       }
       log.info(`Loaded ${this.users.size} users`);

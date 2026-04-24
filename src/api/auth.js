@@ -45,9 +45,11 @@ function isAdmin(email, userStore) {
  *
  * @param {object} [opts]
  * @param {object} [opts.userStore] - UserStore instance (optional)
+ * @param {object} [opts.teamStore] - TeamStore instance (optional)
+ * @param {object} [opts.ticketStore] - TicketStore — used for jiraName auto-resolve (optional)
  */
 function createAuthRoutes(opts = {}) {
-  const { userStore } = opts;
+  const { userStore, teamStore, ticketStore } = opts;
   const router = Router();
   const ssoEnabled = process.env.ENABLE_GOOGLE_SSO === 'true';
   const jwtSecret = process.env.JWT_SECRET || 'nectar-default-jwt-secret';
@@ -121,6 +123,8 @@ function createAuthRoutes(opts = {}) {
           payload.name || payload.email,
           payload.picture || null,
         );
+        const resolveAndStoreJiraName = require('../core/resolve-and-store-jira-name');
+        resolveAndStoreJiraName({ userStore, ticketStore, email: payload.email });
       }
 
       // Issue a Nectar JWT session cookie
@@ -166,6 +170,8 @@ function createAuthRoutes(opts = {}) {
       const currentRole = userStore ? userStore.getRole(user.email) : (isAdmin(user.email) ? 'admin' : 'user');
       const capabilities = userStore ? userStore.getCapabilities(user.email) : [];
       const roles = userStore ? userStore.getRoles(user.email) : [];
+      const dbUser = userStore ? userStore.getUser(user.email) : null;
+      const team = (dbUser && dbUser.teamId && teamStore) ? teamStore.get(dbUser.teamId) : null;
       res.json({
         authenticated: true,
         ssoEnabled: true,
@@ -177,6 +183,9 @@ function createAuthRoutes(opts = {}) {
           role: currentRole, // compat shim — use capabilities instead
           capabilities,
           roles,
+          teamId: dbUser ? (dbUser.teamId || null) : null,
+          team,
+          jiraName: dbUser ? (dbUser.jiraName || null) : null,
         },
       });
     } catch {
