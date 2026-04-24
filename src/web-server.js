@@ -136,6 +136,11 @@ const prSync = new PrSync(releases, github, config);
 const ZohoSync = require('./core/zoho-sync');
 const zohoSync = new ZohoSync(releases, zoho, config);
 
+// Zoho mirror store — read-only from the web process. The sync worker
+// owns writes via its ZohoMirrorSync. Support routes query this store.
+const ZohoStore = require('./core/zoho-store');
+const zohoStore = new ZohoStore();
+
 // Discovery + CherryPickWatcher — not started, but routes check status
 const Discovery = require('./core/discovery');
 const discovery = new Discovery(releases, repoManager, config);
@@ -286,6 +291,14 @@ const services = {
   datadog, datadogPoller,
   zoho,
   zohoSync: makeSyncStub('zoho'),
+  zohoStore,
+  zohoMirrorSync: makeSyncStub('zoho-mirror', {
+    // /refresh endpoint posts to the task queue so the sync process picks it up
+    refreshTicket: async (ticketId) => {
+      taskQueue.createTask('trigger-sync', { target: 'zoho-mirror', ticketId }, 'web-server');
+      return null;
+    },
+  }),
   prSync: makeSyncStub('pr'),
   aws, pipelineSync: pipelineSyncStub,
   releaseNotifier,
@@ -311,6 +324,7 @@ setInterval(() => {
 let lastReleasesAt = null;
 let lastEnvsAt = null;
 let lastBuildsAt = null;
+let lastUsersReloadAt = Date.now(); // bootstrapped to now so we don't reload immediately
 
 setInterval(() => {
   try {
@@ -339,6 +353,14 @@ setInterval(() => {
       if (webServer.broadcast) {
         webServer.broadcast({ type: 'pipeline:sync-completed' });
       }
+    }
+
+    // UserStore is populated by sync-worker's Zoho reconciler. Reload the
+    // in-memory Map once a minute so identity columns (zohoAgentId,
+    // displayNameZoho, jiraAccountId) stay fresh in the web process.
+    if (Date.now() - lastUsersReloadAt > 60_000) {
+      lastUsersReloadAt = Date.now();
+      userStore.reload();
     }
   } catch (err) {
     log.warn(`[web] Change detection error: ${err.message}`);

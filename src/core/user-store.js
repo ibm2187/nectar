@@ -85,6 +85,62 @@ class UserStore {
   }
 
   /**
+   * Upsert identity metadata for a user who may or may not have logged in yet.
+   * Used by the Zoho agent sync and JIRA user reconciliation to populate
+   * stable cross-system IDs (zohoAgentId, jiraAccountId) even before the
+   * person's first Google login. Does NOT touch lastLoginAt.
+   *
+   * @param {object} updates
+   *   email:           required, used as PK (normalized to lowercase)
+   *   name?:           display name (used for rendering when displayNameZoho absent)
+   *   zohoAgentId?:    stable Zoho ID
+   *   jiraAccountId?:  stable Atlassian accountId
+   *   displayNameZoho?: preferred display name ("First Last")
+   *   isBot?:          true for automation accounts (hive@, etc.)
+   * @returns {object} the updated (or newly created) user record
+   */
+  upsertIdentity(updates) {
+    if (!updates || !updates.email) throw new Error('upsertIdentity requires email');
+    const key = updates.email.toLowerCase();
+    const now = new Date().toISOString();
+    let user = this.users.get(key);
+    if (!user) {
+      user = {
+        email: key,
+        name: updates.name || key,
+        picture: null,
+        role: 'user',
+        notificationPrefs: { ...DEFAULT_NOTIFICATION_PREFS },
+        lastLoginAt: null,
+        createdAt: now,
+      };
+    }
+    if (updates.name && !user.name) user.name = updates.name;
+    if (typeof updates.zohoAgentId !== 'undefined') user.zohoAgentId = updates.zohoAgentId;
+    if (typeof updates.jiraAccountId !== 'undefined') user.jiraAccountId = updates.jiraAccountId;
+    if (typeof updates.displayNameZoho !== 'undefined') user.displayNameZoho = updates.displayNameZoho;
+    if (typeof updates.isBot === 'boolean') user.isBot = updates.isBot;
+
+    this.users.set(key, user);
+    this._upsertIdentityRow(user);
+    return user;
+  }
+
+  /** Lookup a user by Zoho agent ID. Returns null if no such mapping. */
+  findByZohoAgentId(zohoAgentId) {
+    if (!zohoAgentId) return null;
+    const row = this.db.prepare('SELECT * FROM users WHERE zohoAgentId = ?').get(zohoAgentId);
+    return row ? this.users.get(row.email.toLowerCase()) || null : null;
+  }
+
+  /** Lookup a user by JIRA accountId. Returns null if no such mapping. */
+  findByJiraAccountId(jiraAccountId) {
+    if (!jiraAccountId) return null;
+    const row = this.db.prepare('SELECT * FROM users WHERE jiraAccountId = ?').get(jiraAccountId);
+    return row ? this.users.get(row.email.toLowerCase()) || null : null;
+  }
+
+  /**
    * List all users, sorted by lastLoginAt descending.
    * @returns {Array<object>}
    */
@@ -247,6 +303,19 @@ class UserStore {
    */
   flush() { /* no-op with SQLite */ }
 
+  /**
+   * Re-read every user row from the DB into the in-memory Map.
+   *
+   * Needed in the split-process deployment: the sync worker populates
+   * identity columns (zohoAgentId, jiraAccountId) while the web process
+   * already holds a stale Map. Called periodically by the change-detection
+   * poll in web-server.js.
+   */
+  reload() {
+    this.users.clear();
+    this._loadState();
+  }
+
   // ── Internal ────────────────────────────────────────────
 
   _upsertRow(user) {
@@ -270,6 +339,36 @@ class UserStore {
     });
   }
 
+  _upsertIdentityRow(user) {
+    this.db.prepare(`
+      INSERT INTO users (
+        email, name, picture, role, notificationPrefs, lastLoginAt, createdAt,
+        zohoAgentId, jiraAccountId, displayNameZoho, isBot
+      ) VALUES (
+        @email, @name, @picture, @role, @notificationPrefs, @lastLoginAt, @createdAt,
+        @zohoAgentId, @jiraAccountId, @displayNameZoho, @isBot
+      )
+      ON CONFLICT(email) DO UPDATE SET
+        name            = COALESCE(excluded.name, name),
+        zohoAgentId     = COALESCE(excluded.zohoAgentId, zohoAgentId),
+        jiraAccountId   = COALESCE(excluded.jiraAccountId, jiraAccountId),
+        displayNameZoho = COALESCE(excluded.displayNameZoho, displayNameZoho),
+        isBot           = excluded.isBot
+    `).run({
+      email: user.email,
+      name: user.name ?? null,
+      picture: user.picture ?? null,
+      role: user.role || 'user',
+      notificationPrefs: JSON.stringify(user.notificationPrefs || {}),
+      lastLoginAt: user.lastLoginAt ?? null,
+      createdAt: user.createdAt,
+      zohoAgentId: user.zohoAgentId ?? null,
+      jiraAccountId: user.jiraAccountId ?? null,
+      displayNameZoho: user.displayNameZoho ?? null,
+      isBot: user.isBot ? 1 : 0,
+    });
+  }
+
   _loadState() {
     try {
       const rows = this.db.prepare('SELECT * FROM users').all();
@@ -289,6 +388,10 @@ class UserStore {
           createdAt: row.createdAt,
           teamId: row.teamId ?? null,
           jiraName: row.jiraName ?? null,
+          zohoAgentId: row.zohoAgentId ?? null,
+          jiraAccountId: row.jiraAccountId ?? null,
+          displayNameZoho: row.displayNameZoho ?? null,
+          isBot: row.isBot === 1,
         });
       }
       log.info(`Loaded ${this.users.size} users`);

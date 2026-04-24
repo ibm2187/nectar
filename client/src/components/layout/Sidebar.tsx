@@ -19,6 +19,7 @@ const links: ReadonlyArray<{
   { to: '/releases', label: 'Releases', icon: '📦' },
   { to: '/roadmap', label: 'Roadmap', icon: '🗺' },
   { to: '/tickets', label: 'Tickets', icon: '🎯' },
+  { to: '/support', label: 'Support', icon: '🛟' },
   { to: '/customers', label: 'Environments', icon: '🏢' },
   { to: '/health-dashboard', label: 'Health', icon: '💚' },
   { to: '/incidents', label: 'Incidents', icon: '🚨' },

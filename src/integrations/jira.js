@@ -104,6 +104,36 @@ class JiraClient {
     return res.json();
   }
 
+  // ── Users ──────────────────────────────────────────────
+
+  /**
+   * Look up a JIRA user by email. Returns the first match or null.
+   *
+   * Uses /user/search?query= which matches against email + displayName.
+   * We filter results server-side-returned list to the exact email so a
+   * partial match doesn't promote the wrong person.
+   *
+   * @param {string} email
+   * @returns {Promise<{accountId, emailAddress, displayName}|null>}
+   */
+  async getUserByEmail(email) {
+    if (!email) return null;
+    const normalized = email.trim().toLowerCase();
+    const params = new URLSearchParams({ query: normalized });
+    let results;
+    try {
+      results = await this._request('GET', `/user/search?${params}`);
+    } catch (err) {
+      log.warn(`JIRA getUserByEmail(${normalized}) failed: ${err.message}`);
+      return null;
+    }
+    if (!Array.isArray(results)) return null;
+    // GDPR-anonymized tenants may not return emailAddress; fall back to
+    // the first match when nothing else can disambiguate.
+    const exact = results.find(u => (u.emailAddress || '').toLowerCase() === normalized);
+    return exact || results[0] || null;
+  }
+
   // ── Versions (Releases) ────────────────────────────────
 
   /**
@@ -233,6 +263,40 @@ class JiraClient {
       fields: ['summary', 'status', 'issuetype', 'assignee', 'fixVersions', 'labels'],
     });
     return data.issues || [];
+  }
+
+  /**
+   * Query issues with the "Linked Zoho Tickets" paragraph field (customfield_11157)
+   * populated. Paginates the new /search/jql endpoint with nextPageToken.
+   *
+   * @param {object} opts
+   *   updatedSince?: ISO date string — only issues updated after this time
+   *   batchSize?:    page size, default 50
+   * @returns {Promise<Array>} raw JIRA issue objects with fields.customfield_11157
+   */
+  async listIssuesWithZohoLinks(opts = {}) {
+    const { updatedSince = null, batchSize = 50 } = opts;
+    let jql = '"Linked Zoho Tickets" is not EMPTY';
+    if (updatedSince) {
+      // JQL wants "yyyy/MM/dd HH:mm" for datetimes; ISO works when quoted.
+      jql += ` AND updated >= "${updatedSince}"`;
+    }
+    jql += ' ORDER BY updated DESC';
+
+    const fields = ['summary', 'customfield_11157'];
+    const allIssues = [];
+    let nextToken = null;
+    const maxPages = 20;
+    for (let i = 0; i < maxPages; i++) {
+      const body = { jql, fields, maxResults: batchSize };
+      if (nextToken) body.nextPageToken = nextToken;
+      const data = await this._request('POST', '/search/jql', body);
+      const issues = data.issues || [];
+      allIssues.push(...issues);
+      if (!data.nextPageToken || issues.length === 0) break;
+      nextToken = data.nextPageToken;
+    }
+    return allIssues;
   }
 
   // ── Transitions ─────────────────────────────────────────

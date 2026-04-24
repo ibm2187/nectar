@@ -89,6 +89,9 @@ function openDb(dbPath) {
 function applySchema(db) {
   db.exec(`
     -- ── users ───────────────────────────────────────────────────
+    -- Viv-internal people. Email is the bootstrap join key; stable IDs
+    -- (zohoAgentId, jiraAccountId) are populated as agents/JIRA users are
+    -- discovered so email changes don't break downstream joins.
     CREATE TABLE IF NOT EXISTS users (
       email              TEXT PRIMARY KEY,
       name               TEXT,
@@ -96,8 +99,17 @@ function applySchema(db) {
       role               TEXT NOT NULL DEFAULT 'user',
       notificationPrefs  TEXT NOT NULL DEFAULT '{}',  -- JSON
       lastLoginAt        TEXT,
-      createdAt          TEXT NOT NULL
+      createdAt          TEXT NOT NULL,
+      -- Teams + JIRA name (v15)
+      teamId             TEXT,
+      jiraName           TEXT,
+      -- Identity reconciliation columns (v16+)
+      zohoAgentId        TEXT,
+      jiraAccountId      TEXT,
+      displayNameZoho    TEXT,           -- Zoho's formatted "First Last" — preferred for rendering
+      isBot              INTEGER NOT NULL DEFAULT 0
     );
+    -- Indexes for teamId (v15) / zohoAgentId + jiraAccountId (v16) created in migrations.
 
     -- ── api_keys ────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS api_keys (
@@ -572,6 +584,110 @@ function applySchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_incident_events_incidentId ON incident_events(incidentId);
     CREATE INDEX IF NOT EXISTS idx_incident_events_at         ON incident_events(at DESC);
+
+    -- ── zoho_accounts (customer entities from Zoho Desk) ───────
+    CREATE TABLE IF NOT EXISTS zoho_accounts (
+      id             TEXT PRIMARY KEY,         -- Zoho 19-digit account ID
+      name           TEXT,                      -- e.g. "Comfort Keepers - 157", "Bayada Home Health Care"
+      departmentId   TEXT,
+      rawPayload     TEXT,                      -- full Zoho response JSON
+      lastSyncedAt   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_zoho_accounts_dept ON zoho_accounts(departmentId);
+
+    -- ── zoho_contacts (customer-side people) ───────────────────
+    CREATE TABLE IF NOT EXISTS zoho_contacts (
+      id             TEXT PRIMARY KEY,         -- Zoho 19-digit contact ID
+      accountId      TEXT,
+      email          TEXT,                      -- normalized lowercase
+      name           TEXT,
+      phone          TEXT,
+      rawPayload     TEXT,
+      lastSyncedAt   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_zoho_contacts_email   ON zoho_contacts(email);
+    CREATE INDEX IF NOT EXISTS idx_zoho_contacts_account ON zoho_contacts(accountId);
+
+    -- ── zoho_tickets (mirrored ticket rows) ────────────────────
+    CREATE TABLE IF NOT EXISTS zoho_tickets (
+      id                   TEXT PRIMARY KEY,    -- Zoho 19-digit ticket ID
+      ticketNumber         TEXT NOT NULL,       -- e.g. "VHC-4165", "BYD-3123"
+      deptPrefix           TEXT,                 -- "VHC" | "BYD" | "THC" | "VIV"
+      departmentId         TEXT,
+      accountId            TEXT,
+      contactId            TEXT,
+      assigneeEmail        TEXT,                 -- normalized lowercase, join to users.email
+      assigneeZohoAgentId  TEXT,                 -- raw Zoho assignee id (for reverse-lookup)
+      subject              TEXT,
+      status               TEXT,                 -- e.g. "Investigating", "Waiting for Viv Response"
+      statusType           TEXT,                 -- "Open" | "Closed" | "On Hold"
+      priority             TEXT,                 -- "Urgent" | "High" | "Medium" | "Low" | NULL
+      category             TEXT,
+      subCategory          TEXT,
+      channel              TEXT,
+      sentiment            TEXT,
+      commentCount         INTEGER NOT NULL DEFAULT 0,
+      threadCount          INTEGER NOT NULL DEFAULT 0,
+      createdAt            TEXT,                 -- Zoho createdTime
+      modifiedAt           TEXT,                 -- Zoho modifiedTime (drives incremental cursor)
+      closedAt             TEXT,
+      onHoldAt             TEXT,
+      customerResponseAt   TEXT,
+      webUrl               TEXT,
+      rawPayload           TEXT,                 -- full Zoho response JSON (forward-compat)
+      lastSyncedAt         TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_zoho_tickets_assignee  ON zoho_tickets(assigneeEmail, status);
+    CREATE INDEX IF NOT EXISTS idx_zoho_tickets_account   ON zoho_tickets(accountId, status);
+    CREATE INDEX IF NOT EXISTS idx_zoho_tickets_modified  ON zoho_tickets(modifiedAt);
+    CREATE INDEX IF NOT EXISTS idx_zoho_tickets_status    ON zoho_tickets(status);
+    CREATE INDEX IF NOT EXISTS idx_zoho_tickets_statusType ON zoho_tickets(statusType);
+    CREATE INDEX IF NOT EXISTS idx_zoho_tickets_number    ON zoho_tickets(ticketNumber);
+    CREATE INDEX IF NOT EXISTS idx_zoho_tickets_dept      ON zoho_tickets(deptPrefix);
+
+    -- ── zoho_ticket_history (status/assignee/priority transitions) ─
+    -- Powers "Days on Dashboard" and the aging dashboard.
+    CREATE TABLE IF NOT EXISTS zoho_ticket_history (
+      id              TEXT PRIMARY KEY,          -- synthetic: ticketId + ':' + eventTime + ':' + fieldName
+      ticketId        TEXT NOT NULL,
+      changedAt       TEXT NOT NULL,
+      changedByEmail  TEXT,
+      fieldName       TEXT NOT NULL,              -- 'status' | 'assignee' | 'priority' | ...
+      fromValue       TEXT,
+      toValue         TEXT,
+      rawPayload      TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_zth_ticket         ON zoho_ticket_history(ticketId, changedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_zth_ticket_status  ON zoho_ticket_history(ticketId, fieldName, changedAt DESC);
+
+    -- ── jira_zoho_links (junction: JIRA key ↔ Zoho ticket ID) ──
+    -- Populated from customfield_11157 on the JIRA side (primary).
+    -- Can also be populated from Zoho-side "Associated Jira Issues" field.
+    CREATE TABLE IF NOT EXISTS jira_zoho_links (
+      jiraKey         TEXT NOT NULL,
+      zohoTicketId    TEXT NOT NULL,
+      source          TEXT NOT NULL,              -- 'customfield_11157' | 'zoho_associated_jira' | 'derived'
+      firstSeenAt     TEXT NOT NULL,
+      lastSeenAt      TEXT NOT NULL,
+      PRIMARY KEY (jiraKey, zohoTicketId)
+    );
+    CREATE INDEX IF NOT EXISTS idx_jzl_jira ON jira_zoho_links(jiraKey);
+    CREATE INDEX IF NOT EXISTS idx_jzl_zoho ON jira_zoho_links(zohoTicketId);
+
+    -- ── zoho_sync_meta (singleton — cursor + worker lock + backfill state) ─
+    CREATE TABLE IF NOT EXISTS zoho_sync_meta (
+      id                   INTEGER PRIMARY KEY CHECK (id = 1),
+      lastModifiedCursor   TEXT,                  -- max(modifiedTime) seen by incremental sync
+      lastRunAt            TEXT,
+      lastBackfillAt       TEXT,
+      backfillStatus       TEXT,                  -- 'pending' | 'in_progress' | 'done' | 'failed'
+      backfillProgress     INTEGER NOT NULL DEFAULT 0,
+      backfillTotal        INTEGER NOT NULL DEFAULT 0,
+      workerLockUntil      TEXT,                  -- TTL for singleton worker
+      lastSyncError        TEXT,
+      lastSyncDurationMs   INTEGER,
+      updatedAt            TEXT
+    );
   `);
 }
 
@@ -982,6 +1098,125 @@ function applyMigrations(db) {
       // rows are a no-op.
       const backfillJiraNames = require('./backfill-jira-names');
       backfillJiraNames(db);
+    },
+    // v16: Zoho mirror tables + identity reconciliation columns on users.
+    // Fresh installs get everything via applySchema; this handles existing DBs.
+    (db) => {
+      // Add identity columns to users
+      const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+      if (!userCols.includes('zohoAgentId')) {
+        db.prepare('ALTER TABLE users ADD COLUMN zohoAgentId TEXT').run();
+      }
+      if (!userCols.includes('jiraAccountId')) {
+        db.prepare('ALTER TABLE users ADD COLUMN jiraAccountId TEXT').run();
+      }
+      if (!userCols.includes('displayNameZoho')) {
+        db.prepare('ALTER TABLE users ADD COLUMN displayNameZoho TEXT').run();
+      }
+      if (!userCols.includes('isBot')) {
+        db.prepare('ALTER TABLE users ADD COLUMN isBot INTEGER NOT NULL DEFAULT 0').run();
+      }
+      db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_zohoAgent ON users(zohoAgentId) WHERE zohoAgentId IS NOT NULL').run();
+      db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_jiraAccount ON users(jiraAccountId) WHERE jiraAccountId IS NOT NULL').run();
+
+      // New Zoho mirror tables (idempotent — fresh installs already have them)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS zoho_accounts (
+          id             TEXT PRIMARY KEY,
+          name           TEXT,
+          departmentId   TEXT,
+          rawPayload     TEXT,
+          lastSyncedAt   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_zoho_accounts_dept ON zoho_accounts(departmentId);
+
+        CREATE TABLE IF NOT EXISTS zoho_contacts (
+          id             TEXT PRIMARY KEY,
+          accountId      TEXT,
+          email          TEXT,
+          name           TEXT,
+          phone          TEXT,
+          rawPayload     TEXT,
+          lastSyncedAt   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_zoho_contacts_email   ON zoho_contacts(email);
+        CREATE INDEX IF NOT EXISTS idx_zoho_contacts_account ON zoho_contacts(accountId);
+
+        CREATE TABLE IF NOT EXISTS zoho_tickets (
+          id                   TEXT PRIMARY KEY,
+          ticketNumber         TEXT NOT NULL,
+          deptPrefix           TEXT,
+          departmentId         TEXT,
+          accountId            TEXT,
+          contactId            TEXT,
+          assigneeEmail        TEXT,
+          assigneeZohoAgentId  TEXT,
+          subject              TEXT,
+          status               TEXT,
+          statusType           TEXT,
+          priority             TEXT,
+          category             TEXT,
+          subCategory          TEXT,
+          channel              TEXT,
+          sentiment            TEXT,
+          commentCount         INTEGER NOT NULL DEFAULT 0,
+          threadCount          INTEGER NOT NULL DEFAULT 0,
+          createdAt            TEXT,
+          modifiedAt           TEXT,
+          closedAt             TEXT,
+          onHoldAt             TEXT,
+          customerResponseAt   TEXT,
+          webUrl               TEXT,
+          rawPayload           TEXT,
+          lastSyncedAt         TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_zoho_tickets_assignee   ON zoho_tickets(assigneeEmail, status);
+        CREATE INDEX IF NOT EXISTS idx_zoho_tickets_account    ON zoho_tickets(accountId, status);
+        CREATE INDEX IF NOT EXISTS idx_zoho_tickets_modified   ON zoho_tickets(modifiedAt);
+        CREATE INDEX IF NOT EXISTS idx_zoho_tickets_status     ON zoho_tickets(status);
+        CREATE INDEX IF NOT EXISTS idx_zoho_tickets_statusType ON zoho_tickets(statusType);
+        CREATE INDEX IF NOT EXISTS idx_zoho_tickets_number     ON zoho_tickets(ticketNumber);
+        CREATE INDEX IF NOT EXISTS idx_zoho_tickets_dept       ON zoho_tickets(deptPrefix);
+
+        CREATE TABLE IF NOT EXISTS zoho_ticket_history (
+          id              TEXT PRIMARY KEY,
+          ticketId        TEXT NOT NULL,
+          changedAt       TEXT NOT NULL,
+          changedByEmail  TEXT,
+          fieldName       TEXT NOT NULL,
+          fromValue       TEXT,
+          toValue         TEXT,
+          rawPayload      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_zth_ticket        ON zoho_ticket_history(ticketId, changedAt DESC);
+        CREATE INDEX IF NOT EXISTS idx_zth_ticket_status ON zoho_ticket_history(ticketId, fieldName, changedAt DESC);
+
+        CREATE TABLE IF NOT EXISTS jira_zoho_links (
+          jiraKey         TEXT NOT NULL,
+          zohoTicketId    TEXT NOT NULL,
+          source          TEXT NOT NULL,
+          firstSeenAt     TEXT NOT NULL,
+          lastSeenAt      TEXT NOT NULL,
+          PRIMARY KEY (jiraKey, zohoTicketId)
+        );
+        CREATE INDEX IF NOT EXISTS idx_jzl_jira ON jira_zoho_links(jiraKey);
+        CREATE INDEX IF NOT EXISTS idx_jzl_zoho ON jira_zoho_links(zohoTicketId);
+
+        CREATE TABLE IF NOT EXISTS zoho_sync_meta (
+          id                   INTEGER PRIMARY KEY CHECK (id = 1),
+          lastModifiedCursor   TEXT,
+          lastRunAt            TEXT,
+          lastBackfillAt       TEXT,
+          backfillStatus       TEXT,
+          backfillProgress     INTEGER NOT NULL DEFAULT 0,
+          backfillTotal        INTEGER NOT NULL DEFAULT 0,
+          workerLockUntil      TEXT,
+          lastSyncError        TEXT,
+          lastSyncDurationMs   INTEGER,
+          updatedAt            TEXT
+        );
+      `);
+      db.prepare('INSERT OR IGNORE INTO zoho_sync_meta (id, backfillStatus, backfillProgress, backfillTotal) VALUES (1, \'pending\', 0, 0)').run();
     },
   ];
 

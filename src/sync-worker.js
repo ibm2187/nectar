@@ -118,6 +118,20 @@ const releaseTruth = new ReleaseTruth(releases, repoManager, github, jira, confi
 const ZohoSync = require('./core/zoho-sync');
 const zohoSync = new ZohoSync(releases, zoho, config);
 
+// Zoho Desk mirror — separate from the legacy JIRA-driven ZohoSync.
+// Pulls every Zoho ticket into SQLite on a 5-min cadence.
+const ZohoStore = require('./core/zoho-store');
+const zohoStore = new ZohoStore();
+
+const ZohoMirrorSync = require('./core/zoho-mirror-sync');
+const zohoMirrorSync = new ZohoMirrorSync({ zoho, zohoStore, userStore, config });
+
+const ZohoUserReconciler = require('./core/zoho-user-reconciler');
+const zohoUserReconciler = new ZohoUserReconciler({ userStore, zoho, jira, config });
+
+const JiraZohoLinkSync = require('./core/jira-zoho-link-sync');
+const jiraZohoLinkSync = new JiraZohoLinkSync({ jira, zohoStore, config });
+
 const CommitStore = require('./core/commit-store');
 const commitStore = new CommitStore();
 log.info(`[sync] Commit store: ${commitStore.count()} commits`);
@@ -228,6 +242,15 @@ setInterval(() => {
           pipeline: () => pipelineSync.run(),
           discovery: () => discovery.run(),
           zoho: () => zohoSync.run(),
+          // Manual /refresh from the web process enqueues a ticketId —
+          // force-refetch that one ticket rather than running the whole
+          // cursor-based incremental pass (which would no-op if the
+          // ticket's modifiedTime hasn't advanced past the cursor).
+          'zoho-mirror': () => task.input?.ticketId
+            ? zohoMirrorSync.refreshTicket(task.input.ticketId)
+            : zohoMirrorSync.runIncremental(),
+          'zoho-reconciler': () => zohoUserReconciler.run(),
+          'zoho-links': () => jiraZohoLinkSync.run(),
           envPoll: () => envPoller.run(),
           webplatformScan: async () => {
             const scanResults = await webplatformScanner.scan();
@@ -300,6 +323,17 @@ setInterval(() => {
   discovery.start();
   zohoSync.start();
   prSync.start();
+
+  // Zoho Desk mirror: reconciler once on boot, mirror+link sync on timers.
+  (async () => {
+    try {
+      if (zoho.isConfigured()) await zohoUserReconciler.run();
+    } catch (err) {
+      log.error(`[sync] Zoho user reconciler initial run failed: ${err.message}`);
+    }
+  })();
+  zohoMirrorSync.start();
+  jiraZohoLinkSync.start();
 
   peopleDirectory.load();
   jiraSync.on('sync:version-tickets', (version, changes) => {
@@ -462,6 +496,8 @@ function shutdown() {
   cherryPickWatcher.stop();
   pipelineSync.stop();
   envPoller.stop();
+  zohoMirrorSync.stop();
+  jiraZohoLinkSync.stop();
   datadogPoller.stop();
   notificationEngine.stop();
   notificationSettings.flush();

@@ -18,6 +18,7 @@ import { TasksPage } from './features/tasks/TasksPage'
 import { HealthDashboard } from './features/health/HealthDashboard'
 import { CustomerStatusPage } from './features/health/CustomerStatusPage'
 import { StandupPage } from './features/standup/StandupPage'
+import { SupportPage } from './features/support/SupportPage'
 import { IncidentsPage } from './features/incidents/IncidentsPage'
 import { ProcessHealthPage } from './features/reports/ProcessHealthPage'
 import { LoginPage } from './features/auth/LoginPage'
@@ -93,6 +94,7 @@ export default function App() {
             <Route path="/health/:customerId" element={<CustomerStatusPage />} />
             <Route path="/issues" element={<IssuesPage />} />
             <Route path="/tickets" element={<TicketsPage />} />
+            <Route path="/support" element={<SupportPage />} />
             <Route path="/roadmap" element={<RoadmapPage />} />
             <Route path="/tasks-queue" element={<TasksPage />} />
             <Route path="/reports/process-health" element={<ProcessHealthPage />} />

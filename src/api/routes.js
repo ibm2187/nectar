@@ -3565,6 +3565,25 @@ module.exports = function createRoutes(services, config) {
       }
     }
 
+    // Search Zoho tickets — match ticketNumber or subject via ZohoStore LIKE
+    if (services.zohoStore) {
+      try {
+        const zohoRows = services.zohoStore.listTickets({ search: req.query.q, limit: MAX_PER_CATEGORY });
+        for (const z of zohoRows) {
+          results.push({
+            type: 'zoho',
+            id: z.id,
+            ticketNumber: z.ticketNumber,
+            subject: z.subject,
+            status: z.status,
+            webUrl: z.webUrl,
+          });
+        }
+      } catch (err) {
+        log.warn(`Search Zoho branch failed: ${err.message}`);
+      }
+    }
+
     // Trim to MAX_TOTAL
     const total = results.length;
     res.json({
@@ -3924,6 +3943,16 @@ module.exports = function createRoutes(services, config) {
   if (alertRules && incidents) {
     const createAlertsRouter = require('./alerts');
     router.use('/alerts', createAlertsRouter({ alertRules, incidents, slack, alertRouter }));
+  }
+
+  // ── Support (Zoho mirror) ────────────────────────────
+  if (services.zohoStore) {
+    const { createSupportRoutes } = require('./support-routes');
+    router.use('/support', createSupportRoutes({
+      zohoStore: services.zohoStore,
+      zohoMirrorSync: services.zohoMirrorSync,
+      userStore: services.userStore,
+    }));
   }
 
   // ── Global error handler ─────────────────────────────

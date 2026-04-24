@@ -179,6 +179,29 @@ const releaseTruth = new ReleaseTruth(releases, repoManager, github, jira, confi
 const ZohoSync = require('./core/zoho-sync');
 const zohoSync = new ZohoSync(releases, zoho, config);
 
+// Zoho Desk mirror — separate from the legacy JIRA-driven ZohoSync.
+// Pulls every Zoho ticket into SQLite on a 5-min cadence so /support views
+// render from the mirror without live Zoho calls on every page load.
+const ZohoStore = require('./core/zoho-store');
+const zohoStore = new ZohoStore();
+
+const ZohoMirrorSync = require('./core/zoho-mirror-sync');
+const zohoMirrorSync = new ZohoMirrorSync({
+  zoho,
+  zohoStore,
+  // userStore is wired below — pass a getter so we don't depend on
+  // declaration order. The reconciler runs before backfill anyway.
+  userStore: null, // late-bound via setter below
+  config,
+});
+
+const ZohoUserReconciler = require('./core/zoho-user-reconciler');
+// Late-bound: userStore is declared further down.
+let zohoUserReconciler = null;
+
+const JiraZohoLinkSync = require('./core/jira-zoho-link-sync');
+const jiraZohoLinkSync = new JiraZohoLinkSync({ jira, zohoStore, config });
+
 const PrStore = require('./core/pr-store');
 const prStore = new PrStore();
 log.info(`PR store initialized (${prStore.count()} PRs)`);
@@ -228,6 +251,10 @@ log.info(`User store initialized (${userStore.users.size} users loaded)`);
 const TeamStore = require('./core/team-store');
 const teamStore = new TeamStore();
 log.info(`Team store initialized (${teamStore.list().length} teams loaded)`);
+
+// Wire userStore into late-bound Zoho services
+zohoMirrorSync.userStore = userStore;
+zohoUserReconciler = new ZohoUserReconciler({ userStore, zoho, jira, config });
 
 const TaskQueue = require('./core/task-queue');
 const taskQueue = new TaskQueue();
@@ -306,6 +333,7 @@ const services = {
   apiKeys, taskQueue, userStore, teamStore,
   datadog, datadogPoller,
   zoho, zohoSync,
+  zohoStore, zohoMirrorSync, jiraZohoLinkSync, zohoUserReconciler,
   prSync,
   aws, pipelineSync,
   releaseNotifier,
@@ -348,8 +376,22 @@ setInterval(() => {
   // Start git discovery (cross-references JIRA with git branches)
   discovery.start();
 
-  // Start Zoho sync (finds Zoho tickets linked to JIRA issues)
+  // Start Zoho sync (legacy — finds Zoho tickets linked to JIRA issues on releases)
   zohoSync.start();
+
+  // Start Zoho Desk mirror: agent reconciliation → ticket mirror → JIRA link sync.
+  // Each runs independently; mirror backfill waits on its own singleton lock.
+  (async () => {
+    try {
+      if (zohoUserReconciler && zoho.isConfigured()) {
+        await zohoUserReconciler.run();
+      }
+    } catch (err) {
+      log.error(`Zoho user reconciler initial run failed: ${err.message}`);
+    }
+  })();
+  zohoMirrorSync.start();
+  jiraZohoLinkSync.start();
 
   // Start PR sync (finds GitHub PRs linked to JIRA issues)
   prSync.start();
@@ -496,6 +538,8 @@ function shutdown() {
   cherryPickWatcher.stop();
   pipelineSync.stop();
   envPoller.stop();
+  zohoMirrorSync.stop();
+  jiraZohoLinkSync.stop();
   datadogPoller.stop();
   notificationEngine.stop();
   notificationSettings.flush();

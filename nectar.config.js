@@ -99,6 +99,20 @@ module.exports = {
     jiraSync: 10 * 60 * 1000,           // 10 min — JIRA version/ticket sync
     environmentVersions: 10 * 60 * 1000, // 10 min — poll each env's /api/status/version
     githubPRs: 60 * 1000,               // 1 min
+    zohoMirror: 5 * 60 * 1000,          // 5 min — Zoho Desk ticket mirror incremental sync
+  },
+
+  // ── Zoho mirror ─────────────────────────────────────────
+  // backfillSinceDays: how far back to backfill on first run.
+  //   null = all-time (prod default). Set via ZOHO_BACKFILL_SINCE_DAYS env var for dev.
+  // Recommended: dev=30, prod=null.
+  zohoMirror: {
+    backfillSinceDays: process.env.ZOHO_BACKFILL_SINCE_DAYS
+      ? Number(process.env.ZOHO_BACKFILL_SINCE_DAYS)
+      : (process.env.NODE_ENV === 'development' ? 30 : null),
+    pageSize: 100,                       // tickets per API page (Zoho max: 100)
+    throttleMs: 2000,                    // min time between paginated requests
+    workerLockTtlMs: 10 * 60 * 1000,     // 10 min — auto-release if run hangs
   },
 
   // ── Discovery settings ──────────────────────────────────

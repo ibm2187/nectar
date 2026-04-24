@@ -5,7 +5,7 @@ import { apiFetch } from '../api/client'
 import { cn } from '../lib/utils'
 
 interface SearchResult {
-  type: 'release' | 'ticket' | 'environment' | 'customer'
+  type: 'release' | 'ticket' | 'environment' | 'customer' | 'zoho'
   // Release fields
   version?: string
   repo?: string | null
@@ -22,6 +22,11 @@ interface SearchResult {
   currentVersion?: string | null
   // Customer fields
   name?: string
+  // Zoho fields
+  ticketNumber?: string
+  subject?: string | null
+  status?: string | null
+  webUrl?: string | null
 }
 
 interface SearchResponse {
@@ -35,16 +40,18 @@ interface CommandPaletteProps {
   onClose: () => void
 }
 
-const CATEGORY_ORDER = ['release', 'ticket', 'environment', 'customer'] as const
+const CATEGORY_ORDER = ['release', 'ticket', 'zoho', 'environment', 'customer'] as const
 const CATEGORY_LABELS: Record<string, string> = {
   release: 'Releases',
-  ticket: 'Tickets',
+  ticket: 'JIRA Tickets',
+  zoho: 'Zoho Tickets',
   environment: 'Environments',
   customer: 'Customers',
 }
 const CATEGORY_ICONS: Record<string, string> = {
   release: '\u{1F4E6}',
   ticket: '\u{1F3AF}',
+  zoho: '\u{1F6DF}', // 🛟
   environment: '\u{1F3E2}',
   customer: '\u{1F465}',
 }
@@ -129,6 +136,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       case 'ticket':
         if (jiraBaseUrl && item.key) {
           window.open(`${jiraBaseUrl}/browse/${item.key}`, '_blank')
+        }
+        break
+      case 'zoho':
+        if (item.webUrl) {
+          window.open(item.webUrl, '_blank')
         }
         break
       case 'environment':
@@ -278,6 +290,14 @@ function ResultLabel({ item }: { item: SearchResult }) {
         <span className="truncate">
           <span className="font-medium">{item.key}</span>
           {item.summary && <span className="text-muted-foreground"> &middot; {item.summary}</span>}
+        </span>
+      )
+    case 'zoho':
+      return (
+        <span className="truncate">
+          <span className="font-medium">{item.ticketNumber}</span>
+          {item.subject && <span className="text-muted-foreground"> &middot; {item.subject}</span>}
+          {item.status && <span className="text-muted-foreground/70"> &middot; {item.status}</span>}
         </span>
       )
     case 'environment':

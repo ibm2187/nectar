@@ -139,6 +139,114 @@ class ZohoClient {
     }
   }
 
+  // ── Agents ─────────────────────────────────────────────
+
+  /**
+   * Paginate all agents in the org. Default Zoho page size = 100.
+   * @param {object} opts - { pageSize }
+   * @returns {Promise<Array>} full agent list
+   */
+  async listAgents(opts = {}) {
+    const pageSize = opts.pageSize || 100;
+    const all = [];
+    let from = 0;
+    const maxPages = 50; // safety stop
+    for (let page = 0; page < maxPages; page++) {
+      const params = new URLSearchParams();
+      params.set('limit', String(pageSize));
+      params.set('from', String(from));
+      const data = await this._request('GET', `/agents?${params}`);
+      const agents = data?.data || [];
+      all.push(...agents);
+      if (agents.length < pageSize) break;
+      from += pageSize;
+    }
+    return all;
+  }
+
+  // ── Accounts (customer entities) ───────────────────────
+
+  /**
+   * Paginate accounts. Departments (VHC, BYD, etc.) are separate —
+   * an "account" in Zoho = a specific customer like "Comfort Keepers - 163".
+   */
+  async listAccounts(opts = {}) {
+    const pageSize = opts.pageSize || 100;
+    const all = [];
+    let from = 0;
+    const maxPages = 100;
+    for (let page = 0; page < maxPages; page++) {
+      const params = new URLSearchParams();
+      params.set('limit', String(pageSize));
+      params.set('from', String(from));
+      const data = await this._request('GET', `/accounts?${params}`);
+      const accounts = data?.data || [];
+      all.push(...accounts);
+      if (accounts.length < pageSize) break;
+      from += pageSize;
+    }
+    return all;
+  }
+
+  async getAccount(accountId) {
+    return this._request('GET', `/accounts/${accountId}`);
+  }
+
+  // ── Contacts ───────────────────────────────────────────
+
+  async getContact(contactId) {
+    return this._request('GET', `/contacts/${contactId}`);
+  }
+
+  // ── Departments ────────────────────────────────────────
+
+  async listDepartments() {
+    const data = await this._request('GET', '/departments');
+    return data?.data || [];
+  }
+
+  // ── Ticket history ─────────────────────────────────────
+
+  /**
+   * Get status/assignee/priority transitions for a ticket.
+   * @param {string} ticketId
+   * @returns {Promise<Array>} history events (raw — caller normalizes)
+   */
+  async getTicketHistory(ticketId) {
+    try {
+      const data = await this._request('GET', `/tickets/${ticketId}/History`);
+      return data?.data || [];
+    } catch (err) {
+      // Some closed/archived tickets return 404 on history
+      if (err.message.includes('404')) return [];
+      throw err;
+    }
+  }
+
+  /**
+   * Paginated ticket list with modifiedTime-based ordering — the workhorse
+   * call for backfill and incremental sync.
+   *
+   * @param {object} opts - { departmentId, sortBy, sortOrder, pageSize, from }
+   * @returns {Promise<{ data: Array, hasMore: boolean }>}
+   */
+  async listTicketsPage(opts = {}) {
+    const params = new URLSearchParams();
+    if (opts.departmentId) params.set('departmentId', opts.departmentId);
+    if (opts.status) params.set('status', opts.status);
+    if (opts.sortBy) params.set('sortBy', opts.sortBy);
+    const pageSize = opts.pageSize || 100;
+    params.set('limit', String(pageSize));
+    params.set('from', String(opts.from || 0));
+
+    const raw = await this._request('GET', `/tickets?${params}`);
+    const data = raw?.data || [];
+    return {
+      data,
+      hasMore: data.length >= pageSize,
+    };
+  }
+
   /**
    * Normalize a Zoho ticket into Nectar's format.
    */

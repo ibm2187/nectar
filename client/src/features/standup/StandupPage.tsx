@@ -628,8 +628,125 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
             }
           </div>
         )}
+
+        {/* Customer Resolutions — Zoho tickets linked to any JIRA in this slice */}
+        <CustomerResolutions filteredBuckets={filteredBuckets} />
       </CardContent>
     </Card>
+  )
+}
+
+// ── Customer Resolutions (Zoho tickets linked to JIRAs in current slice) ──
+
+interface ZohoLinkRow {
+  jiraKey: string
+  zohoTicketId: string
+  ticketNumber: string | null
+  subject: string | null
+  status: string | null
+  statusType: string | null
+  priority: string | null
+  deptPrefix: string | null
+  accountName: string | null
+  webUrl: string | null
+}
+
+function CustomerResolutions({ filteredBuckets }: { filteredBuckets: PersonBuckets }) {
+  // Collect all unique JIRA keys across every non-PR bucket
+  const jiraKeys = useMemo(() => {
+    const set = new Set<string>()
+    for (const bucketKey of BUCKET_ORDER) {
+      const items = filteredBuckets[bucketKey] || []
+      for (const item of items) {
+        // Only ticket items (not PR-review items) have a .key
+        const maybe = (item as { key?: string }).key
+        if (maybe) set.add(maybe)
+      }
+    }
+    return [...set]
+  }, [filteredBuckets])
+
+  const [links, setLinks] = useState<Map<string, ZohoLinkRow[]>>(new Map())
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    if (jiraKeys.length === 0) { setLinks(new Map()); return }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/support/jira/links/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keys: jiraKeys }),
+        })
+        if (!res.ok) return
+        const data = await res.json() as { linksByJiraKey: Record<string, ZohoLinkRow[]> }
+        if (cancelled) return
+        const next = new Map<string, ZohoLinkRow[]>()
+        for (const [k, v] of Object.entries(data.linksByJiraKey || {})) next.set(k, v)
+        setLinks(next)
+      } catch { /* non-fatal */ }
+    })()
+    return () => { cancelled = true }
+  }, [jiraKeys.join(',')])
+
+  // Flatten + dedup by zohoTicketId (one Zoho ticket may link to multiple JIRAs in the slice)
+  const rows = useMemo(() => {
+    const byZohoId = new Map<string, ZohoLinkRow & { jiraKeys: string[] }>()
+    for (const [jiraKey, entries] of links) {
+      for (const e of entries) {
+        const existing = byZohoId.get(e.zohoTicketId)
+        if (existing) {
+          if (!existing.jiraKeys.includes(jiraKey)) existing.jiraKeys.push(jiraKey)
+        } else {
+          byZohoId.set(e.zohoTicketId, { ...e, jiraKeys: [jiraKey] })
+        }
+      }
+    }
+    return [...byZohoId.values()]
+  }, [links])
+
+  if (rows.length === 0) return null
+
+  return (
+    <div className="mt-3 border-t pt-3">
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="w-full flex items-center justify-between text-left text-sm font-medium hover:text-primary transition-colors"
+      >
+        <span>🛟 Customer Resolutions ({rows.length})</span>
+        <span className="text-xs text-muted-foreground">{expanded ? '▾' : '▸'}</span>
+      </button>
+      {expanded && (
+        <ul className="mt-2 space-y-1 text-sm">
+          {rows.map(r => (
+            <li key={r.zohoTicketId} className="flex items-center gap-2 flex-wrap">
+              {r.webUrl ? (
+                <a
+                  href={r.webUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-mono text-xs text-primary hover:underline"
+                >
+                  {r.ticketNumber || '(unknown)'}
+                </a>
+              ) : (
+                <span className="font-mono text-xs">{r.ticketNumber || '(unknown)'}</span>
+              )}
+              {r.accountName && (
+                <span className="text-xs text-muted-foreground">· {r.accountName}</span>
+              )}
+              <span className="text-foreground">{r.subject || '(no subject)'}</span>
+              <span className="ml-auto flex gap-1">
+                {r.jiraKeys.map(k => (
+                  <JiraLink key={k} jiraKey={k} className="text-xs" />
+                ))}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 
