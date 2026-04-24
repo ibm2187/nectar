@@ -249,6 +249,10 @@ setInterval(() => {
           'zoho-mirror': () => task.input?.ticketId
             ? zohoMirrorSync.refreshTicket(task.input.ticketId)
             : zohoMirrorSync.runIncremental(),
+          // Full re-backfill — web process has already wiped the mirror
+          // tables + reset sync_meta.backfillStatus='pending'. We just
+          // kick off backfill(); it'll partition by dept and walk them all.
+          'zoho-mirror-backfill': () => zohoMirrorSync.backfill(),
           'zoho-reconciler': () => zohoUserReconciler.run(),
           'zoho-links': () => jiraZohoLinkSync.run(),
           envPoll: () => envPoller.run(),

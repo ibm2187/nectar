@@ -217,15 +217,65 @@ function IntegrationCard({ integration, onSaved }: {
         )}
 
         {/* Actions */}
-        <div className="flex items-center gap-2 pt-1">
+        <div className="flex items-center gap-2 pt-1 flex-wrap">
           <Button size="sm" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving...' : 'Save'}
           </Button>
           <Button variant="outline" size="sm" onClick={handleTest} disabled={testing}>
             {testing ? 'Testing...' : 'Test Connection'}
           </Button>
+          {integration.name === 'zoho' && integration.configured && (
+            <ZohoBackfillButton />
+          )}
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+// ── Zoho-specific: full re-backfill trigger ──────────────
+
+function ZohoBackfillButton() {
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleClick = async () => {
+    const confirmed = window.confirm(
+      'This will DELETE all mirrored Zoho tickets and re-run the backfill from scratch.\n\n' +
+      'The backfill runs in the sync worker and takes ~3–5 min. Progress shows up in the "Sync" tab under Logs.\n\n' +
+      'Continue?'
+    )
+    if (!confirmed) return
+
+    setRunning(true)
+    setResult(null)
+    setError(null)
+    try {
+      const data = await apiFetch<{ cleared: number; taskId: string; detail: string }>(
+        '/config/integrations/zoho/backfill',
+        { method: 'POST' }
+      )
+      setResult(`${data.detail} (cleared ${data.cleared} existing tickets · task ${data.taskId.slice(0, 8)})`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Backfill trigger failed')
+    }
+    setRunning(false)
+  }
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleClick}
+        disabled={running}
+        className="border-amber-500/40 text-amber-500 hover:bg-amber-500/10"
+      >
+        {running ? 'Triggering...' : 'Run Full Backfill'}
+      </Button>
+      {result && <span className="text-xs text-green-400">{result}</span>}
+      {error && <span className="text-xs text-destructive">{error}</span>}
+    </div>
   )
 }

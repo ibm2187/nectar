@@ -124,75 +124,36 @@ class ZohoMirrorSync extends EventEmitter {
     const seenContacts = new Set();
     let maxModifiedSeen = null;
 
+    const ctx = { floor, seenAccounts, seenContacts, results, maxModifiedSeen };
     try {
-      const startMeta = this.store.getSyncMeta();
-      let from = startMeta.backfillProgress || 0;
-      // Max pages as safety — at 100/page and max ~20K tickets, 250 pages is plenty.
-      const maxPages = 500;
+      // Zoho Desk's list-tickets endpoint has an undocumented `from` offset
+      // cap around 2.5K–3K rows per query. To reach past that across a real
+      // tenant (~10K+ tickets), we partition the backfill by department —
+      // each department has its own offset counter. If listDepartments
+      // fails, we fall back to a single un-partitioned scan.
+      let departments = null;
+      try {
+        const depts = await this.zoho.listDepartments();
+        departments = (depts || [])
+          .filter(d => d && d.isEnabled !== false)
+          .map(d => ({ id: d.id, name: d.name || d.id }));
+      } catch (err) {
+        log.warn(`Zoho mirror backfill: listDepartments failed — ${err.message}. Falling back to un-partitioned scan.`);
+      }
 
-      // When a window is set we paginate newest-first so we can stop as
-      // soon as we start seeing tickets older than the floor. Unbounded
-      // backfill paginates oldest-first and walks every page.
-      const sortBy = floor ? '-createdTime' : 'createdTime';
-
-      for (let i = 0; i < maxPages; i++) {
-        const page = await this.zoho.listTicketsPage({
-          sortBy,
-          pageSize: this.pageSize,
-          from,
-        });
-        results.pagesFetched++;
-        const tickets = page.data || [];
-        if (tickets.length === 0) break;
-
-        // Filter: drop tickets older than the floor (when a window is set).
-        const inWindow = floor
-          ? tickets.filter(t => (t.createdTime || '') >= floor)
-          : tickets;
-
-        for (const t of inWindow) {
-          results.ticketsSeen++;
-          try {
-            await this._upsertTicketWithRefs(t, { seenAccounts, seenContacts, results });
-            results.ticketsUpserted++;
-            if (t.modifiedTime && (!maxModifiedSeen || t.modifiedTime > maxModifiedSeen)) {
-              maxModifiedSeen = t.modifiedTime;
-            }
-          } catch (err) {
-            results.errors++;
-            log.warn(`Zoho mirror backfill: upsert ${t.ticketNumber || t.id} failed: ${err.message}`);
-          }
+      if (departments && departments.length > 0) {
+        log.info(`Zoho mirror backfill: partitioning across ${departments.length} departments (${departments.map(d => d.name).join(', ')})`);
+        for (const dept of departments) {
+          await this._backfillScope(dept, ctx);
         }
-
-        from += this.pageSize;
-
-        // Persist progress so a resume picks up where we left off. Note:
-        // `from` is an offset into Zoho's paginated response, not a stable
-        // cursor. If tickets are inserted at the head between runs, resume
-        // may skip a few boundary rows — incremental sync sweeps them up
-        // on the next cycle via the modifiedTime cursor.
-        this.store.updateSyncMeta({
-          backfillProgress: from,
-          backfillTotal: results.ticketsSeen,
-        });
-
-        if (tickets.length < this.pageSize) break;
-        // Windowed + newest-first: once we see a page with any ticket older
-        // than the floor, everything after is older too — stop.
-        if (floor && inWindow.length < tickets.length) {
-          log.info('Zoho mirror backfill: reached window floor, stopping');
-          break;
-        }
-
-        await _sleep(this.throttleMs);
-
-        this.emit('backfill:progress', { ticketsUpserted: results.ticketsUpserted, pagesFetched: results.pagesFetched });
+      } else {
+        await this._backfillScope(null, ctx);
       }
 
       // Seed the incremental cursor from the max modified timestamp we saw,
       // or from now if we saw nothing. Future incremental runs paginate
       // newest-first and early-exit once they reach this mark.
-      const cursor = maxModifiedSeen || new Date().toISOString();
+      const cursor = ctx.maxModifiedSeen || new Date().toISOString();
       this.store.updateSyncMeta({
         backfillStatus: 'done',
         lastBackfillAt: new Date().toISOString(),
@@ -356,6 +317,82 @@ class ZohoMirrorSync extends EventEmitter {
   // ─────────────────────────────────────────────────────────
   // Internals
   // ─────────────────────────────────────────────────────────
+
+  /**
+   * Walk one backfill "scope" — either a single department, or the whole
+   * tenant when `dept` is null. Mutates the shared ctx (seenAccounts,
+   * seenContacts, results, maxModifiedSeen) so per-run state aggregates
+   * across scopes.
+   *
+   * @param {{id:string, name:string}|null} dept
+   * @param {object} ctx
+   */
+  async _backfillScope(dept, ctx) {
+    const maxPages = 500;
+    const sortBy = ctx.floor ? '-createdTime' : 'createdTime';
+    const scopeLabel = dept ? `dept=${dept.name}` : 'all-departments';
+    log.info(`Zoho mirror backfill: scope ${scopeLabel} starting`);
+
+    let from = 0;
+    for (let i = 0; i < maxPages; i++) {
+      const pageReq = { sortBy, pageSize: this.pageSize, from };
+      if (dept) pageReq.departmentId = dept.id;
+      const page = await this.zoho.listTicketsPage(pageReq);
+      ctx.results.pagesFetched++;
+      const tickets = page.data || [];
+      if (tickets.length === 0) break;
+
+      // Filter: drop tickets older than the floor (when a window is set).
+      const inWindow = ctx.floor
+        ? tickets.filter(t => (t.createdTime || '') >= ctx.floor)
+        : tickets;
+
+      for (const t of inWindow) {
+        ctx.results.ticketsSeen++;
+        try {
+          await this._upsertTicketWithRefs(t, {
+            seenAccounts: ctx.seenAccounts,
+            seenContacts: ctx.seenContacts,
+            results: ctx.results,
+          });
+          ctx.results.ticketsUpserted++;
+          if (t.modifiedTime && (!ctx.maxModifiedSeen || t.modifiedTime > ctx.maxModifiedSeen)) {
+            ctx.maxModifiedSeen = t.modifiedTime;
+          }
+        } catch (err) {
+          ctx.results.errors++;
+          log.warn(`Zoho mirror backfill: upsert ${t.ticketNumber || t.id} failed: ${err.message}`);
+        }
+      }
+
+      from += this.pageSize;
+
+      // Persist progress across all scopes. Note: `from` resets per scope
+      // so the value here reflects within-scope offset; backfillTotal
+      // tracks cumulative rows upserted across the whole run.
+      this.store.updateSyncMeta({
+        backfillProgress: ctx.results.ticketsSeen,
+        backfillTotal: ctx.results.ticketsSeen,
+      });
+
+      if (tickets.length < this.pageSize) break;
+      // Windowed + newest-first: once we see a page with any ticket older
+      // than the floor, everything after is older too — stop this scope.
+      if (ctx.floor && inWindow.length < tickets.length) {
+        log.info(`Zoho mirror backfill: scope ${scopeLabel} reached window floor, stopping`);
+        break;
+      }
+
+      await _sleep(this.throttleMs);
+
+      this.emit('backfill:progress', {
+        ticketsUpserted: ctx.results.ticketsUpserted,
+        pagesFetched: ctx.results.pagesFetched,
+        scope: scopeLabel,
+      });
+    }
+    log.info(`Zoho mirror backfill: scope ${scopeLabel} done (${ctx.results.ticketsUpserted} total upserted so far)`);
+  }
 
   /**
    * Upsert a Zoho ticket row + lazily cache any referenced account/contact.

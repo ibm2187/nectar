@@ -33,11 +33,12 @@ function makeTicket(overrides = {}) {
   };
 }
 
-function makeZohoClientMock({ pages = [], getAccount = null, getContact = null, getTicket = null } = {}) {
+function makeZohoClientMock({ pages = [], getAccount = null, getContact = null, getTicket = null, departments = null } = {}) {
   // pages is an array-of-arrays: call N returns pages[N]
   let callIdx = 0;
   return {
     isConfigured: () => true,
+    listDepartments: vi.fn(async () => departments || []),
     listTicketsPage: vi.fn(async (opts) => {
       const data = pages[callIdx++] || [];
       return { data, hasMore: data.length >= (opts.pageSize || 100) };
@@ -185,6 +186,74 @@ describe('ZohoMirrorSync.backfill', () => {
     services.zohoStore.acquireLock(60000);
     const result = await sync.backfill();
     expect(result).toBeNull();
+  });
+
+  it('partitions backfill across departments, passing departmentId per scope', async () => {
+    const services = setupServices();
+    // Per-dept mock: each dept has its own stream keyed by departmentId.
+    const deptPages = {
+      'dept-A': [[makeTicket({ id: 'A-1', ticketNumber: 'VHC-1', departmentId: 'dept-A' })]],
+      'dept-B': [[makeTicket({ id: 'B-1', ticketNumber: 'BYD-1', departmentId: 'dept-B' })]],
+    };
+    const idxByDept = { 'dept-A': 0, 'dept-B': 0 };
+    const zoho = {
+      isConfigured: () => true,
+      listDepartments: vi.fn(async () => [
+        { id: 'dept-A', name: 'Comfort Keepers', isEnabled: true },
+        { id: 'dept-B', name: 'Bayada', isEnabled: true },
+      ]),
+      listTicketsPage: vi.fn(async (opts) => {
+        const pages = deptPages[opts.departmentId] || [];
+        const data = pages[idxByDept[opts.departmentId]++] || [];
+        return { data, hasMore: false };
+      }),
+      getAccount: vi.fn(async (id) => ({ id, accountName: `Acct ${id}` })),
+      getContact: vi.fn(async (id) => ({ id, accountId: 'acct', email: 'c@x.com', firstName: 'K' })),
+      getTicket: vi.fn(),
+    };
+    const sync = new ZohoMirrorSync({ zoho, zohoStore: services.zohoStore, userStore: services.userStore, config: { zohoMirror: { throttleMs: 0 } } });
+
+    await sync.backfill();
+
+    // Both tickets upserted across both scopes
+    expect(services.zohoStore.count()).toBe(2);
+
+    // Verify departmentId was passed through on each page call
+    const callsWithDept = zoho.listTicketsPage.mock.calls.map(c => c[0].departmentId);
+    expect(callsWithDept.filter(d => d === 'dept-A').length).toBeGreaterThan(0);
+    expect(callsWithDept.filter(d => d === 'dept-B').length).toBeGreaterThan(0);
+  });
+
+  it('filters out disabled departments', async () => {
+    const services = setupServices();
+    const zoho = makeZohoClientMock({
+      departments: [
+        { id: 'dept-A', name: 'Active', isEnabled: true },
+        { id: 'dept-B', name: 'Disabled', isEnabled: false },
+      ],
+      pages: [[makeTicket()], []],
+    });
+    const sync = new ZohoMirrorSync({ zoho, zohoStore: services.zohoStore, userStore: services.userStore, config: { zohoMirror: { throttleMs: 0 } } });
+
+    await sync.backfill();
+
+    const deptIds = zoho.listTicketsPage.mock.calls.map(c => c[0].departmentId);
+    expect(deptIds).toContain('dept-A');
+    expect(deptIds).not.toContain('dept-B');
+  });
+
+  it('falls back to un-partitioned scan when listDepartments fails', async () => {
+    const services = setupServices();
+    const zoho = makeZohoClientMock({ pages: [[makeTicket()], []] });
+    zoho.listDepartments = vi.fn(async () => { throw new Error('Zoho 500'); });
+
+    const sync = new ZohoMirrorSync({ zoho, zohoStore: services.zohoStore, userStore: services.userStore, config: { zohoMirror: { throttleMs: 0 } } });
+
+    const result = await sync.backfill();
+    expect(result.ticketsUpserted).toBe(1);
+    // Paged without a departmentId
+    const deptIds = zoho.listTicketsPage.mock.calls.map(c => c[0].departmentId);
+    expect(deptIds.every(d => d === undefined)).toBe(true);
   });
 
   it('updates backfillProgress per page for resumability', async () => {

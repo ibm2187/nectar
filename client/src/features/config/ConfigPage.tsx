@@ -1174,6 +1174,8 @@ interface LogEntry {
   message: string
 }
 
+type LogSource = 'web' | 'sync' | 'all'
+
 function LogsTab() {
   const [entries, setEntries] = useState<LogEntry[]>([])
   const [loading, setLoading] = useState(true)
@@ -1183,11 +1185,13 @@ function LogsTab() {
   const [timeFrom, setTimeFrom] = useState('')
   const [timeTo, setTimeTo] = useState('')
   const [copied, setCopied] = useState(false)
+  const [source, setSource] = useState<LogSource>('web')
 
   const load = async () => {
     try {
       const params = new URLSearchParams()
       params.set('limit', '2000')
+      params.set('source', source)
       if (levelFilter) params.set('level', levelFilter)
       if (search) params.set('q', search)
       const data = await apiFetch<{ entries: LogEntry[] }>(`/admin/logs?${params}`)
@@ -1196,13 +1200,13 @@ function LogsTab() {
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [levelFilter, search])
+  useEffect(() => { load() }, [levelFilter, search, source])
 
   useEffect(() => {
     if (!autoRefresh) return
     const timer = setInterval(load, 5000)
     return () => clearInterval(timer)
-  }, [autoRefresh, levelFilter, search])
+  }, [autoRefresh, levelFilter, search, source])
 
   // Time-filtered view
   const filtered = useMemo(() => {
@@ -1264,6 +1268,36 @@ function LogsTab() {
 
   return (
     <div className="space-y-3">
+      {/* Row 0: Source (which process's log to read) */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs uppercase tracking-wide text-muted-foreground">Source:</span>
+        <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
+          {([
+            { key: 'web',  label: 'Web' },
+            { key: 'sync', label: 'Sync' },
+            { key: 'all',  label: 'All' },
+          ] as const).map(s => (
+            <button
+              key={s.key}
+              onClick={() => setSource(s.key)}
+              className={cn(
+                'px-2.5 py-1 text-xs font-medium rounded-md transition-colors',
+                source === s.key
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+        {source !== 'web' && (
+          <span className="text-xs text-muted-foreground">
+            (reading from log file — sync-worker writes to same file as web)
+          </span>
+        )}
+      </div>
+
       {/* Row 1: Level filter + search */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-0.5 bg-muted rounded-lg p-0.5">
@@ -1443,6 +1477,9 @@ function BackfillsTab() {
         for past deployments and store the results locally.
       </p>
 
+      {/* Zoho Desk Mirror */}
+      <ZohoBackfillCard />
+
       {/* Datadog Deployment Impact */}
       <Card>
         <CardHeader className="pb-3">
@@ -1506,5 +1543,151 @@ function BackfillsTab() {
         </Card>
       )}
     </div>
+  )
+}
+
+// ── Zoho Desk Mirror backfill ─────────────────────────────
+
+interface ZohoSyncStatus {
+  lastRunAt: string | null
+  lastBackfillAt: string | null
+  backfillStatus: 'pending' | 'in_progress' | 'done' | 'failed' | null
+  backfillProgress: number
+  backfillTotal: number
+  lastModifiedCursor: string | null
+  lastSyncError: string | null
+  lastSyncDurationMs: number | null
+  ticketCount: number
+  openTicketCount: number
+}
+
+function ZohoBackfillCard() {
+  const [status, setStatus] = useState<ZohoSyncStatus | null>(null)
+  const [triggering, setTriggering] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<string | null>(null)
+
+  const load = async () => {
+    try {
+      const data = await apiFetch<ZohoSyncStatus>('/support/sync-status')
+      setStatus(data)
+    } catch { /* silent — endpoint 503s when zoho not configured */ }
+  }
+
+  useEffect(() => { load() }, [])
+
+  // Auto-refresh while a backfill is in flight
+  useEffect(() => {
+    if (status?.backfillStatus !== 'in_progress' && status?.backfillStatus !== 'pending') return
+    const timer = setInterval(load, 3000)
+    return () => clearInterval(timer)
+  }, [status?.backfillStatus])
+
+  const trigger = async () => {
+    const confirmed = window.confirm(
+      'This will DELETE all mirrored Zoho tickets and re-run the backfill from scratch. ' +
+      'Takes ~3-5 min (partitioned by Zoho department). Progress will show here.\n\nContinue?'
+    )
+    if (!confirmed) return
+
+    setTriggering(true)
+    setError(null)
+    setResult(null)
+    try {
+      const data = await apiFetch<{ cleared: number; taskId: string; detail: string }>(
+        '/config/integrations/zoho/backfill',
+        { method: 'POST' }
+      )
+      setResult(`Cleared ${data.cleared} tickets · task ${data.taskId.slice(0, 8)}`)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Backfill trigger failed')
+    }
+    setTriggering(false)
+  }
+
+  const fmtAgo = (iso: string | null) => {
+    if (!iso) return 'never'
+    const ms = Date.now() - new Date(iso).getTime()
+    const m = Math.floor(ms / 60000)
+    if (m < 1) return 'just now'
+    if (m < 60) return `${m}min ago`
+    const h = Math.floor(m / 60)
+    if (h < 24) return `${h}h ago`
+    return `${Math.floor(h / 24)}d ago`
+  }
+
+  const statusPill = (() => {
+    const s = status?.backfillStatus
+    const base = 'inline-block px-2 py-0.5 rounded text-xs border'
+    switch (s) {
+      case 'done':         return <span className={`${base} bg-green-500/10 text-green-400 border-green-500/30`}>Done</span>
+      case 'in_progress':  return <span className={`${base} bg-blue-500/10 text-blue-400 border-blue-500/30 animate-pulse`}>In progress</span>
+      case 'pending':      return <span className={`${base} bg-amber-500/10 text-amber-400 border-amber-500/30`}>Pending</span>
+      case 'failed':       return <span className={`${base} bg-red-500/10 text-red-400 border-red-500/30`}>Failed</span>
+      default:             return <span className={`${base} bg-muted text-muted-foreground`}>Unknown</span>
+    }
+  })()
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <CardTitle className="text-base">Zoho Desk Mirror</CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Partitioned backfill (one pass per Zoho department) to beat the list-tickets offset cap.
+              Clears existing mirror tables and re-fetches every ticket, then hands off to the 5-min
+              incremental sync. Expect ~10K tickets total for this tenant.
+            </p>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {/* Live status */}
+        {status && (
+          <div className="rounded-md border bg-muted/20 px-3 py-2 text-xs space-y-1.5">
+            <div className="flex items-center gap-3 flex-wrap">
+              <span>Status: {statusPill}</span>
+              <span className="text-muted-foreground">·</span>
+              <span>{status.ticketCount.toLocaleString()} tickets · {status.openTicketCount.toLocaleString()} open</span>
+              <span className="text-muted-foreground">·</span>
+              <span>Last run: {fmtAgo(status.lastRunAt || status.lastBackfillAt)}</span>
+            </div>
+            {status.backfillStatus === 'in_progress' && (
+              <div className="flex items-center gap-2">
+                <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-400 transition-all"
+                    style={{ width: `${Math.min(100, (status.backfillProgress / Math.max(1, status.backfillTotal)) * 100) || 5}%` }}
+                  />
+                </div>
+                <span className="text-muted-foreground tabular-nums">
+                  {status.backfillProgress.toLocaleString()} / {status.backfillTotal.toLocaleString() || '?'}
+                </span>
+              </div>
+            )}
+            {status.lastSyncError && (
+              <div className="text-red-400">Error: {status.lastSyncError}</div>
+            )}
+          </div>
+        )}
+
+        <CapGuard cap="config.write">
+          <Button
+            size="sm"
+            onClick={trigger}
+            disabled={triggering || status?.backfillStatus === 'in_progress'}
+            className="border-amber-500/40"
+            variant="outline"
+          >
+            {triggering ? 'Triggering...' : status?.backfillStatus === 'in_progress' ? 'Backfill in progress…' : 'Run Full Backfill'}
+          </Button>
+        </CapGuard>
+
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        {result && <p className="text-xs text-green-400">{result}</p>}
+      </CardContent>
+    </Card>
   )
 }

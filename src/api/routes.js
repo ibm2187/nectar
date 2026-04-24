@@ -3120,6 +3120,43 @@ module.exports = function createRoutes(services, config) {
     return '****' + val.slice(-3);
   }
 
+  /**
+   * Read the last N lines of the shared log file, parse into entries,
+   * filter by level and source. Sync worker writes to the same file as
+   * the web process, prefixed with "[sync]".
+   *
+   * @param {string} file - absolute path to nectar.log
+   * @param {object} opts - { limit, levelFilter, source }
+   *   source: 'sync' filters to [sync] lines; 'all' returns everything
+   * @returns {Array<{ts, level, message}>}
+   */
+  function readLogFileLines(file, { limit, levelFilter, source }) {
+    let content = '';
+    try {
+      content = fs.readFileSync(file, 'utf8');
+    } catch {
+      return [];
+    }
+    // Log format: "YYYY-MM-DDTHH:MM:SS.sssZ [LEVEL] message"
+    const lineRe = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)\s+\[(INFO|WARN|ERROR)\]\s+(.*)$/;
+    const out = [];
+    const lines = content.split('\n');
+    // Read from the tail — a typical log file is <10MB so this is cheap,
+    // but we cap the reverse-scan by expected line count * 4 for safety.
+    const maxScan = Math.min(lines.length, limit * 40);
+    for (let i = lines.length - 1; i >= Math.max(0, lines.length - maxScan); i--) {
+      const m = lines[i].match(lineRe);
+      if (!m) continue;
+      const [, ts, level, message] = m;
+      if (levelFilter && !levelFilter.includes(level)) continue;
+      if (source === 'sync' && !message.startsWith('[sync]')) continue;
+      out.push({ ts, level, message });
+      if (out.length >= limit) break;
+    }
+    // Return oldest-first for UI consistency with ring-buffer output
+    return out.reverse();
+  }
+
   // GET /api/config/integrations — admin only
   router.get('/config/integrations', requireCapability('config.write'), (req, res) => {
     const env = readEnvFile();
@@ -3342,19 +3379,86 @@ module.exports = function createRoutes(services, config) {
     res.json(notificationEngine.getBuildAlertHistory());
   });
 
+  // ── Admin — Zoho mirror backfill trigger ────────────────
+  // POST /api/config/integrations/zoho/backfill
+  // Wipes zoho_tickets/accounts/contacts, resets the sync cursor, and
+  // enqueues a trigger-sync task so the sync worker re-runs backfill
+  // from scratch with the current environment.
+  router.post('/config/integrations/zoho/backfill',
+    requireCapability('config.write'),
+    asyncHandler(async (req, res) => {
+      const { zohoStore, taskQueue, audit } = services;
+      if (!zohoStore) return res.status(501).json({ error: 'Zoho mirror not initialized' });
+      if (!taskQueue) return res.status(501).json({ error: 'Task queue not initialized' });
+
+      const beforeCount = zohoStore.count();
+
+      // Wipe the mirror so backfill sees a clean slate. zoho_ticket_history
+      // is cascade-deleted implicitly (no FK) — safe to clear too.
+      const db = zohoStore.db;
+      db.transaction(() => {
+        db.prepare('DELETE FROM zoho_tickets').run();
+        db.prepare('DELETE FROM zoho_accounts').run();
+        db.prepare('DELETE FROM zoho_contacts').run();
+        db.prepare('DELETE FROM zoho_ticket_history').run();
+        db.prepare(`
+          UPDATE zoho_sync_meta
+          SET backfillStatus='pending', backfillProgress=0, backfillTotal=0,
+              lastSyncError=NULL, lastModifiedCursor=NULL,
+              workerLockUntil=NULL,
+              updatedAt=?
+          WHERE id=1
+        `).run(new Date().toISOString());
+      })();
+
+      // Enqueue a trigger-sync task with the full-backfill target. The
+      // sync worker's handler will call zohoMirrorSync.backfill().
+      const task = taskQueue.createTask(
+        'trigger-sync',
+        { target: 'zoho-mirror-backfill' },
+        req.user?.email || 'admin-ui'
+      );
+
+      audit.record(null, 'zoho-backfill:triggered', {
+        user: req.user?.email,
+        beforeTicketCount: beforeCount,
+        taskId: task.id,
+      });
+
+      log.info(`Zoho mirror backfill triggered by ${req.user?.email || 'anonymous'} (cleared ${beforeCount} tickets)`);
+      res.json({
+        ok: true,
+        cleared: beforeCount,
+        taskId: task.id,
+        detail: 'Backfill enqueued. Watch the Sync logs tab for progress.',
+      });
+    }));
+
   // ── Admin — Logs ────────────────────────────────────────
 
   router.get('/admin/logs', requireCapability('config.write'), (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+    const limit = Math.min(parseInt(req.query.limit) || 200, 2000);
     const level = req.query.level || null; // 'ERROR', 'WARN', 'INFO', or comma-separated
     const levelFilter = level ? level.split(',').map(l => l.trim().toUpperCase()) : null;
     const search = (req.query.q || '').toLowerCase().trim();
+    // source: 'web' (default, in-memory ring) | 'sync' (filters [sync] lines from the shared log file)
+    //         | 'all' (no prefix filter on the file)
+    const source = (req.query.source || 'web').toLowerCase();
 
-    let entries = log.getRecentLogs(limit, levelFilter);
+    let entries;
+    if (source === 'web') {
+      entries = log.getRecentLogs(limit, levelFilter);
+    } else {
+      // Sync-worker is a separate process; its in-memory ring is unreachable
+      // from the web process. Read from the shared log file on disk instead.
+      const logFile = path.join(__dirname, '..', '..', 'logs', 'nectar.log');
+      entries = readLogFileLines(logFile, { limit, levelFilter, source });
+    }
+
     if (search) {
       entries = entries.filter(e => e.message.toLowerCase().includes(search));
     }
-    res.json({ entries, total: entries.length });
+    res.json({ entries, total: entries.length, source });
   });
 
   // ── Admin — Version & Update ──────────────────────────
