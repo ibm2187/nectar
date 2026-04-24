@@ -3387,7 +3387,7 @@ module.exports = function createRoutes(services, config) {
   router.post('/config/integrations/zoho/backfill',
     requireCapability('config.write'),
     asyncHandler(async (req, res) => {
-      const { zohoStore, taskQueue, audit } = services;
+      const { zohoStore, taskQueue } = services;
       if (!zohoStore) return res.status(501).json({ error: 'Zoho mirror not initialized' });
       if (!taskQueue) return res.status(501).json({ error: 'Task queue not initialized' });
 
@@ -3419,11 +3419,19 @@ module.exports = function createRoutes(services, config) {
         req.user?.email || 'admin-ui'
       );
 
-      audit.record(null, 'zoho-backfill:triggered', {
-        user: req.user?.email,
-        beforeTicketCount: beforeCount,
-        taskId: task.id,
-      });
+      // services.audit isn't wired through in web-server.js; skip audit
+      // when it's not available (the log line below is the primary record).
+      if (services.audit && typeof services.audit.record === 'function') {
+        try {
+          services.audit.record(null, 'zoho-backfill:triggered', {
+            user: req.user?.email,
+            beforeTicketCount: beforeCount,
+            taskId: task.id,
+          });
+        } catch (err) {
+          log.warn(`audit.record for zoho-backfill failed: ${err.message}`);
+        }
+      }
 
       log.info(`Zoho mirror backfill triggered by ${req.user?.email || 'anonymous'} (cleared ${beforeCount} tickets)`);
       res.json({
