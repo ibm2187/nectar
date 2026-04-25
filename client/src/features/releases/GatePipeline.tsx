@@ -7,6 +7,7 @@ import { Label } from '../../components/ui/label'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetBody } from '../../components/ui/sheet'
 import { apiFetch } from '../../api/client'
 import { CapGuard } from '../../components/CapGuard'
+import { todayLocal } from '../../lib/date'
 
 interface Milestone {
   key: string
@@ -39,7 +40,7 @@ const typeLabels: Record<string, string> = { monthly: 'Monthly', point: 'Point',
 
 function getEffectiveStatus(m: Milestone): 'met' | 'missed' | 'skipped' | 'active' | 'pending' {
   if (m.status === 'met' || m.status === 'missed' || m.status === 'skipped') return m.status
-  const today = new Date().toISOString().split('T')[0]
+  const today = todayLocal()
   if (m.effectiveDate && m.effectiveDate <= today) return 'active'
   return 'pending'
 }

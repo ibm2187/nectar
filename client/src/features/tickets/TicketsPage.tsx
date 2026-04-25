@@ -12,6 +12,7 @@ import { SortableHeader, useSortableData, useSortState, nextSortState, type Sort
 import { JiraLink } from '../../components/JiraLink'
 import { OutIcon } from '../../components/PersonBadge'
 import { STATUS_GROUPS, type StatusGroup } from '../../lib/status-colors'
+import { toLocalDateKey } from '../../lib/date'
 
 interface ReleaseColumn {
   repo: string
@@ -835,7 +836,7 @@ function TriageTab() {
       params.set('statusCategory', 'To Do')
     }
     if (days > 0) {
-      const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)
+      const since = toLocalDateKey(new Date(Date.now() - days * 86400000))
       params.set('createdSince', since)
     }
     params.set('limit', String(limit))

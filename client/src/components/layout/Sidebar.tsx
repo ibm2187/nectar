@@ -5,6 +5,7 @@ import { NectarIcon } from '../NectarLoader'
 import { useAuthStore } from '../../stores/authStore'
 import { useWsStore } from '../../stores/wsStore'
 import { apiFetch } from '../../api/client'
+import { todayLocal } from '../../lib/date'
 
 type NavLinkItem = {
   to: string
@@ -138,7 +139,7 @@ function useSidebarBadges() {
   const [activeIncidents, setActiveIncidents] = useState(0)
 
   // Count overdue releases — past release date, not done, not archived
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayLocal()
   const overdueCount = releases.filter(
     r => r.jiraReleaseDate && r.jiraReleaseDate < today && r.state !== 'done' && !r.jiraArchived
   ).length

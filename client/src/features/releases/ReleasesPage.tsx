@@ -10,6 +10,7 @@ import { cn } from '../../lib/utils'
 import { SavedViews } from '../../components/SavedViews'
 import { useAvailabilityStore } from '../../stores/availabilityStore'
 import { CustomerPills } from '../../components/CustomerPill'
+import { toLocalDateKey } from '../../lib/date'
 
 /**
  * Combined Releases page with two view modes:
@@ -203,8 +204,8 @@ export function ReleasesPage() {
     setLoading(true)
     setError(null)
     try {
-      const from = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-      const to = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+      const from = toLocalDateKey(new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000))
+      const to = toLocalDateKey(new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000))
       const data = await apiFetch<Release[]>(`/releases/calendar?from=${from}&to=${to}`)
       setReleases(data)
     } catch (err) {
@@ -425,7 +426,7 @@ function CalendarView({ releases, zoom, offsetParam, now, onOpenRelease }: {
   now: Date
   onOpenRelease: (r: Release) => void
 }) {
-  const today = useMemo(() => now.toISOString().slice(0, 10), [now])
+  const today = useMemo(() => toLocalDateKey(now), [now])
 
   // ── Derive repos from release data for Y-axis rows ────
   const repoRows = useMemo(() => {
@@ -441,7 +442,7 @@ function CalendarView({ releases, zoom, offsetParam, now, onOpenRelease }: {
     for (let i = 0; i < 60; i++) {
       const d = new Date(base)
       d.setDate(base.getDate() + i)
-      const iso = d.toISOString().slice(0, 10)
+      const iso = toLocalDateKey(d)
       const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
       days.push({ key: `d-${iso}`, label, start: iso, end: iso })
     }
@@ -462,8 +463,8 @@ function CalendarView({ releases, zoom, offsetParam, now, onOpenRelease }: {
       const end = new Date(start)
       end.setDate(start.getDate() + 6)
 
-      const startStr = start.toISOString().slice(0, 10)
-      const endStr = end.toISOString().slice(0, 10)
+      const startStr = toLocalDateKey(start)
+      const endStr = toLocalDateKey(end)
       const label = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
       weeks.push({ key: `w-${startStr}`, label, start: startStr, end: endStr })
     }
@@ -484,8 +485,8 @@ function CalendarView({ releases, zoom, offsetParam, now, onOpenRelease }: {
       end.setMonth(end.getMonth() + 1)
       end.setDate(end.getDate() - 1)
 
-      const startStr = start.toISOString().slice(0, 10)
-      const endStr = end.toISOString().slice(0, 10)
+      const startStr = toLocalDateKey(start)
+      const endStr = toLocalDateKey(end)
       const label = start.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
       months.push({ key: `m-${startStr}`, label, start: startStr, end: endStr })
     }
@@ -834,7 +835,7 @@ function AgendaView({ buckets, zoom, offsetParam, now, onOpenRelease, updatePara
 
   // Apply offset for navigation
   const visibleGroups = useMemo(() => {
-    const offsetDate = new Date(now.getTime() + offsetDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const offsetDate = toLocalDateKey(new Date(now.getTime() + offsetDays * 24 * 60 * 60 * 1000))
     let startIdx = upcomingGrouped.findIndex(([key]) => key >= offsetDate)
     if (startIdx < 0) startIdx = 0
     return upcomingGrouped.slice(startIdx, startIdx + AGENDA_VISIBLE_GROUPS[zoom])

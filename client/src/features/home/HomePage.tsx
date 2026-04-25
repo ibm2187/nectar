@@ -13,6 +13,7 @@ import { PipelineBadge } from '../releases/PipelineView'
 import { PrDetailPanel, type PrInfo } from '../../components/PrDetailPanel'
 import { ReleaseBadge, TicketDeployedCell as SharedDeployedCell, PriorityBadge, RiskBadge, HealthBadge, getNextRelease, priorityOrdinal, riskOrdinal, NextReleaseVersionCell, NextReleaseDateCell, type TicketRowData } from '../../components/TicketRow'
 import { SortableHeader, useSortableData, useSortState } from '../../components/SortableHeader'
+import { todayLocal } from '../../lib/date'
 import { CustomerPills } from '../../components/CustomerPill'
 import { CurrentlyOutBanner } from '../../components/CurrentlyOutBanner'
 import { OutIcon } from '../../components/PersonBadge'
@@ -160,7 +161,7 @@ export function HomePage() {
         // Derive flat ticket list from releases (deduped by key).
         // Each ticket gets a `releases[]` array showing which releases it belongs to,
         // matching the shape that TicketsTable / TicketRowData expects.
-        const today = new Date().toISOString().slice(0, 10)
+        const today = todayLocal()
         const byKey = new Map<string, TicketRowData>()
         for (const r of rels) {
           for (const t of (r.tickets || [])) {
@@ -693,7 +694,7 @@ function PeopleGroupView({
 
   // All non-shipped releases for the chip bar
   const releaseChips = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayLocal()
     const seen = new Map<string, { version: string; jiraReleaseDate: string | null; isOverdue: boolean }>()
     for (const r of releases) {
       if (r.state === 'done') continue

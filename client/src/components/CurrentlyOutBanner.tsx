@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useAvailabilityStore } from '../stores/availabilityStore'
 import { cn } from '../lib/utils'
+import { todayLocal } from '../lib/date'
 
 const DISMISS_KEY = 'nectar-out-banner-dismissed'
 
 function todayIso() {
-  return new Date().toISOString().slice(0, 10)
+  return todayLocal()
 }
 
 /**

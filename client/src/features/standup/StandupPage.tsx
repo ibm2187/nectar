@@ -7,6 +7,7 @@ import { cn } from '../../lib/utils'
 import { JiraLink } from '../../components/JiraLink'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog'
 import { CapGuard } from '../../components/CapGuard'
+import { todayLocal } from '../../lib/date'
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -196,7 +197,7 @@ export function StandupPage() {
       const saved = localStorage.getItem('nectar:standup:position')
       if (saved) {
         const { idx, date } = JSON.parse(saved)
-        if (date === new Date().toISOString().slice(0, 10)) return idx
+        if (date === todayLocal()) return idx
       }
     } catch {}
     return 0
@@ -242,7 +243,7 @@ export function StandupPage() {
     try {
       localStorage.setItem('nectar:standup:position', JSON.stringify({
         idx: clamped,
-        date: new Date().toISOString().slice(0, 10),
+        date: todayLocal(),
       }))
     } catch {}
   }, [sortedPeople.length, setSearchParams, searchParams])
