@@ -337,6 +337,11 @@ export function StandupPage() {
                   key={p.key}
                   onClick={() => setTeamFilter(p.key)}
                   style={style}
+                  title={p.key === 'all'
+                    ? `All teammates with standup items (${count})`
+                    : p.key === 'other'
+                      ? `Teammates not assigned to any team (${count})`
+                      : `Teammates on ${p.label} team with standup items (${count})`}
                   className={cn(
                     'text-[10px] font-medium px-2 py-0.5 rounded border transition-colors',
                     p.dashed && 'border-dashed',
@@ -531,6 +536,15 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
 
   const filteredTotal = Object.values(filteredBuckets).reduce((sum, b) => sum + b.length, 0)
   const hasBuckets = filteredTotal > 0
+  // Customer tickets are linked off the same filtered JIRA slice, so a
+  // teammate with only Zoho work will still have a non-empty card. Hook
+  // is called once here and the result is passed down to the bucket — see
+  // `useCustomerTicketRows` docstring for why we don't call it twice.
+  const { rows: customerTicketRows, loading: customerTicketsLoading } = useCustomerTicketRows(filteredBuckets)
+  // While the linked-tickets request is in flight we don't yet know whether
+  // a Zoho-only teammate has content. Treat as "has content" to suppress
+  // the "All clear" flash that would otherwise show for a moment.
+  const hasAnyContent = hasBuckets || customerTicketRows.length > 0 || customerTicketsLoading
 
   return (
     <Card className={cn('transition-all', person.isOoo && 'opacity-60 border-amber-500/30')}>
@@ -571,6 +585,7 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
                 count={countForVersions(person, thisWeekVersions)}
                 active={filter === 'thisweek'}
                 onClick={() => setFilter('thisweek')}
+                title={`Items in ${person.name}'s releases shipping this week (${thisWeekVersions.join(', ') || '—'})`}
               />
             )}
             {/* Next 5 biz days pill (only if different from this week) */}
@@ -580,6 +595,7 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
                 count={countForFilter(person, 'imminent')}
                 active={filter === 'imminent'}
                 onClick={() => setFilter('imminent')}
+                title={`Items in releases shipping within the next 5 business days (${person.imminentVersions.join(', ')})`}
               />
             )}
             {/* All pill */}
@@ -588,6 +604,7 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
               count={person.totalItems}
               active={filter === 'all'}
               onClick={() => setFilter('all')}
+              title={`Total items assigned to ${person.name} across all releases — includes PRs awaiting review`}
             />
             {/* Per-release pills */}
             {person.releases.slice(0, 5).map(r => (
@@ -598,13 +615,17 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
                 active={filter === r.version}
                 onClick={() => setFilter(r.version)}
                 dimmed={!person.imminentVersions.includes(r.version)}
+                title={`Tickets in release ${r.version}${r.dueDate ? ` (due ${r.dueDate})` : ''}`}
               />
             ))}
           </div>
         )}
 
-        {/* Priority buckets */}
-        {hasBuckets ? (
+        {/* Priority buckets — Customer Tickets renders as a peer at the end
+            so support-team teammates see Zoho work as first-class, not a
+            trailing block. The bucket renders nothing when no linked Zoho
+            tickets exist for the current filter. */}
+        {hasAnyContent ? (
           <div className="space-y-2">
             {BUCKET_ORDER.map(bucketKey => {
               const items = filteredBuckets[bucketKey]
@@ -620,6 +641,10 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
                 />
               )
             })}
+            <CustomerTicketsBucket
+              rows={customerTicketRows}
+              forceExpanded={forceExpanded}
+            />
           </div>
         ) : (
           <div className="text-center py-8 text-muted-foreground">
@@ -630,8 +655,6 @@ function PersonSlide({ person, forceExpanded }: { person: StandupPerson; forceEx
           </div>
         )}
 
-        {/* Customer Resolutions — Zoho tickets linked to any JIRA in this slice */}
-        <CustomerResolutions filteredBuckets={filteredBuckets} />
       </CardContent>
     </Card>
   )
@@ -652,14 +675,30 @@ interface ZohoLinkRow {
   webUrl: string | null
 }
 
-function CustomerResolutions({ filteredBuckets }: { filteredBuckets: PersonBuckets }) {
-  // Collect all unique JIRA keys across every non-PR bucket
+/**
+ * Hook: fetch Zoho tickets linked to any JIRA in `filteredBuckets`.
+ *
+ * `filteredBuckets` is already release-aware (the parent's release filter is
+ * applied to the buckets before being passed in), so when the user switches
+ * to a "4.2.0" filter, only JIRAs in 4.2.0 contribute keys here, which means
+ * only Zoho tickets backing 4.2.0 work surface — RW6 Aaron-ask is in effect.
+ *
+ * Returns `{ rows, loading }`. `loading` is true while a non-empty key set
+ * is being fetched, so callers can suppress empty-state UI during the
+ * request and avoid a flash-of-wrong-content for Zoho-only teammates.
+ *
+ * Call this hook **once per slide** (in `PersonSlide`) and pass the result
+ * down to `CustomerTicketsBucket` — calling it from both the parent and the
+ * bucket would issue two identical POSTs per render and risk a result-order
+ * race where the parent's `hasAnyContent` flips before the bucket's rows
+ * arrive.
+ */
+function useCustomerTicketRows(filteredBuckets: PersonBuckets) {
   const jiraKeys = useMemo(() => {
     const set = new Set<string>()
     for (const bucketKey of BUCKET_ORDER) {
       const items = filteredBuckets[bucketKey] || []
       for (const item of items) {
-        // Only ticket items (not PR-review items) have a .key
         const maybe = (item as { key?: string }).key
         if (maybe) set.add(maybe)
       }
@@ -668,11 +707,12 @@ function CustomerResolutions({ filteredBuckets }: { filteredBuckets: PersonBucke
   }, [filteredBuckets])
 
   const [links, setLinks] = useState<Map<string, ZohoLinkRow[]>>(new Map())
-  const [expanded, setExpanded] = useState(false)
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    if (jiraKeys.length === 0) { setLinks(new Map()); return }
+    if (jiraKeys.length === 0) { setLinks(new Map()); setLoading(false); return }
     let cancelled = false
+    setLoading(true)
     ;(async () => {
       try {
         const res = await fetch('/api/support/jira/links/batch', {
@@ -686,13 +726,15 @@ function CustomerResolutions({ filteredBuckets }: { filteredBuckets: PersonBucke
         const next = new Map<string, ZohoLinkRow[]>()
         for (const [k, v] of Object.entries(data.linksByJiraKey || {})) next.set(k, v)
         setLinks(next)
-      } catch { /* non-fatal */ }
+      } catch { /* non-fatal */ } finally {
+        if (!cancelled) setLoading(false)
+      }
     })()
     return () => { cancelled = true }
   }, [jiraKeys.join(',')])
 
-  // Flatten + dedup by zohoTicketId (one Zoho ticket may link to multiple JIRAs in the slice)
   const rows = useMemo(() => {
+    // Dedup by Zoho ticket id — one Zoho ticket may link to multiple JIRAs
     const byZohoId = new Map<string, ZohoLinkRow & { jiraKeys: string[] }>()
     for (const [jiraKey, entries] of links) {
       for (const e of entries) {
@@ -707,60 +749,99 @@ function CustomerResolutions({ filteredBuckets }: { filteredBuckets: PersonBucke
     return [...byZohoId.values()]
   }, [links])
 
+  return { rows, loading }
+}
+
+/**
+ * Customer Tickets bucket — visually matches CollapsibleBucket so support-team
+ * teammates (whose JIRA buckets are mostly empty) see Zoho tickets as a
+ * first-class part of their standup, not a separate trailing block.
+ *
+ * Receives pre-fetched rows from the parent (lifted call to dedup the API
+ * request — see useCustomerTicketRows docstring).
+ */
+function CustomerTicketsBucket({
+  rows,
+  forceExpanded,
+}: {
+  rows: (ZohoLinkRow & { jiraKeys: string[] })[]
+  forceExpanded: boolean | null
+}) {
+  const [localExpanded, setLocalExpanded] = useState(false)
+  const expanded = forceExpanded !== null ? forceExpanded : localExpanded
+
   if (rows.length === 0) return null
 
   return (
-    <div className="mt-3 border-t pt-3">
+    <div className="rounded-md border transition-colors border-cyan-500/40 bg-cyan-500/5">
       <button
-        onClick={() => setExpanded(v => !v)}
-        className="w-full flex items-center justify-between text-left text-sm font-medium hover:text-primary transition-colors"
+        onClick={() => setLocalExpanded(v => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left"
+        title="Zoho support tickets linked to any JIRA visible in the current release filter"
       >
-        <span>🛟 Customer Resolutions ({rows.length})</span>
-        <span className="text-xs text-muted-foreground">{expanded ? '▾' : '▸'}</span>
+        <span className="text-xs transition-transform" style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+          ▶
+        </span>
+        <span>🛟</span>
+        <span className="font-medium text-sm">Customer Tickets</span>
+        <Badge variant="secondary" className="text-xs ml-auto">{rows.length}</Badge>
       </button>
       {expanded && (
-        <ul className="mt-2 space-y-1 text-sm">
-          {rows.map(r => (
-            <li key={r.zohoTicketId} className="flex items-center gap-2 flex-wrap">
-              {r.webUrl ? (
-                <a
-                  href={r.webUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-mono text-xs text-primary hover:underline"
-                >
-                  {r.ticketNumber || '(unknown)'}
-                </a>
-              ) : (
-                <span className="font-mono text-xs">{r.ticketNumber || '(unknown)'}</span>
-              )}
-              {r.accountName && (
-                <span className="text-xs text-muted-foreground">· {r.accountName}</span>
-              )}
-              <span className="text-foreground">{r.subject || '(no subject)'}</span>
-              <span className="ml-auto flex gap-1">
-                {r.jiraKeys.map(k => (
-                  <JiraLink key={k} jiraKey={k} className="text-xs" />
-                ))}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <div className="border-t border-white/5">
+          <table className="w-full text-sm">
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.zohoTicketId} className="border-t border-white/5">
+                  <td className="py-1.5 px-3 w-[110px]">
+                    {r.webUrl ? (
+                      <a
+                        href={r.webUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-mono text-xs text-primary hover:underline"
+                      >
+                        {r.ticketNumber || '(unknown)'}
+                      </a>
+                    ) : (
+                      <span className="font-mono text-xs">{r.ticketNumber || '(unknown)'}</span>
+                    )}
+                  </td>
+                  <td className="py-1.5 pr-2 text-foreground/80 text-sm">
+                    <span className="line-clamp-1">{r.subject || '(no subject)'}</span>
+                  </td>
+                  <td className="py-1.5 px-2 text-xs text-muted-foreground truncate max-w-[12rem]">
+                    {r.accountName || '—'}
+                  </td>
+                  <td className="py-1.5 px-3 w-auto text-right whitespace-nowrap">
+                    <span className="inline-flex flex-wrap gap-1 justify-end">
+                      {r.jiraKeys.map(k => (
+                        <JiraLink key={k} jiraKey={k} className="text-[11px]" />
+                      ))}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
 }
 
-function FilterPill({ label, count, active, onClick, dimmed }: {
+function FilterPill({ label, count, active, onClick, dimmed, title }: {
   label: string
   count: number
   active: boolean
   onClick: () => void
   dimmed?: boolean
+  /** Tooltip explaining what the parenthetical count represents. */
+  title?: string
 }) {
   return (
     <button
       onClick={onClick}
+      title={title}
       className={cn(
         'px-2.5 py-1 rounded-md text-xs font-medium transition-colors border',
         active
