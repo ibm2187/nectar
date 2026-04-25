@@ -195,6 +195,52 @@ describe('ZohoStore', () => {
       expect(store.listTickets({ hasJiraLinks: true })).toHaveLength(2);
     });
 
+    it('offset paginates while preserving order', () => {
+      const all = store.listTickets({ orderBy: 'created', orderDir: 'asc' });
+      const page1 = store.listTickets({ orderBy: 'created', orderDir: 'asc', limit: 2, offset: 0 });
+      const page2 = store.listTickets({ orderBy: 'created', orderDir: 'asc', limit: 2, offset: 2 });
+      expect(page1).toHaveLength(2);
+      expect(page2).toHaveLength(2);
+      expect(page1[0].id).toBe(all[0].id);
+      expect(page2[0].id).toBe(all[2].id);
+    });
+
+    it('countTickets returns the total ignoring limit/offset/order', () => {
+      // Total across the four seed tickets = 4. The ?limit=2 in listTickets
+      // doesn't affect countTickets.
+      expect(store.countTickets()).toBe(4);
+      expect(store.listTickets({ limit: 2 })).toHaveLength(2);
+
+      // Filters apply identically: openOnly excludes the one Closed seed.
+      expect(store.countTickets({ openOnly: true })).toBe(3);
+    });
+
+    it('sort whitelist falls back to modifiedAt for unknown orderBy', () => {
+      // Pass a bogus sort key — must not blow up and must produce stable output.
+      const r1 = store.listTickets({ orderBy: 'nope; DROP TABLE zoho_tickets;--' });
+      expect(r1).toHaveLength(4);
+    });
+
+    it('age sort: DESC returns oldest tickets first (highest age)', () => {
+      // Replace the seed batch with tickets whose createdAt clearly differs.
+      db.prepare('DELETE FROM zoho_tickets').run();
+      const now = Date.now();
+      const day = 24 * 60 * 60 * 1000;
+      store.upsertTicketBatch([
+        sampleTicket({ id: 'new', ticketNumber: 'VHC-N', createdAt: new Date(now - 1 * day).toISOString() }),
+        sampleTicket({ id: 'mid', ticketNumber: 'VHC-M', createdAt: new Date(now - 30 * day).toISOString() }),
+        sampleTicket({ id: 'old', ticketNumber: 'VHC-O', createdAt: new Date(now - 90 * day).toISOString() }),
+      ]);
+
+      // Age DESC should put the oldest ticket first (90d > 30d > 1d).
+      const desc = store.listTickets({ orderBy: 'age', orderDir: 'desc' });
+      expect(desc.map(t => t.id)).toEqual(['old', 'mid', 'new']);
+
+      // Age ASC = newest first (lowest age).
+      const asc = store.listTickets({ orderBy: 'age', orderDir: 'asc' });
+      expect(asc.map(t => t.id)).toEqual(['new', 'mid', 'old']);
+    });
+
     it('fixVersions filter narrows to tickets whose linked JIRA ships in any version', () => {
       // Seed JIRAs with distinct fix versions
       db.prepare(`INSERT INTO jira_tickets (key, summary, status, syncedAt, fixVersions)

@@ -301,6 +301,39 @@ describe('GET /api/support/departments', () => {
   });
 });
 
+describe('GET /api/support/tickets — paging envelope', () => {
+  it('returns total/page/pageSize/hasMore for a paged request', async () => {
+    const { app, zohoStore } = makeApp();
+    for (let i = 1; i <= 7; i++) {
+      zohoStore.upsertTicket(makeTicket({
+        id: String(i), ticketNumber: `VHC-${i}`, statusType: 'Open',
+        createdAt: `2026-04-${String(i).padStart(2, '0')}T00:00:00.000Z`,
+      }));
+    }
+
+    const res = await request(app, 'GET', '/api/support/tickets?page=2&pageSize=3&sort=created&sortDir=asc');
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(7);
+    expect(res.body.page).toBe(2);
+    expect(res.body.pageSize).toBe(3);
+    expect(res.body.hasMore).toBe(true);
+    expect(res.body.tickets).toHaveLength(3);
+    // Ascending by created → page 2 starts at the 4th ticket (id '4')
+    expect(res.body.tickets[0].id).toBe('4');
+  });
+
+  it('hasMore is false on the last page', async () => {
+    const { app, zohoStore } = makeApp();
+    for (let i = 1; i <= 5; i++) {
+      zohoStore.upsertTicket(makeTicket({ id: String(i), ticketNumber: `VHC-${i}` }));
+    }
+    const res = await request(app, 'GET', '/api/support/tickets?page=2&pageSize=3');
+    expect(res.body.total).toBe(5);
+    expect(res.body.tickets).toHaveLength(2);
+    expect(res.body.hasMore).toBe(false);
+  });
+});
+
 describe('GET /api/support/tickets — maxAgeDays', () => {
   it('passes maxAgeDays through to listTickets', async () => {
     const { app, zohoStore } = makeApp();

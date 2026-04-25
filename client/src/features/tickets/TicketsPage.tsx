@@ -14,6 +14,7 @@ import { OutIcon } from '../../components/PersonBadge'
 import { STATUS_GROUPS, type StatusGroup } from '../../lib/status-colors'
 import { toLocalDateKey } from '../../lib/date'
 import { MultiSelectPopover } from '../../components/MultiSelectPopover'
+import { Paginator } from '../../components/Paginator'
 
 interface ReleaseColumn {
   repo: string
@@ -307,6 +308,16 @@ function ReleasesTicketsTab() {
   }), [])
   const sorted = useSortableData<Ticket, SortKey>(filtered, sortState, sortAccessors)
 
+  // Pagination — the matrix endpoint returns the full set, so we slice
+  // client-side. Reset to page 1 when filters/sort change.
+  const RELEASES_PAGE_SIZE = 50
+  const [page, setPage] = useState(1)
+  useEffect(() => { setPage(1) }, [search, repoFilter, gapFilter, releaseFilter, sortState.key, sortState.dir])
+  const visibleSorted = useMemo(
+    () => sorted.slice((page - 1) * RELEASES_PAGE_SIZE, page * RELEASES_PAGE_SIZE),
+    [sorted, page]
+  )
+
   function setSort(key: SortKey) {
     const next = nextSortState(sortState, key)
     updateParams({ sort: next.key, dir: next.dir })
@@ -414,36 +425,46 @@ function ReleasesTicketsTab() {
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <colgroup>
-                  <col className="w-28" />
-                  <col />{/* summary */}
-                  <col className="w-40" />
-                  <col className="w-32" />
-                  <col className="w-28" />
-                  <col />{/* releases */}
-                </colgroup>
-                <thead className="sticky top-0 bg-background z-10">
-                  <tr className="border-b text-left">
-                    <SortableHeader label="Key"       sortKey="key"        state={sortState} onSort={k => setSort(k as SortKey)} />
-                    <SortableHeader label="Summary"   sortKey="summary"    state={sortState} onSort={k => setSort(k as SortKey)} />
-                    <SortableHeader label="Status"    sortKey="status"     state={sortState} onSort={k => setSort(k as SortKey)} />
-                    <SortableHeader label="Assignee"  sortKey="assignee"   state={sortState} onSort={k => setSort(k as SortKey)} />
-                    <SortableHeader label="QA"        sortKey="qaAssignee" state={sortState} onSort={k => setSort(k as SortKey)} className="hidden md:table-cell" />
-                    <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Deployed</th>
-                    <SortableHeader label="Releases"  sortKey="releases"  state={sortState} onSort={k => setSort(k as SortKey)} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {sorted.map(t => <TicketRow key={t.key} ticket={t} onReleaseClick={toggleRelease} />)}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
+        <>
+          {sorted.length > RELEASES_PAGE_SIZE && (
+            <Paginator
+              page={page}
+              pageSize={RELEASES_PAGE_SIZE}
+              total={sorted.length}
+              onPageChange={setPage}
+            />
+          )}
+          <Card>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <colgroup>
+                    <col className="w-28" />
+                    <col />{/* summary */}
+                    <col className="w-40" />
+                    <col className="w-32" />
+                    <col className="w-28" />
+                    <col />{/* releases */}
+                  </colgroup>
+                  <thead className="sticky top-0 bg-background z-10">
+                    <tr className="border-b text-left">
+                      <SortableHeader label="Key"       sortKey="key"        state={sortState} onSort={k => setSort(k as SortKey)} />
+                      <SortableHeader label="Summary"   sortKey="summary"    state={sortState} onSort={k => setSort(k as SortKey)} />
+                      <SortableHeader label="Status"    sortKey="status"     state={sortState} onSort={k => setSort(k as SortKey)} />
+                      <SortableHeader label="Assignee"  sortKey="assignee"   state={sortState} onSort={k => setSort(k as SortKey)} />
+                      <SortableHeader label="QA"        sortKey="qaAssignee" state={sortState} onSort={k => setSort(k as SortKey)} className="hidden md:table-cell" />
+                      <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Deployed</th>
+                      <SortableHeader label="Releases"  sortKey="releases"  state={sortState} onSort={k => setSort(k as SortKey)} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleSorted.map(t => <TicketRow key={t.key} ticket={t} onReleaseClick={toggleRelease} />)}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </>
       )}
     </div>
   )
@@ -737,6 +758,14 @@ function ServerTicketTable({
         </Card>
       ) : (
         <>
+          {totalPages > 1 && (
+            <Paginator
+              page={currentPage}
+              pageSize={PAGE_SIZE}
+              total={data.total}
+              onPageChange={(p) => setOffset((p - 1) * PAGE_SIZE)}
+            />
+          )}
           <Card>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
@@ -782,18 +811,6 @@ function ServerTicketTable({
             </CardContent>
           </Card>
 
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">
-                Page {currentPage} of {totalPages}
-              </span>
-              <div className="flex gap-1">
-                <Button variant="outline" size="sm" disabled={offset === 0} onClick={() => setOffset(0)}>First</Button>
-                <Button variant="outline" size="sm" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Prev</Button>
-                <Button variant="outline" size="sm" disabled={!data.hasMore} onClick={() => setOffset(offset + PAGE_SIZE)}>Next</Button>
-              </div>
-            </div>
-          )}
         </>
       )}
     </div>

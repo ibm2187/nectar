@@ -64,8 +64,12 @@ export interface SupportAssigneeStat {
 }
 
 export interface SupportStats {
+  /** Absolute DB total (no filter applied). */
   total: number
+  /** Absolute DB open count (no filter applied). */
   open: number
+  /** Sum across the filter-aware assignee distribution — "N match filters". */
+  matchTotal?: number
   assignees: SupportAssigneeStat[]
 }
 
@@ -132,36 +136,53 @@ export type SupportFilters = {
   maxAgeDays?: number
   fixVersions?: string[]
   search?: string
-  orderBy?: 'modified' | 'created' | 'status'
-  orderDir?: 'asc' | 'desc'
+  /** Whitelisted on the server: modified | created | status | priority | assignee | ticketNumber | age */
+  sort?: string
+  sortDir?: 'asc' | 'desc'
+  /** 1-based page number for the standard list-API contract. */
+  page?: number
+  pageSize?: number
+  /** @deprecated use `pageSize`; retained for legacy callers. */
   limit?: number
+  /** @deprecated use `sort`. */
+  orderBy?: 'modified' | 'created' | 'status'
+  /** @deprecated use `sortDir`. */
+  orderDir?: 'asc' | 'desc'
 }
 
 export type SupportPreset = 'standup' | 'allOpen' | 'stale' | 'myTickets' | 'custom'
+
+// Default page size for /support's per-assignee pagination. Server enforces
+// this via opts.limit; SupportPage's Paginator uses it to compute page count.
+const DEFAULT_PAGE_SIZE = 25
 
 const PRESETS: Record<SupportPreset, SupportFilters> = {
   standup: {
     statuses: ['Investigating', 'Waiting for Viv Response'],
     orderBy: 'created',
     orderDir: 'asc',
+    pageSize: DEFAULT_PAGE_SIZE,
   },
   allOpen: {
     openOnly: true,
     orderBy: 'modified',
     orderDir: 'desc',
+    pageSize: DEFAULT_PAGE_SIZE,
   },
   stale: {
     openOnly: true,
     minAgeDays: 30,
     orderBy: 'created',
     orderDir: 'asc',
+    pageSize: DEFAULT_PAGE_SIZE,
   },
   myTickets: {
     // assigneeEmail is injected at selection time from auth store
     orderBy: 'modified',
     orderDir: 'desc',
+    pageSize: DEFAULT_PAGE_SIZE,
   },
-  custom: {},
+  custom: { pageSize: DEFAULT_PAGE_SIZE },
 }
 
 // ── Store ───────────────────────────────────────────────────
@@ -169,6 +190,8 @@ const PRESETS: Record<SupportPreset, SupportFilters> = {
 interface SupportState {
   // Data
   tickets: SupportTicket[]
+  /** Total tickets matching current filters across all pages (from API envelope). */
+  totalTickets: number
   stats: SupportStats | null
   syncStatus: SupportSyncStatus | null
   accounts: SupportAccount[]
@@ -196,8 +219,11 @@ interface SupportState {
 
 }
 
-const STORAGE_KEY_PRESET = 'nectar-support-preset'
-const STORAGE_KEY_FILTERS = 'nectar-support-filters'
+// v2 — Bundle 3 added pageSize/sort to the persisted filter; bumping the key
+// resets any localStorage entry with a small global pageSize that would now
+// cap the per-card pagination's source data.
+const STORAGE_KEY_PRESET = 'nectar-support-preset.v2'
+const STORAGE_KEY_FILTERS = 'nectar-support-filters.v2'
 
 function loadPersisted(): { preset: SupportPreset; filters: SupportFilters } {
   try {
@@ -232,9 +258,13 @@ function filtersToQuery(f: SupportFilters): string {
   if (f.maxAgeDays != null) p.set('maxAgeDays', String(f.maxAgeDays))
   if (f.fixVersions?.length) p.set('fixVersions', f.fixVersions.join(','))
   if (f.search) p.set('search', f.search)
-  if (f.orderBy) p.set('orderBy', f.orderBy)
-  if (f.orderDir) p.set('orderDir', f.orderDir)
-  if (f.limit) p.set('limit', String(f.limit))
+  if (f.sort) p.set('sort', f.sort)
+  else if (f.orderBy) p.set('sort', f.orderBy)
+  if (f.sortDir) p.set('sortDir', f.sortDir)
+  else if (f.orderDir) p.set('sortDir', f.orderDir)
+  if (f.page) p.set('page', String(f.page))
+  if (f.pageSize) p.set('pageSize', String(f.pageSize))
+  else if (f.limit) p.set('limit', String(f.limit))
   return p.toString()
 }
 
@@ -243,6 +273,7 @@ export const useSupportStore = create<SupportState>((set, get) => {
 
   return {
     tickets: [],
+    totalTickets: 0,
     stats: null,
     syncStatus: null,
     accounts: [],
@@ -263,11 +294,25 @@ export const useSupportStore = create<SupportState>((set, get) => {
     },
 
     loadTickets: async () => {
+      // /support only renders tickets for the *active* assignee — other
+      // assignees show count only via /stats. Skip the network call entirely
+      // when no assignee is selected; the page state stays empty and the
+      // user gets cards-only.
+      if (!get().filters.assigneeEmail) {
+        set({ tickets: [], totalTickets: 0, loading: false })
+        return
+      }
       set({ loading: true, error: null })
       try {
         const qs = filtersToQuery(get().filters)
-        const data = await apiFetch<{ tickets: SupportTicket[] }>(`/support/tickets${qs ? `?${qs}` : ''}`)
-        set({ tickets: data.tickets, loading: false })
+        const data = await apiFetch<{ tickets: SupportTicket[]; total?: number }>(
+          `/support/tickets${qs ? `?${qs}` : ''}`
+        )
+        set({
+          tickets: data.tickets,
+          totalTickets: data.total ?? data.tickets.length,
+          loading: false,
+        })
       } catch (err: any) {
         set({ error: err?.message || 'Failed to load tickets', loading: false })
       }
@@ -282,7 +327,17 @@ export const useSupportStore = create<SupportState>((set, get) => {
 
     loadStats: async () => {
       try {
-        const data = await apiFetch<SupportStats>('/support/stats')
+        // Stats use the same filter set as /tickets EXCEPT assigneeEmail
+        // (the cross-assignee distribution is the whole point) and paging
+        // params (don't apply to aggregate counts).
+        const f = get().filters
+        const statsFilters: SupportFilters = { ...f }
+        delete statsFilters.assigneeEmail
+        delete statsFilters.page
+        delete statsFilters.pageSize
+        delete statsFilters.limit
+        const qs = filtersToQuery(statsFilters)
+        const data = await apiFetch<SupportStats>(`/support/stats${qs ? `?${qs}` : ''}`)
         set({ stats: data })
       } catch { /* non-fatal */ }
     },
@@ -305,16 +360,34 @@ export const useSupportStore = create<SupportState>((set, get) => {
       const filters = { ...PRESETS[preset], ...overrides }
       persistState(preset, filters)
       set({ preset, filters })
-      // Fetch fresh tickets for the new preset
+      // Reload both: tickets for the active assignee + filter-aware tab counts
       get().loadTickets()
+      get().loadStats()
     },
 
     setFilters: (updates) => {
-      const filters = { ...get().filters, ...updates }
-      persistState(get().preset, filters)
-      set({ filters, preset: 'custom' })
-      persistState('custom', filters)
+      // Any filter *criteria* change resets to page 1 — narrowing a list could
+      // otherwise leave the user on a now-empty later page.
+      // Pagination/sort-only updates (next/prev page, page-size selector,
+      // sort header click) preserve the active preset; they only change how
+      // we view the criteria, not the criteria themselves.
+      const isPagingOrSortOnly = Object.keys(updates).every(
+        k => k === 'page' || k === 'pageSize' || k === 'sort' || k === 'sortDir'
+      )
+      const next = isPagingOrSortOnly
+        ? { ...get().filters, ...updates }
+        : { ...get().filters, ...updates, page: 1 }
+      const nextPreset = isPagingOrSortOnly ? get().preset : 'custom'
+      persistState(nextPreset, next)
+      set({ filters: next, preset: nextPreset })
       get().loadTickets()
+      // Stats only need to refetch when criteria actually change (not on
+      // page/sort flips inside an already-narrowed view) AND only when the
+      // change isn't purely an assignee switch (which is just selecting a
+      // tab — the per-assignee counts don't change just because we're
+      // looking at a different person).
+      const onlyAssignee = Object.keys(updates).every(k => k === 'assigneeEmail')
+      if (!isPagingOrSortOnly && !onlyAssignee) get().loadStats()
     },
 
     clearFilter: (key) => {

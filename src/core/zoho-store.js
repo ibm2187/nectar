@@ -213,6 +213,53 @@ class ZohoStore extends EventEmitter {
    *   orderDir?: 'asc'|'desc'          default 'desc'
    */
   listTickets(opts = {}) {
+    const { where, params } = this._buildTicketsWhere(opts);
+
+    const orderKey = opts.orderBy || 'modified';
+    const orderCol = ZOHO_TICKETS_SORT_COLUMNS[orderKey] || 'modifiedAt';
+    let orderDir = (opts.orderDir || 'desc').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    // `age` maps to `createdAt` but the meaning is inverted: a higher age =
+    // an older createdAt. Flip the SQL direction so "Age DESC" returns
+    // oldest-first (highest age first) as users expect.
+    if (orderKey === 'age') {
+      orderDir = orderDir === 'ASC' ? 'DESC' : 'ASC';
+    }
+
+    // Standard list-API contract: clamp pageSize to a sane max, support offset.
+    const limit = Math.min(opts.limit || 500, 5000);
+    const offset = Math.max(0, opts.offset || 0);
+
+    const sql = `
+      SELECT * FROM zoho_tickets
+      ${where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''}
+      ORDER BY ${orderCol} ${orderDir}
+      LIMIT ? OFFSET ?
+    `;
+    const queryParams = [...params, limit, offset];
+
+    const rows = this.db.prepare(sql).all(...queryParams);
+    return rows.map(ticketFromRow);
+  }
+
+  /**
+   * Total count for a `listTickets` query. Same options as listTickets;
+   * `limit`, `offset`, `orderBy`, `orderDir` are ignored.
+   * Used by the paged API to populate the `total` field of the envelope.
+   */
+  countTickets(opts = {}) {
+    const { where, params } = this._buildTicketsWhere(opts);
+    const sql = `
+      SELECT COUNT(*) AS n FROM zoho_tickets
+      ${where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''}
+    `;
+    return this.db.prepare(sql).get(...params).n;
+  }
+
+  /**
+   * Internal: build the shared WHERE clause + params for listTickets / countTickets.
+   * Keeps filter logic DRY and ensures both queries always agree.
+   */
+  _buildTicketsWhere(opts) {
     const where = [];
     const params = [];
 
@@ -252,7 +299,6 @@ class ZohoStore extends EventEmitter {
       params.push(cutoff);
     }
     if (opts.maxAgeDays != null && opts.maxAgeDays >= 0) {
-      // createdAt must be >= (now - maxAgeDays) — newer than the floor
       const cutoff = new Date(Date.now() - opts.maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
       where.push('createdAt >= ?');
       params.push(cutoff);
@@ -266,9 +312,6 @@ class ZohoStore extends EventEmitter {
       where.push('id IN (SELECT DISTINCT zohoTicketId FROM jira_zoho_links)');
     }
     if (opts.fixVersions && opts.fixVersions.length > 0) {
-      // jira_tickets.fixVersions is a JSON array of strings; match each version
-      // by LIKE on the JSON encoding. Implies hasJiraLinks (must have a linked
-      // JIRA to be in any release).
       const conds = opts.fixVersions.map(() => 'j.fixVersions LIKE ?').join(' OR ');
       where.push(`id IN (
         SELECT DISTINCT l.zohoTicketId
@@ -281,43 +324,36 @@ class ZohoStore extends EventEmitter {
       }
     }
 
-    const orderCol = {
-      modified: 'modifiedAt',
-      created: 'createdAt',
-      status: 'status',
-    }[opts.orderBy || 'modified'] || 'modifiedAt';
-    const orderDir = (opts.orderDir || 'desc').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
-
-    const limit = Math.min(opts.limit || 500, 5000);
-
-    const sql = `
-      SELECT * FROM zoho_tickets
-      ${where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''}
-      ORDER BY ${orderCol} ${orderDir}
-      LIMIT ?
-    `;
-    params.push(limit);
-
-    const rows = this.db.prepare(sql).all(...params);
-    return rows.map(ticketFromRow);
+    return { where, params };
   }
 
   /**
-   * Group counts by assignee for summary strip. Optionally filtered to open.
+   * Group counts by assignee for summary strip / per-assignee tabs.
+   *
+   * Accepts the same filter options as `listTickets` (statuses, priorities,
+   * deptPrefixes, accountIds, fixVersions, openOnly, minAgeDays, maxAgeDays,
+   * search, hasJiraLinks). `assigneeEmail` is intentionally ignored — the
+   * point of this method is to produce the cross-assignee distribution.
+   *
    * @returns [{ assigneeEmail, total, openCount }]
    */
-  assigneeStats({ openOnly = false } = {}) {
-    const where = openOnly ? "WHERE (statusType != 'Closed' OR statusType IS NULL)" : '';
-    return this.db.prepare(`
+  assigneeStats(opts = {}) {
+    // Strip assigneeEmail before delegating — counts are grouped BY assignee,
+    // so a single-assignee filter would defeat the purpose.
+    const { assigneeEmail: _ignored, ...rest } = opts;
+    void _ignored;
+    const { where, params } = this._buildTicketsWhere(rest);
+    const sql = `
       SELECT
         assigneeEmail,
         COUNT(*) AS total,
         SUM(CASE WHEN statusType != 'Closed' OR statusType IS NULL THEN 1 ELSE 0 END) AS openCount
       FROM zoho_tickets
-      ${where}
+      ${where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''}
       GROUP BY assigneeEmail
       ORDER BY total DESC
-    `).all();
+    `;
+    return this.db.prepare(sql).all(...params);
   }
 
   /**
@@ -630,4 +666,18 @@ function _deptPrefixOf(ticketNumber) {
   return m ? m[1] : null;
 }
 
+// Whitelist of columns the API may sort `zoho_tickets` by. The query-string
+// orderBy value is keyed against this map — anything outside the whitelist
+// silently falls back to `modifiedAt` to prevent SQL injection via sort param.
+const ZOHO_TICKETS_SORT_COLUMNS = {
+  modified:     'modifiedAt',
+  created:      'createdAt',
+  status:       'status',
+  priority:     'priority',
+  assignee:     'assigneeEmail',
+  ticketNumber: 'ticketNumber',
+  age:          'createdAt', // alias — older first when desc
+};
+
 module.exports = ZohoStore;
+module.exports.ZOHO_TICKETS_SORT_COLUMNS = ZOHO_TICKETS_SORT_COLUMNS;

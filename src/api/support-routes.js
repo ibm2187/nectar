@@ -44,10 +44,16 @@ function createSupportRoutes({ zohoStore, zohoMirrorSync, userStore } = {}) {
   });
 
   // ── GET /support/stats ─────────────────────────────────
-  // Summary strip counts grouped by assignee.
+  // Per-assignee counts. Accepts the same filter params as /tickets so the
+  // tab counts stay in sync with whatever filters the user has applied.
+  // assigneeEmail is intentionally ignored here — the stats endpoint is the
+  // cross-assignee distribution, so filtering to one would defeat it.
   router.get('/stats', (req, res) => {
-    const openOnly = req.query.openOnly === 'true' || req.query.openOnly === '1';
-    const stats = zohoStore.assigneeStats({ openOnly });
+    const opts = _parseListQuery(req.query);
+    delete opts.assigneeEmail;
+    delete opts.limit;
+    delete opts.offset;
+    const stats = zohoStore.assigneeStats(opts);
 
     // Enrich each row with displayName from UserStore
     const enriched = stats.map(row => {
@@ -59,9 +65,14 @@ function createSupportRoutes({ zohoStore, zohoMirrorSync, userStore } = {}) {
         openCount: Number(row.openCount || 0),
       };
     });
+    // matchTotal = sum across the (filter-aware) assignee distribution.
+    // This is what the UI should show as "N match filters", separate from
+    // the absolute database totals (`total` / `open`).
+    const matchTotal = enriched.reduce((sum, a) => sum + a.total, 0);
     res.json({
       total: zohoStore.count(),
       open: zohoStore.countOpen(),
+      matchTotal,
       assignees: enriched,
     });
   });
@@ -79,8 +90,14 @@ function createSupportRoutes({ zohoStore, zohoMirrorSync, userStore } = {}) {
   });
 
   // ── GET /support/tickets ───────────────────────────────
+  // Standard list-API contract:
+  //   query:    page (1-based), pageSize, sort, sortDir, …all filter params
+  //   response: { tickets, total, page, pageSize, hasMore, filters }
+  // Legacy callers may still pass `limit` directly (used by presets/CSV
+  // export); offset is derived from page/pageSize when provided.
   router.get('/tickets', (req, res) => {
     const opts = _parseListQuery(req.query);
+    const total = zohoStore.countTickets(opts);
     const tickets = zohoStore.listTickets(opts);
     const ids = tickets.map(t => t.id);
     const linkCounts = zohoStore.linkCountsByTicketId(ids);
@@ -90,8 +107,15 @@ function createSupportRoutes({ zohoStore, zohoMirrorSync, userStore } = {}) {
       linkedJiraCount: linkCounts.get(t.id) || 0,
       linkedJiras: linkedJiras.get(t.id) || [],
     }));
+    const pageSize = opts.limit;
+    const page = pageSize > 0 ? Math.floor((opts.offset || 0) / pageSize) + 1 : 1;
     res.json({
       tickets: enriched,
+      total,
+      page,
+      pageSize,
+      hasMore: (opts.offset || 0) + enriched.length < total,
+      // legacy fields kept for any client still reading them
       count: enriched.length,
       filters: opts,
     });
@@ -187,9 +211,25 @@ function _parseListQuery(q) {
   if (q.maxAgeDays != null && q.maxAgeDays !== '') opts.maxAgeDays = Number(q.maxAgeDays);
   if (q.fixVersions) opts.fixVersions = _splitList(q.fixVersions);
   if (q.search) opts.search = String(q.search);
-  if (q.limit) opts.limit = Number(q.limit);
-  if (q.orderBy) opts.orderBy = String(q.orderBy);
-  if (q.orderDir) opts.orderDir = String(q.orderDir);
+
+  // ── Paging + sorting (standard list-API contract) ──────
+  // Accept `page`/`pageSize` (1-based), `sort`/`sortDir` from new clients;
+  // fall back to legacy `limit`/`orderBy`/`orderDir` for backwards compat.
+  const pageSize = q.pageSize ? Number(q.pageSize) : (q.limit ? Number(q.limit) : 50);
+  // Cap at 5000 — high enough to fit the full open-ticket set so the
+  // /support page can do per-assignee client-side pagination off a single
+  // fetch. The store layer's listTickets caps to 5000 too.
+  opts.limit = Math.min(Math.max(pageSize, 1), 5000);
+  if (q.page) {
+    const page = Math.max(1, Number(q.page));
+    opts.offset = (page - 1) * opts.limit;
+  } else if (q.offset) {
+    opts.offset = Math.max(0, Number(q.offset));
+  }
+  if (q.sort) opts.orderBy = String(q.sort);
+  else if (q.orderBy) opts.orderBy = String(q.orderBy);
+  if (q.sortDir) opts.orderDir = String(q.sortDir);
+  else if (q.orderDir) opts.orderDir = String(q.orderDir);
   return opts;
 }
 

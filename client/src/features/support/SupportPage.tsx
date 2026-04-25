@@ -1,8 +1,9 @@
 import { useEffect, useMemo } from 'react'
-import { useSupportStore, type SupportPreset, type SupportTicket } from '../../stores/supportStore'
+import { useSupportStore, type SupportPreset, type SupportTicket, type SupportFilters } from '../../stores/supportStore'
 import { useAuthStore } from '../../stores/authStore'
 import { useWsStore } from '../../stores/wsStore'
 import { MultiSelectPopover } from '../../components/MultiSelectPopover'
+import { Paginator } from '../../components/Paginator'
 import { JiraLinkHoverCard } from './JiraLinkHoverCard'
 import { Card, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
@@ -109,6 +110,7 @@ const AGE_BUCKETS: { label: string; min?: number; max?: number }[] = [
 
 export function SupportPage() {
   const tickets = useSupportStore(s => s.tickets)
+  const totalTickets = useSupportStore(s => s.totalTickets)
   const stats = useSupportStore(s => s.stats)
   const syncStatus = useSupportStore(s => s.syncStatus)
   const preset = useSupportStore(s => s.preset)
@@ -138,60 +140,27 @@ export function SupportPage() {
     loadAll()
   }, [loadAll])
 
-  // Group tickets by assignee for the card layout
-  const byAssignee = useMemo(() => {
-    const map = new Map<string, SupportTicket[]>()
-    for (const t of tickets) {
-      const key = t.assigneeEmail || '__unassigned__'
-      if (!map.has(key)) map.set(key, [])
-      map.get(key)!.push(t)
-    }
-    // Sort: unassigned last; then by ticket count desc
-    return [...map.entries()].sort((a, b) => {
-      if (a[0] === '__unassigned__') return 1
-      if (b[0] === '__unassigned__') return -1
-      return b[1].length - a[1].length
-    })
-  }, [tickets])
-
   const activeAssigneeFilter = filters.assigneeEmail || null
 
-  // Filter-aware assignee distribution for tabs — derived from the current
-  // `tickets` array so counts mirror whatever filters are applied. When an
-  // assignee is already selected the API returns only that person's rows, so
-  // we fall back to the stats list (un-filtered) for the visible tab set
-  // and overlay counts where we have them.
+  // Tab/card list comes from the filter-aware /support/stats endpoint.
+  // Each row already has the per-assignee count for the current filter set,
+  // and the page only fetches *tickets* for the active assignee — so this
+  // scales to any number of matching tickets.
   const filterAwareAssignees = useMemo(() => {
-    const counts = new Map<string, number>()
-    const names = new Map<string, string>()
-    for (const t of tickets) {
-      if (!t.assigneeEmail) continue
-      counts.set(t.assigneeEmail, (counts.get(t.assigneeEmail) || 0) + 1)
-      if (t.assigneeName) names.set(t.assigneeEmail, t.assigneeName)
-    }
-    // When an assignee filter is active, surface every assignee from stats so
-    // the user can switch between people without losing context.
-    const baseList = activeAssigneeFilter
-      ? (stats?.assignees ?? []).filter(s => s.assigneeEmail).map(s => ({
-          assigneeEmail: s.assigneeEmail!,
-          displayName: s.displayName || s.assigneeEmail!,
-          count: counts.get(s.assigneeEmail!) ?? 0,
-        }))
-      : [...counts.entries()].map(([email, count]) => ({
-          assigneeEmail: email,
-          displayName: names.get(email) || email,
-          count,
-        }))
-    return baseList
-      .filter(a => a.count > 0 || a.assigneeEmail === activeAssigneeFilter)
+    return (stats?.assignees ?? [])
+      .filter(a => a.assigneeEmail && a.total > 0)
+      .map(a => ({
+        assigneeEmail: a.assigneeEmail!,
+        displayName: a.displayName || a.assigneeEmail!,
+        count: a.total,
+      }))
       .sort((a, b) => b.count - a.count)
-  }, [tickets, stats, activeAssigneeFilter])
+  }, [stats])
 
-  // "All" count — when an assignee filter is active, the broader total comes
-  // from stats; otherwise tickets.length already reflects all filters.
-  const allTabCount = activeAssigneeFilter
-    ? (stats?.open ?? tickets.length)
-    : tickets.length
+  // "All" count = sum of filter-aware per-assignee totals (matchTotal from
+  // the API). Falls back to the assignees array sum when an older deploy
+  // omits the field.
+  const allTabCount = stats?.matchTotal ?? filterAwareAssignees.reduce((s, a) => s + a.count, 0)
 
   // Release options for the filter — pull non-shipped versions from the WS
   // releases store, dedup by version, sort by most-recent first.
@@ -374,9 +343,14 @@ export function SupportPage() {
       {/* Summary strip */}
       {stats && (
         <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-          <span><strong className="text-foreground">{stats.total}</strong> tickets</span>
-          <span><strong className="text-foreground">{stats.open}</strong> open</span>
-          <span><strong className="text-foreground">{tickets.length}</strong> in current view</span>
+          <span><strong className="text-foreground">{stats.total.toLocaleString()}</strong> tickets</span>
+          <span><strong className="text-foreground">{stats.open.toLocaleString()}</strong> open</span>
+          <span>
+            <strong className="text-foreground">{totalTickets.toLocaleString()}</strong> match filters
+            {totalTickets > tickets.length && (
+              <span className="ml-1 text-xs">· showing {tickets.length}</span>
+            )}
+          </span>
         </div>
       )}
 
@@ -411,7 +385,7 @@ export function SupportPage() {
 
       {/* Per-assignee grouped table */}
       <div className="space-y-4">
-        {byAssignee.length === 0 && !loading && (
+        {filterAwareAssignees.length === 0 && !loading && (
           <Card>
             <CardContent className="p-8 text-center text-muted-foreground">
               No tickets match the current filters.
@@ -419,42 +393,109 @@ export function SupportPage() {
           </Card>
         )}
 
-        {byAssignee.map(([key, group]) => {
-          const first = group[0]
-          const assigneeLabel = key === '__unassigned__'
-            ? 'Unassigned'
-            : first.assigneeName || first.assigneeEmail || key
-          const todayCount = group.filter(t => (t.ageDays ?? 0) >= 30).length
+        {/* Only the active assignee's card is shown — the tabs above act as
+            the navigation. No peer-card noise. */}
+        {activeAssigneeFilter && (() => {
+          const active = filterAwareAssignees.find(a => a.assigneeEmail === activeAssigneeFilter)
+          if (!active) return null
           return (
-            <Card key={key}>
-              <CardContent className="p-0">
-                <div className="px-4 py-3 flex items-center justify-between border-b">
-                  <div>
-                    <span className="font-medium">{assigneeLabel}</span>
-                    <span className="ml-2 text-sm text-muted-foreground">{group.length} tickets</span>
-                  </div>
-                  {todayCount > 0 && (
-                    <Badge variant="outline" className="text-xs">{todayCount} stale (&gt;30d)</Badge>
-                  )}
-                </div>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-xs uppercase text-muted-foreground">
-                      <th className="text-left px-4 py-2 w-20">Age</th>
-                      <th className="text-left px-2 py-2 w-28">Ticket</th>
-                      <th className="text-left px-2 py-2 w-32">JIRA</th>
-                      <th className="text-left px-2 py-2 w-36">JIRA Status</th>
-                      <th className="text-left px-2 py-2 w-28">JIRA Health</th>
-                      <th className="text-left px-2 py-2 w-36">JIRA Releases</th>
-                      <th className="text-left px-2 py-2">Subject</th>
-                      <th className="text-left px-2 py-2 w-48">Account</th>
-                      <th className="text-left px-2 py-2 w-40">Category</th>
-                      <th className="text-left px-2 py-2 w-44">Status</th>
-                      <th className="text-left px-2 py-2 w-24">Priority</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {group.map(t => {
+            <AssigneeCard
+              key={active.assigneeEmail}
+              assigneeKey={active.assigneeEmail}
+              displayName={active.displayName}
+              tickets={tickets}
+              ticketsTotal={totalTickets}
+              page={filters.page || 1}
+              pageSize={filters.pageSize || 25}
+              filters={filters}
+              setFilters={setFilters}
+              onPageChange={(p) => setFilters({ page: p })}
+            />
+          )
+        })()}
+        {!activeAssigneeFilter && filterAwareAssignees.length > 0 && (
+          <Card>
+            <CardContent className="p-8 text-center text-muted-foreground text-sm">
+              Pick a person from the tabs above to see their tickets.
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {/* Pagination is rendered per-assignee Card; see AssigneeCard. */}
+    </div>
+  )
+}
+
+// Per-assignee table card. Drives backend pagination via `onPageChange`.
+// /support only ever renders the *active* assignee's card — peer cards are
+// gone in favor of the tab pills at the top of the page.
+function AssigneeCard({
+  assigneeKey,
+  displayName,
+  tickets,
+  ticketsTotal,
+  page,
+  pageSize,
+  filters,
+  setFilters,
+  onPageChange,
+}: {
+  assigneeKey: string
+  displayName: string
+  /** The actual ticket rows to render (paged from the backend). */
+  tickets: SupportTicket[]
+  /** Total matching for the active assignee (from /tickets envelope). */
+  ticketsTotal: number
+  page: number
+  pageSize: number
+  filters: SupportFilters
+  setFilters: (updates: Partial<SupportFilters>) => void
+  onPageChange: (p: number) => void
+}) {
+  const assigneeLabel = assigneeKey === '__unassigned__' ? 'Unassigned' : displayName
+  const staleCount = tickets.filter(t => (t.ageDays ?? 0) >= 30).length
+
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <div className="px-4 py-3 flex items-center justify-between border-b">
+          <div>
+            <span className="font-medium">{assigneeLabel}</span>
+            <span className="ml-2 text-sm text-muted-foreground">{ticketsTotal.toLocaleString()} tickets</span>
+          </div>
+          {staleCount > 0 && (
+            <Badge variant="outline" className="text-xs">{staleCount} stale (&gt;30d) on this page</Badge>
+          )}
+        </div>
+        {ticketsTotal > pageSize && (
+          <div className="px-4 py-2 border-b bg-muted/20">
+            <Paginator
+              page={page}
+              pageSize={pageSize}
+              total={ticketsTotal}
+              onPageChange={onPageChange}
+            />
+          </div>
+        )}
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-xs uppercase text-muted-foreground">
+              <SortableSupportTh sortKey="age" label="Age" className="w-20 px-4" filters={filters} setFilters={setFilters} />
+              <SortableSupportTh sortKey="ticketNumber" label="Ticket" className="w-28" filters={filters} setFilters={setFilters} />
+              <th className="text-left px-2 py-2 w-32">JIRA</th>
+              <th className="text-left px-2 py-2 w-36">JIRA Status</th>
+              <th className="text-left px-2 py-2 w-28">JIRA Health</th>
+              <th className="text-left px-2 py-2 w-36">JIRA Releases</th>
+              <th className="text-left px-2 py-2">Subject</th>
+              <th className="text-left px-2 py-2 w-48">Account</th>
+              <th className="text-left px-2 py-2 w-40">Category</th>
+              <SortableSupportTh sortKey="status" label="Status" className="w-44" filters={filters} setFilters={setFilters} />
+              <SortableSupportTh sortKey="priority" label="Priority" className="w-24" filters={filters} setFilters={setFilters} />
+            </tr>
+          </thead>
+          <tbody>
+            {tickets.map(t => {
                       const age = fmtAge(t.ageDays)
                       return (
                         <tr key={t.id} className="border-b last:border-b-0 hover:bg-muted/50">
@@ -567,18 +608,60 @@ export function SupportPage() {
                         </tr>
                       )
                     })}
-                  </tbody>
-                </table>
-              </CardContent>
-            </Card>
-          )
-        })}
-      </div>
-    </div>
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
   )
 }
 
 // ── Small components ───────────────────────────────────────
+
+// Click-to-sort table header that drives `filters.sort` / `filters.sortDir`.
+// Three-state cycle: unset → desc → asc → unset.
+function SortableSupportTh({
+  sortKey,
+  label,
+  className,
+  filters,
+  setFilters,
+}: {
+  sortKey: string
+  label: string
+  className?: string
+  filters: { sort?: string; sortDir?: 'asc' | 'desc' }
+  setFilters: (f: { sort?: string; sortDir?: 'asc' | 'desc'; page?: number }) => void
+}) {
+  const active = filters.sort === sortKey
+  const dir = active ? filters.sortDir : null
+  const arrow = dir === 'asc' ? '▲' : dir === 'desc' ? '▼' : ''
+
+  function onClick() {
+    if (!active) {
+      setFilters({ sort: sortKey, sortDir: 'desc', page: 1 })
+    } else if (dir === 'desc') {
+      setFilters({ sort: sortKey, sortDir: 'asc', page: 1 })
+    } else {
+      setFilters({ sort: undefined, sortDir: undefined, page: 1 })
+    }
+  }
+
+  return (
+    <th className={cn('text-left px-2 py-2', className)}>
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          'inline-flex items-center gap-1 text-xs uppercase tracking-wide transition-colors',
+          active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+        )}
+      >
+        <span>{label}</span>
+        <span className={cn('text-[8px] opacity-60', !arrow && 'invisible')}>{arrow || '▼'}</span>
+      </button>
+    </th>
+  )
+}
 
 function ChipToggle({ label, active, onToggle }: { label: string; active: boolean; onToggle: () => void }) {
   return (
