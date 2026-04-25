@@ -87,6 +87,13 @@ class ZohoStore extends EventEmitter {
     `);
     this._getAccount = this.db.prepare('SELECT * FROM zoho_accounts WHERE id = ?');
     this._listAccounts = this.db.prepare('SELECT * FROM zoho_accounts ORDER BY name');
+    this._listDeptPrefixes = this.db.prepare(`
+      SELECT deptPrefix, COUNT(*) AS count
+      FROM zoho_tickets
+      WHERE deptPrefix IS NOT NULL AND deptPrefix != ''
+      GROUP BY deptPrefix
+      ORDER BY deptPrefix
+    `);
 
     // ── Contacts ────────────────────────────────────────────
     this._upsertContact = this.db.prepare(`
@@ -198,6 +205,8 @@ class ZohoStore extends EventEmitter {
    *   openOnly?: boolean               shortcut for statusType != 'Closed'
    *   closedOnly?: boolean
    *   minAgeDays?: number              ticket age floor (now - createdAt)
+   *   maxAgeDays?: number              ticket age ceiling — pairs with minAgeDays for windowed buckets
+   *   fixVersions?: string[]           filter to tickets whose linked JIRA(s) ship in any of these versions
    *   search?: string                  LIKE match on subject or ticketNumber
    *   limit?: number                   default 500
    *   orderBy?: 'modified'|'created'|'age'|'status'  default 'modified'
@@ -242,6 +251,12 @@ class ZohoStore extends EventEmitter {
       where.push('createdAt <= ?');
       params.push(cutoff);
     }
+    if (opts.maxAgeDays != null && opts.maxAgeDays >= 0) {
+      // createdAt must be >= (now - maxAgeDays) — newer than the floor
+      const cutoff = new Date(Date.now() - opts.maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+      where.push('createdAt >= ?');
+      params.push(cutoff);
+    }
     if (opts.search) {
       const pat = `%${opts.search}%`;
       where.push('(subject LIKE ? OR ticketNumber LIKE ?)');
@@ -249,6 +264,21 @@ class ZohoStore extends EventEmitter {
     }
     if (opts.hasJiraLinks) {
       where.push('id IN (SELECT DISTINCT zohoTicketId FROM jira_zoho_links)');
+    }
+    if (opts.fixVersions && opts.fixVersions.length > 0) {
+      // jira_tickets.fixVersions is a JSON array of strings; match each version
+      // by LIKE on the JSON encoding. Implies hasJiraLinks (must have a linked
+      // JIRA to be in any release).
+      const conds = opts.fixVersions.map(() => 'j.fixVersions LIKE ?').join(' OR ');
+      where.push(`id IN (
+        SELECT DISTINCT l.zohoTicketId
+        FROM jira_zoho_links l
+        JOIN jira_tickets j ON j.key = l.jiraKey
+        WHERE ${conds}
+      )`);
+      for (const v of opts.fixVersions) {
+        params.push(`%"${v}"%`);
+      }
     }
 
     const orderCol = {
@@ -416,6 +446,8 @@ class ZohoStore extends EventEmitter {
   }
   getAccount(id) { return this._getAccount.get(id) || null; }
   listAccounts() { return this._listAccounts.all(); }
+  /** Returns [{ deptPrefix: 'VHC', count: 1234 }, ...] for ticket-prefix filtering. */
+  listDeptPrefixes() { return this._listDeptPrefixes.all(); }
 
   upsertContact(contact) {
     this._upsertContact.run({

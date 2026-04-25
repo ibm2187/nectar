@@ -20,6 +20,7 @@ function resetStore() {
     stats: null,
     syncStatus: null,
     accounts: [],
+    departments: [],
     preset: 'standup',
     filters: { ...SUPPORT_PRESETS.standup },
     loading: false,
@@ -110,17 +111,42 @@ describe('supportStore', () => {
       expect(url).toContain('statuses=Investigating')
       expect(url).toContain('openOnly=true')
     })
+
+    it('emits new filters: accountIds, deptPrefixes, minAgeDays (incl. 0), maxAgeDays', async () => {
+      const fetchMock = vi.fn(async () => ({
+        ok: true, status: 200,
+        headers: { get: () => 'application/json' },
+        json: async () => ({ tickets: [] }),
+      })) as any
+      globalThis.fetch = fetchMock
+
+      useSupportStore.setState({
+        filters: {
+          accountIds: ['acct-1', 'acct-2'],
+          deptPrefixes: ['VHC'],
+          minAgeDays: 0,    // age-bucket "0–15d" — must not be dropped by truthy check
+          maxAgeDays: 15,
+        },
+      })
+      await useSupportStore.getState().loadTickets()
+
+      const url = fetchMock.mock.calls[0][0] as string
+      expect(url).toContain('accountIds=acct-1%2Cacct-2')
+      expect(url).toContain('deptPrefixes=VHC')
+      expect(url).toContain('minAgeDays=0')
+      expect(url).toContain('maxAgeDays=15')
+    })
   })
 
   describe('loadAll', () => {
-    it('fires all four lookup endpoints in parallel', async () => {
+    it('fires all five lookup endpoints in parallel', async () => {
       const calls: string[] = []
       globalThis.fetch = vi.fn(async (url: string) => {
         calls.push(url)
         return {
           ok: true, status: 200,
           headers: { get: () => 'application/json' },
-          json: async () => ({ tickets: [], assignees: [], accounts: [], ticketCount: 0 }),
+          json: async () => ({ tickets: [], assignees: [], accounts: [], departments: [], ticketCount: 0 }),
         } as any
       }) as any
 
@@ -130,6 +156,16 @@ describe('supportStore', () => {
       expect(paths).toContain('/api/support/sync-status')
       expect(paths).toContain('/api/support/stats')
       expect(paths).toContain('/api/support/accounts')
+      expect(paths).toContain('/api/support/departments')
+    })
+
+    it('loadDepartments populates departments state', async () => {
+      mockFetch({ departments: [{ deptPrefix: 'VHC', count: 12 }, { deptPrefix: 'BYD', count: 7 }] })
+      await useSupportStore.getState().loadDepartments()
+      expect(useSupportStore.getState().departments).toEqual([
+        { deptPrefix: 'VHC', count: 12 },
+        { deptPrefix: 'BYD', count: 7 },
+      ])
     })
   })
 

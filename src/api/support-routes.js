@@ -71,6 +71,13 @@ function createSupportRoutes({ zohoStore, zohoMirrorSync, userStore } = {}) {
     res.json({ accounts: zohoStore.listAccounts() });
   });
 
+  // ── GET /support/departments ───────────────────────────
+  // Returns distinct ticket-number prefixes (VHC, BYD, THC, VIV) with counts
+  // for the Department filter dropdown.
+  router.get('/departments', (req, res) => {
+    res.json({ departments: zohoStore.listDeptPrefixes() });
+  });
+
   // ── GET /support/tickets ───────────────────────────────
   router.get('/tickets', (req, res) => {
     const opts = _parseListQuery(req.query);
@@ -176,7 +183,9 @@ function _parseListQuery(q) {
   if (q.openOnly === 'true' || q.openOnly === '1') opts.openOnly = true;
   if (q.closedOnly === 'true' || q.closedOnly === '1') opts.closedOnly = true;
   if (q.hasJiraLinks === 'true' || q.hasJiraLinks === '1') opts.hasJiraLinks = true;
-  if (q.minAgeDays) opts.minAgeDays = Number(q.minAgeDays);
+  if (q.minAgeDays != null && q.minAgeDays !== '') opts.minAgeDays = Number(q.minAgeDays);
+  if (q.maxAgeDays != null && q.maxAgeDays !== '') opts.maxAgeDays = Number(q.maxAgeDays);
+  if (q.fixVersions) opts.fixVersions = _splitList(q.fixVersions);
   if (q.search) opts.search = String(q.search);
   if (q.limit) opts.limit = Number(q.limit);
   if (q.orderBy) opts.orderBy = String(q.orderBy);

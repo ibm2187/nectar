@@ -1,6 +1,8 @@
 import { useEffect, useMemo } from 'react'
 import { useSupportStore, type SupportPreset, type SupportTicket } from '../../stores/supportStore'
 import { useAuthStore } from '../../stores/authStore'
+import { useWsStore } from '../../stores/wsStore'
+import { MultiSelectPopover } from '../../components/MultiSelectPopover'
 import { JiraLinkHoverCard } from './JiraLinkHoverCard'
 import { Card, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
@@ -38,6 +40,34 @@ function statusCls(statusType: string | null): string {
   }
 }
 
+// Health badges (matches HoverCard palette so the inline column reads consistent)
+const JIRA_HEALTH_COLOR: Record<string, string> = {
+  attention:    'bg-red-500/15 text-red-700 dark:text-red-400 border-red-500/30',
+  'awaiting-cp':'bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30',
+  'in-qa':      'bg-purple-500/15 text-purple-700 dark:text-purple-400 border-purple-500/30',
+  'in-dev':     'bg-blue-500/15 text-blue-700 dark:text-blue-400 border-blue-500/30',
+  done:         'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30',
+}
+const JIRA_HEALTH_LABEL: Record<string, string> = {
+  attention: 'Attention',
+  'awaiting-cp': 'Awaiting CP',
+  'in-qa': 'In QA',
+  'in-dev': 'In Dev',
+  done: 'Done',
+}
+
+// Pick the most-relevant health for a linked JIRA: worst non-done over its truth rows;
+// fall back to the first truth row, or null when no truth exists yet.
+function pickHealth(linked: { truth?: { healthCategory: string | null }[] }): string | null {
+  const truth = linked.truth || []
+  if (truth.length === 0) return null
+  const PRIORITY = ['attention', 'awaiting-cp', 'in-qa', 'in-dev', 'done']
+  for (const cat of PRIORITY) {
+    if (truth.some(t => t.healthCategory === cat)) return cat
+  }
+  return truth[0].healthCategory ?? null
+}
+
 function fmtSyncAgo(iso: string | null): string {
   if (!iso) return 'never'
   const ms = Date.now() - new Date(iso).getTime()
@@ -64,6 +94,17 @@ const PRESET_ORDER: SupportPreset[] = ['standup', 'allOpen', 'stale', 'myTickets
 const STATUS_CHIPS = ['Investigating', 'Waiting for Viv Response', 'On Hold']
 const PRIORITY_CHIPS = ['Urgent', 'High', 'Medium', 'Low']
 
+// Age buckets — chip selector that maps to (minAgeDays, maxAgeDays).
+// Mutually exclusive: clicking one replaces any prior bucket; click again to clear.
+const AGE_BUCKETS: { label: string; min?: number; max?: number }[] = [
+  { label: '0–15d',  min: 0,  max: 15 },
+  { label: '16–30d', min: 16, max: 30 },
+  { label: '31–45d', min: 31, max: 45 },
+  { label: '46–60d', min: 46, max: 60 },
+  { label: '60+d',   min: 60 },
+]
+
+
 // ── Page ────────────────────────────────────────────────────
 
 export function SupportPage() {
@@ -72,6 +113,9 @@ export function SupportPage() {
   const syncStatus = useSupportStore(s => s.syncStatus)
   const preset = useSupportStore(s => s.preset)
   const filters = useSupportStore(s => s.filters)
+  const accounts = useSupportStore(s => s.accounts)
+  const departments = useSupportStore(s => s.departments)
+  const releases = useWsStore(s => s.releases)
   const loading = useSupportStore(s => s.loading)
   const error = useSupportStore(s => s.error)
   const loadAll = useSupportStore(s => s.loadAll)
@@ -111,6 +155,57 @@ export function SupportPage() {
   }, [tickets])
 
   const activeAssigneeFilter = filters.assigneeEmail || null
+
+  // Filter-aware assignee distribution for tabs — derived from the current
+  // `tickets` array so counts mirror whatever filters are applied. When an
+  // assignee is already selected the API returns only that person's rows, so
+  // we fall back to the stats list (un-filtered) for the visible tab set
+  // and overlay counts where we have them.
+  const filterAwareAssignees = useMemo(() => {
+    const counts = new Map<string, number>()
+    const names = new Map<string, string>()
+    for (const t of tickets) {
+      if (!t.assigneeEmail) continue
+      counts.set(t.assigneeEmail, (counts.get(t.assigneeEmail) || 0) + 1)
+      if (t.assigneeName) names.set(t.assigneeEmail, t.assigneeName)
+    }
+    // When an assignee filter is active, surface every assignee from stats so
+    // the user can switch between people without losing context.
+    const baseList = activeAssigneeFilter
+      ? (stats?.assignees ?? []).filter(s => s.assigneeEmail).map(s => ({
+          assigneeEmail: s.assigneeEmail!,
+          displayName: s.displayName || s.assigneeEmail!,
+          count: counts.get(s.assigneeEmail!) ?? 0,
+        }))
+      : [...counts.entries()].map(([email, count]) => ({
+          assigneeEmail: email,
+          displayName: names.get(email) || email,
+          count,
+        }))
+    return baseList
+      .filter(a => a.count > 0 || a.assigneeEmail === activeAssigneeFilter)
+      .sort((a, b) => b.count - a.count)
+  }, [tickets, stats, activeAssigneeFilter])
+
+  // "All" count — when an assignee filter is active, the broader total comes
+  // from stats; otherwise tickets.length already reflects all filters.
+  const allTabCount = activeAssigneeFilter
+    ? (stats?.open ?? tickets.length)
+    : tickets.length
+
+  // Release options for the filter — pull non-shipped versions from the WS
+  // releases store, dedup by version, sort by most-recent first.
+  const releaseOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const items: { version: string; state: string }[] = []
+    for (const r of releases) {
+      if (r.state === 'done') continue
+      if (!r.version || seen.has(r.version)) continue
+      seen.add(r.version)
+      items.push({ version: r.version, state: r.state })
+    }
+    return items.sort((a, b) => a.version.localeCompare(b.version, undefined, { numeric: true }))
+  }, [releases])
 
   return (
     <div className="w-full space-y-4">
@@ -191,6 +286,69 @@ export function SupportPage() {
               />
             ))}
           </div>
+          {departments.length > 0 && (
+            <div className="flex flex-wrap gap-2 items-center">
+              <span className="text-xs uppercase tracking-wide text-muted-foreground mr-1">Department:</span>
+              {departments.map(d => (
+                <ChipToggle
+                  key={d.deptPrefix}
+                  label={`${d.deptPrefix} (${d.count})`}
+                  active={filters.deptPrefixes?.includes(d.deptPrefix) || false}
+                  onToggle={() => {
+                    const cur = filters.deptPrefixes || []
+                    const next = cur.includes(d.deptPrefix)
+                      ? cur.filter(x => x !== d.deptPrefix)
+                      : [...cur, d.deptPrefix]
+                    setFilters({ deptPrefixes: next.length > 0 ? next : undefined })
+                  }}
+                />
+              ))}
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2 items-center">
+            <span className="text-xs uppercase tracking-wide text-muted-foreground mr-1">Age:</span>
+            {AGE_BUCKETS.map(b => {
+              const active = filters.minAgeDays === b.min && filters.maxAgeDays === b.max
+              return (
+                <ChipToggle
+                  key={b.label}
+                  label={b.label}
+                  active={active}
+                  onToggle={() => {
+                    if (active) {
+                      setFilters({ minAgeDays: undefined, maxAgeDays: undefined })
+                    } else {
+                      setFilters({ minAgeDays: b.min, maxAgeDays: b.max })
+                    }
+                  }}
+                />
+              )
+            })}
+          </div>
+          <div className="flex flex-wrap gap-2 items-center">
+            <span className="text-xs uppercase tracking-wide text-muted-foreground mr-1">Account:</span>
+            <MultiSelectPopover
+              items={accounts.map(a => ({ id: a.id, label: a.name || a.id }))}
+              selected={filters.accountIds || []}
+              onChange={(ids) => setFilters({ accountIds: ids.length > 0 ? ids : undefined })}
+              placeholder="All accounts"
+              searchPlaceholder="Search accounts…"
+              noun="accounts"
+            />
+          </div>
+          {releaseOptions.length > 0 && (
+            <div className="flex flex-wrap gap-2 items-center">
+              <span className="text-xs uppercase tracking-wide text-muted-foreground mr-1">Release:</span>
+              <MultiSelectPopover
+                items={releaseOptions.map(r => ({ id: r.version, label: r.version }))}
+                selected={filters.fixVersions || []}
+                onChange={(ids) => setFilters({ fixVersions: ids.length > 0 ? ids : undefined })}
+                placeholder="All releases"
+                searchPlaceholder="Search releases…"
+                noun="releases"
+              />
+            </div>
+          )}
           <div className="flex items-center gap-2 flex-wrap">
             <Input
               type="text"
@@ -222,23 +380,23 @@ export function SupportPage() {
         </div>
       )}
 
-      {/* Assignee tabs */}
-      {stats && stats.assignees.length > 0 && (
+      {/* Assignee tabs — counts derive from current tickets array so they
+          stay in sync with active filters. Tab labels show "(count in view)". */}
+      {filterAwareAssignees.length > 0 && (
         <div className="flex items-center gap-1 flex-wrap border-b pb-2">
           <TabButton
-            label={`All (${stats.assignees.reduce((a, s) => a + s.openCount, 0)})`}
+            label={`All (${allTabCount})`}
             active={!activeAssigneeFilter}
             onClick={() => setFilters({ assigneeEmail: undefined })}
           />
-          {stats.assignees
-            .filter(s => s.assigneeEmail && s.openCount > 0)
-            .slice(0, 10)
+          {filterAwareAssignees
+            .slice(0, 12)
             .map(a => (
               <TabButton
-                key={a.assigneeEmail!}
-                label={`${a.displayName || a.assigneeEmail} (${a.openCount})`}
+                key={a.assigneeEmail}
+                label={`${a.displayName} (${a.count})`}
                 active={activeAssigneeFilter === a.assigneeEmail}
-                onClick={() => setFilters({ assigneeEmail: a.assigneeEmail! })}
+                onClick={() => setFilters({ assigneeEmail: a.assigneeEmail })}
               />
             ))}
         </div>
@@ -284,7 +442,10 @@ export function SupportPage() {
                     <tr className="border-b text-xs uppercase text-muted-foreground">
                       <th className="text-left px-4 py-2 w-20">Age</th>
                       <th className="text-left px-2 py-2 w-28">Ticket</th>
-                      <th className="text-left px-2 py-2 w-56">JIRA</th>
+                      <th className="text-left px-2 py-2 w-32">JIRA</th>
+                      <th className="text-left px-2 py-2 w-36">JIRA Status</th>
+                      <th className="text-left px-2 py-2 w-28">JIRA Health</th>
+                      <th className="text-left px-2 py-2 w-36">JIRA Releases</th>
                       <th className="text-left px-2 py-2">Subject</th>
                       <th className="text-left px-2 py-2 w-48">Account</th>
                       <th className="text-left px-2 py-2 w-40">Category</th>
@@ -314,22 +475,63 @@ export function SupportPage() {
                               <span className="font-mono text-xs">{t.ticketNumber}</span>
                             )}
                           </td>
-                          <td className="px-2 py-2">
+                          <td className="px-2 py-2 align-top">
                             {(t.linkedJiras ?? []).length > 0 ? (
                               <div className="flex flex-col gap-0.5 text-xs">
                                 {(t.linkedJiras ?? []).slice(0, 3).map(l => (
-                                  <div key={l.jiraKey} className="flex items-center gap-1 flex-wrap">
+                                  <div key={l.jiraKey} className="leading-snug">
                                     <JiraLinkHoverCard link={l} />
-                                    {l.status && (
-                                      <span className="text-[10px] text-muted-foreground" title={l.statusCategory || undefined}>
-                                        {l.status}
-                                      </span>
-                                    )}
                                   </div>
                                 ))}
                                 {(t.linkedJiraCount ?? 0) > 3 && (
                                   <span className="text-[10px] text-muted-foreground">+{(t.linkedJiraCount ?? 0) - 3} more</span>
                                 )}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-2 align-top">
+                            {(t.linkedJiras ?? []).length > 0 ? (
+                              <div className="flex flex-col gap-0.5 text-xs">
+                                {(t.linkedJiras ?? []).slice(0, 3).map(l => (
+                                  <div key={l.jiraKey} className="leading-snug text-muted-foreground" title={l.statusCategory || undefined}>
+                                    {l.status || '—'}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-2 align-top">
+                            {(t.linkedJiras ?? []).length > 0 ? (
+                              <div className="flex flex-col gap-0.5 text-xs">
+                                {(t.linkedJiras ?? []).slice(0, 3).map(l => {
+                                  const hc = pickHealth(l)
+                                  if (!hc) return <div key={l.jiraKey} className="text-muted-foreground">—</div>
+                                  return (
+                                    <span
+                                      key={l.jiraKey}
+                                      className={cn('inline-block px-1.5 rounded border text-[10px] w-fit', JIRA_HEALTH_COLOR[hc] || JIRA_HEALTH_COLOR['in-dev'])}
+                                    >
+                                      {JIRA_HEALTH_LABEL[hc] || hc}
+                                    </span>
+                                  )
+                                })}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-2 align-top">
+                            {(t.linkedJiras ?? []).length > 0 ? (
+                              <div className="flex flex-col gap-0.5 text-xs">
+                                {(t.linkedJiras ?? []).slice(0, 3).map(l => (
+                                  <div key={l.jiraKey} className="leading-snug text-muted-foreground truncate" title={l.fixVersions.join(', ')}>
+                                    {l.fixVersions.length > 0 ? l.fixVersions.join(', ') : '—'}
+                                  </div>
+                                ))}
                               </div>
                             ) : (
                               <span className="text-xs text-muted-foreground">—</span>
@@ -409,3 +611,4 @@ function TabButton({ label, active, onClick }: { label: string; active: boolean;
     </button>
   )
 }
+

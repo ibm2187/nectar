@@ -13,6 +13,7 @@ import { JiraLink } from '../../components/JiraLink'
 import { OutIcon } from '../../components/PersonBadge'
 import { STATUS_GROUPS, type StatusGroup } from '../../lib/status-colors'
 import { toLocalDateKey } from '../../lib/date'
+import { MultiSelectPopover } from '../../components/MultiSelectPopover'
 
 interface ReleaseColumn {
   repo: string
@@ -114,6 +115,21 @@ interface FilterOptions {
   projects: string[]
   products: string[]
   people: string[]
+}
+
+// Dedup release columns by version (the same version can appear across multiple
+// repos) and format a label that includes the JIRA release date when present.
+function dedupReleaseItems(columns: ReleaseColumn[]): { id: string; label: string }[] {
+  const seen = new Map<string, ReleaseColumn>()
+  for (const c of columns) {
+    if (!seen.has(c.version)) seen.set(c.version, c)
+  }
+  return [...seen.values()]
+    .sort((a, b) => a.version.localeCompare(b.version, undefined, { numeric: true }))
+    .map(c => ({
+      id: c.version,
+      label: c.jiraReleaseDate ? `${c.version} · ${c.jiraReleaseDate}` : c.version,
+    }))
 }
 
 // ── Page ───────────────────────────────────────────────
@@ -376,12 +392,18 @@ function ReleasesTicketsTab() {
           <SavedViews storageKey="nectar-saved-views-tickets" />
         </div>
 
-        {/* Release filter chips — horizontal scroll, compact */}
-        <ReleaseChips
-          columns={data.releases.filter(c => !repoFilter || c.repo === repoFilter)}
-          selected={selectedReleases}
-          onToggle={toggleRelease}
-        />
+        {/* Release filter — popover dropdown, dedup by version across repos */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs uppercase tracking-wide text-muted-foreground">Release:</span>
+          <MultiSelectPopover
+            items={dedupReleaseItems(data.releases.filter(c => !repoFilter || c.repo === repoFilter))}
+            selected={selectedReleases ? Array.from(selectedReleases) : []}
+            onChange={(versions) => updateParams({ release: versions.length ? versions.join(',') : null })}
+            placeholder="All releases"
+            searchPlaceholder="Search releases…"
+            noun="releases"
+          />
+        </div>
       </div>
 
       {/* Tickets table */}
@@ -642,42 +664,23 @@ function ServerTicketTable({
         ))}
       </div>
 
-      {/* Release filter chips (same as Home TicketsTable) */}
+      {/* Release filter — popover dropdown */}
       {releaseChips.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
-          {releaseChips.map(c => {
-            const isSelected = selectedReleases.has(c.version)
-            return (
-              <button
-                key={c.version}
-                type="button"
-                onClick={() => toggleRelease(c.version)}
-                className={cn(
-                  'inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs transition-colors font-mono',
-                  isSelected
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : c.isOverdue
-                      ? 'bg-red-500/10 text-red-400 border-red-500/40 hover:bg-red-500/20'
-                      : 'bg-muted/30 border-muted hover:bg-accent/50'
-                )}
-                title={c.jiraReleaseDate ? `${c.version} — ${c.jiraReleaseDate}${c.isOverdue ? ' (OVERDUE)' : ''}` : c.version}
-              >
-                <span>{c.version}</span>
-                {c.jiraReleaseDate && (
-                  <span className="text-[10px] opacity-70">{c.jiraReleaseDate.slice(5)}</span>
-                )}
-              </button>
-            )
-          })}
-          {selectedReleases.size > 0 && (
-            <button
-              type="button"
-              onClick={() => setSelectedReleases(new Set())}
-              className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-accent/50"
-            >
-              Clear
-            </button>
-          )}
+        <div className="flex items-center gap-2">
+          <span className="text-xs uppercase tracking-wide text-muted-foreground">Release:</span>
+          <MultiSelectPopover
+            items={releaseChips.map(c => ({
+              id: c.version,
+              label: c.jiraReleaseDate
+                ? `${c.version} · ${c.jiraReleaseDate}${c.isOverdue ? ' (overdue)' : ''}`
+                : c.version,
+            }))}
+            selected={Array.from(selectedReleases)}
+            onChange={(versions) => setSelectedReleases(new Set(versions))}
+            placeholder="All releases"
+            searchPlaceholder="Search releases…"
+            noun="releases"
+          />
         </div>
       )}
 
@@ -1018,38 +1021,5 @@ function RepoFilter({ value, onChange }: { value: string; onChange: (v: string) 
   )
 }
 
-function ReleaseChips({ columns, selected, onToggle }: {
-  columns: ReleaseColumn[]
-  selected: Set<string> | null
-  onToggle: (version: string) => void
-}) {
-  if (columns.length === 0) return null
-  return (
-    <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
-      {columns.map(c => {
-        const isSelected = selected?.has(c.version) ?? false
-        return (
-          <button
-            key={`${c.repo}:${c.version}`}
-            type="button"
-            onClick={() => onToggle(c.version)}
-            className={cn(
-              "inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs transition-colors",
-              isSelected
-                ? "bg-primary text-primary-foreground border-primary"
-                : "bg-muted/30 border-muted hover:bg-accent/50"
-            )}
-            title={`${c.repo} · ${c.version}${c.jiraReleaseDate ? ' · ' + c.jiraReleaseDate : ''}`}
-          >
-            <span className="font-mono">{c.version}</span>
-            {c.jiraReleaseDate && (
-              <span className="text-[10px] opacity-70">{c.jiraReleaseDate.slice(5)}</span>
-            )}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
 
 

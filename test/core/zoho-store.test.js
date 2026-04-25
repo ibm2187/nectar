@@ -158,11 +158,85 @@ describe('ZohoStore', () => {
       expect(store.listTickets({ limit: 2 })).toHaveLength(2);
     });
 
+    it('maxAgeDays excludes tickets older than the bound', () => {
+      // Insert one ancient + one fresh ticket beyond the seed batch
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+      store.upsertTicket(sampleTicket({ id: 'fresh', ticketNumber: 'VHC-NEW', createdAt: oneDayAgo, deptPrefix: 'VHC' }));
+      store.upsertTicket(sampleTicket({ id: 'ancient', ticketNumber: 'VHC-OLD', createdAt: ninetyDaysAgo, deptPrefix: 'VHC' }));
+
+      // Window: created within last 7d → only the fresh one
+      const recent = store.listTickets({ maxAgeDays: 7 });
+      const ids = recent.map(r => r.id);
+      expect(ids).toContain('fresh');
+      expect(ids).not.toContain('ancient');
+    });
+
+    it('minAgeDays + maxAgeDays form an inclusive window', () => {
+      const fortyDaysAgo = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+      const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+      const seventyDaysAgo = new Date(Date.now() - 70 * 24 * 60 * 60 * 1000).toISOString();
+      store.upsertTicket(sampleTicket({ id: 'mid', createdAt: fortyDaysAgo, deptPrefix: 'VHC', ticketNumber: 'VHC-MID' }));
+      store.upsertTicket(sampleTicket({ id: 'recent', createdAt: tenDaysAgo, deptPrefix: 'VHC', ticketNumber: 'VHC-REC' }));
+      store.upsertTicket(sampleTicket({ id: 'old', createdAt: seventyDaysAgo, deptPrefix: 'VHC', ticketNumber: 'VHC-OLD2' }));
+
+      // Window: 31-60 days old → only 'mid' qualifies
+      const result = store.listTickets({ minAgeDays: 31, maxAgeDays: 60 });
+      const ids = result.map(r => r.id);
+      expect(ids).toContain('mid');
+      expect(ids).not.toContain('recent');
+      expect(ids).not.toContain('old');
+    });
+
     it('hasJiraLinks filters to only ticket IDs present in jira_zoho_links', () => {
       // Tickets '1' and '2' are linked; '3' and '4' are not.
       store.upsertLink({ jiraKey: 'DEV-1', zohoTicketId: '1', source: 'customfield_11157' });
       store.upsertLink({ jiraKey: 'DEV-2', zohoTicketId: '2', source: 'customfield_11157' });
       expect(store.listTickets({ hasJiraLinks: true })).toHaveLength(2);
+    });
+
+    it('fixVersions filter narrows to tickets whose linked JIRA ships in any version', () => {
+      // Seed JIRAs with distinct fix versions
+      db.prepare(`INSERT INTO jira_tickets (key, summary, status, syncedAt, fixVersions)
+                  VALUES ('DEV-A', 'A', 'In Dev', '2026-04-25T00:00:00Z', '["4.2.0"]')`).run();
+      db.prepare(`INSERT INTO jira_tickets (key, summary, status, syncedAt, fixVersions)
+                  VALUES ('DEV-B', 'B', 'In Dev', '2026-04-25T00:00:00Z', '["4.1.4","4.1.3.1"]')`).run();
+      db.prepare(`INSERT INTO jira_tickets (key, summary, status, syncedAt, fixVersions)
+                  VALUES ('DEV-C', 'C', 'In Dev', '2026-04-25T00:00:00Z', '["3.9.0"]')`).run();
+      // Link them to seed tickets
+      store.upsertLink({ jiraKey: 'DEV-A', zohoTicketId: '1', source: 'customfield_11157' });
+      store.upsertLink({ jiraKey: 'DEV-B', zohoTicketId: '2', source: 'customfield_11157' });
+      store.upsertLink({ jiraKey: 'DEV-C', zohoTicketId: '3', source: 'customfield_11157' });
+
+      // Single version
+      const r1 = store.listTickets({ fixVersions: ['4.2.0'] });
+      expect(r1.map(t => t.id)).toEqual(['1']);
+
+      // Multiple versions OR semantics
+      const r2 = store.listTickets({ fixVersions: ['4.2.0', '4.1.4'] });
+      expect(r2.map(t => t.id).sort()).toEqual(['1', '2']);
+
+      // No match
+      const r3 = store.listTickets({ fixVersions: ['9.9.9'] });
+      expect(r3).toHaveLength(0);
+    });
+  });
+
+  describe('listDeptPrefixes', () => {
+    beforeEach(() => {
+      store.upsertTicketBatch([
+        sampleTicket({ id: '1', ticketNumber: 'VHC-1', deptPrefix: 'VHC' }),
+        sampleTicket({ id: '2', ticketNumber: 'VHC-2', deptPrefix: 'VHC' }),
+        sampleTicket({ id: '3', ticketNumber: 'BYD-1', deptPrefix: 'BYD' }),
+      ]);
+    });
+
+    it('returns distinct prefixes with counts', () => {
+      const rows = store.listDeptPrefixes();
+      expect(rows).toEqual([
+        { deptPrefix: 'BYD', count: 1 },
+        { deptPrefix: 'VHC', count: 2 },
+      ]);
     });
   });
 

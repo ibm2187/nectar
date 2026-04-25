@@ -111,6 +111,11 @@ export interface SupportAccount {
   departmentId: string | null
 }
 
+export interface SupportDepartment {
+  deptPrefix: string
+  count: number
+}
+
 // ── Filter shape ────────────────────────────────────────────
 
 export type SupportFilters = {
@@ -124,6 +129,8 @@ export type SupportFilters = {
   closedOnly?: boolean
   hasJiraLinks?: boolean
   minAgeDays?: number
+  maxAgeDays?: number
+  fixVersions?: string[]
   search?: string
   orderBy?: 'modified' | 'created' | 'status'
   orderDir?: 'asc' | 'desc'
@@ -165,6 +172,7 @@ interface SupportState {
   stats: SupportStats | null
   syncStatus: SupportSyncStatus | null
   accounts: SupportAccount[]
+  departments: SupportDepartment[]
 
   // Filter state
   preset: SupportPreset
@@ -180,6 +188,7 @@ interface SupportState {
   loadSyncStatus: () => Promise<void>
   loadStats: () => Promise<void>
   loadAccounts: () => Promise<void>
+  loadDepartments: () => Promise<void>
 
   setPreset: (preset: SupportPreset, overrides?: Partial<SupportFilters>) => void
   setFilters: (updates: Partial<SupportFilters>) => void
@@ -219,7 +228,9 @@ function filtersToQuery(f: SupportFilters): string {
   if (f.openOnly) p.set('openOnly', 'true')
   if (f.closedOnly) p.set('closedOnly', 'true')
   if (f.hasJiraLinks) p.set('hasJiraLinks', 'true')
-  if (f.minAgeDays) p.set('minAgeDays', String(f.minAgeDays))
+  if (f.minAgeDays != null) p.set('minAgeDays', String(f.minAgeDays))
+  if (f.maxAgeDays != null) p.set('maxAgeDays', String(f.maxAgeDays))
+  if (f.fixVersions?.length) p.set('fixVersions', f.fixVersions.join(','))
   if (f.search) p.set('search', f.search)
   if (f.orderBy) p.set('orderBy', f.orderBy)
   if (f.orderDir) p.set('orderDir', f.orderDir)
@@ -235,6 +246,7 @@ export const useSupportStore = create<SupportState>((set, get) => {
     stats: null,
     syncStatus: null,
     accounts: [],
+    departments: [],
     preset: persisted.preset,
     filters: persisted.filters,
     loading: false,
@@ -246,6 +258,7 @@ export const useSupportStore = create<SupportState>((set, get) => {
         get().loadSyncStatus(),
         get().loadStats(),
         get().loadAccounts(),
+        get().loadDepartments(),
       ])
     },
 
@@ -278,6 +291,13 @@ export const useSupportStore = create<SupportState>((set, get) => {
       try {
         const data = await apiFetch<{ accounts: SupportAccount[] }>('/support/accounts')
         set({ accounts: data.accounts })
+      } catch { /* non-fatal */ }
+    },
+
+    loadDepartments: async () => {
+      try {
+        const data = await apiFetch<{ departments: SupportDepartment[] }>('/support/departments')
+        set({ departments: data.departments })
       } catch { /* non-fatal */ }
     },
 

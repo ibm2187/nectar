@@ -285,6 +285,38 @@ describe('GET /api/support/accounts', () => {
   });
 });
 
+describe('GET /api/support/departments', () => {
+  it('returns distinct ticket-prefix departments with counts', async () => {
+    const { app, zohoStore } = makeApp();
+    zohoStore.upsertTicket(makeTicket({ id: '1', ticketNumber: 'VHC-1', deptPrefix: 'VHC' }));
+    zohoStore.upsertTicket(makeTicket({ id: '2', ticketNumber: 'VHC-2', deptPrefix: 'VHC' }));
+    zohoStore.upsertTicket(makeTicket({ id: '3', ticketNumber: 'BYD-1', deptPrefix: 'BYD' }));
+
+    const res = await request(app, 'GET', '/api/support/departments');
+    expect(res.status).toBe(200);
+    expect(res.body.departments).toEqual([
+      { deptPrefix: 'BYD', count: 1 },
+      { deptPrefix: 'VHC', count: 2 },
+    ]);
+  });
+});
+
+describe('GET /api/support/tickets — maxAgeDays', () => {
+  it('passes maxAgeDays through to listTickets', async () => {
+    const { app, zohoStore } = makeApp();
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    zohoStore.upsertTicket(makeTicket({ id: 'fresh', ticketNumber: 'VHC-N', createdAt: oneDayAgo }));
+    zohoStore.upsertTicket(makeTicket({ id: 'ancient', ticketNumber: 'VHC-O', createdAt: ninetyDaysAgo }));
+
+    const res = await request(app, 'GET', '/api/support/tickets?maxAgeDays=7');
+    expect(res.status).toBe(200);
+    const ids = res.body.tickets.map(t => t.id);
+    expect(ids).toContain('fresh');
+    expect(ids).not.toContain('ancient');
+  });
+});
+
 describe('degraded mode', () => {
   it('returns 503 on every route when zohoStore is absent', async () => {
     const app = express();
