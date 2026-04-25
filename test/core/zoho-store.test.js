@@ -268,6 +268,83 @@ describe('ZohoStore', () => {
     });
   });
 
+  describe('groupedStats', () => {
+    beforeEach(() => {
+      store.upsertAccount({ id: 'acct-1', name: 'Bayada' });
+      store.upsertAccount({ id: 'acct-2', name: 'Comfort Keepers' });
+      store.upsertTicketBatch([
+        sampleTicket({ id: '1', ticketNumber: 'BYD-1', deptPrefix: 'BYD', accountId: 'acct-1', assigneeEmail: 'bryan@v.com', statusType: 'Open' }),
+        sampleTicket({ id: '2', ticketNumber: 'BYD-2', deptPrefix: 'BYD', accountId: 'acct-1', assigneeEmail: 'bryan@v.com', statusType: 'Closed' }),
+        sampleTicket({ id: '3', ticketNumber: 'CK-1',  deptPrefix: 'CK',  accountId: 'acct-2', assigneeEmail: 'alice@v.com', statusType: 'Open' }),
+      ]);
+    });
+
+    it('groupBy=assignee returns per-assignee totals + openCounts', () => {
+      const rows = store.groupedStats({}, 'assignee');
+      const map = Object.fromEntries(rows.map(r => [r.key, r]));
+      expect(map['bryan@v.com'].total).toBe(2);
+      expect(map['bryan@v.com'].openCount).toBe(1);
+      expect(map['alice@v.com'].total).toBe(1);
+      expect(map['alice@v.com'].openCount).toBe(1);
+    });
+
+    it('groupBy=account joins zoho_accounts for displayName', () => {
+      const rows = store.groupedStats({}, 'account');
+      const map = Object.fromEntries(rows.map(r => [r.key, r]));
+      expect(map['acct-1'].displayName).toBe('Bayada');
+      expect(map['acct-1'].total).toBe(2);
+      expect(map['acct-2'].displayName).toBe('Comfort Keepers');
+      expect(map['acct-2'].total).toBe(1);
+    });
+
+    it('groupBy=deptPrefix returns per-prefix totals', () => {
+      const rows = store.groupedStats({}, 'deptPrefix');
+      const map = Object.fromEntries(rows.map(r => [r.key, r]));
+      expect(map['BYD'].total).toBe(2);
+      expect(map['CK'].total).toBe(1);
+    });
+
+    it('groupBy=fixVersion expands JSON arrays via json_each', () => {
+      db.prepare(`INSERT INTO jira_tickets (key, summary, status, syncedAt, fixVersions)
+                  VALUES ('DEV-A', 'A', 'In Dev', '2026-04-25T00:00:00Z', '["4.2.0", "4.1.4"]')`).run();
+      db.prepare(`INSERT INTO jira_tickets (key, summary, status, syncedAt, fixVersions)
+                  VALUES ('DEV-B', 'B', 'In Dev', '2026-04-25T00:00:00Z', '["4.2.0"]')`).run();
+      store.upsertLink({ jiraKey: 'DEV-A', zohoTicketId: '1', source: 'customfield_11157' });
+      store.upsertLink({ jiraKey: 'DEV-B', zohoTicketId: '3', source: 'customfield_11157' });
+
+      const rows = store.groupedStats({}, 'fixVersion');
+      const map = Object.fromEntries(rows.map(r => [r.key, r]));
+      // 4.2.0 backs both DEV-A (ticket 1) and DEV-B (ticket 3) → 2 distinct
+      expect(map['4.2.0'].total).toBe(2);
+      // 4.1.4 only via DEV-A (ticket 1) → 1
+      expect(map['4.1.4'].total).toBe(1);
+    });
+
+    it('strips the grouped dimension from filters', () => {
+      // assigneeEmail filter should be ignored when groupBy=assignee — we
+      // want the cross-assignee distribution.
+      const rows = store.groupedStats({ assigneeEmail: 'bryan@v.com' }, 'assignee');
+      expect(rows.length).toBeGreaterThan(1);
+    });
+
+    it('groupBy=account composes with hasJiraLinks (zoho_accounts.id ambiguity guard)', () => {
+      // Both zoho_tickets and zoho_accounts have an `id` column. The
+      // hasJiraLinks filter adds `id IN (...)` to the WHERE; without aliasing
+      // the JOIN through `t`, SQLite raised "ambiguous column name: id".
+      store.upsertLink({ jiraKey: 'DEV-X', zohoTicketId: '1', source: 'customfield_11157' });
+      const rows = store.groupedStats({ hasJiraLinks: true }, 'account');
+      expect(rows).toHaveLength(1);
+      expect(rows[0].key).toBe('acct-1');
+    });
+
+    it('respects other filters while grouping (e.g. openOnly)', () => {
+      const rows = store.groupedStats({ openOnly: true }, 'assignee');
+      const map = Object.fromEntries(rows.map(r => [r.key, r]));
+      // bryan has 1 open out of 2 total
+      expect(map['bryan@v.com'].total).toBe(1);
+    });
+  });
+
   describe('listDeptPrefixes', () => {
     beforeEach(() => {
       store.upsertTicketBatch([

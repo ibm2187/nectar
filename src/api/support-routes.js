@@ -44,37 +44,57 @@ function createSupportRoutes({ zohoStore, zohoMirrorSync, userStore } = {}) {
   });
 
   // ── GET /support/stats ─────────────────────────────────
-  // Per-assignee counts. Accepts the same filter params as /tickets so the
-  // tab counts stay in sync with whatever filters the user has applied.
-  // assigneeEmail is intentionally ignored here — the stats endpoint is the
-  // cross-assignee distribution, so filtering to one would defeat it.
+  // Filter-aware count distribution for the /support page's grouping tabs.
+  // Accepts the same filter params as /tickets, plus `groupBy` (assignee |
+  // account | deptPrefix | fixVersion). The dimension being grouped on is
+  // stripped from the filters before counting (otherwise the pills would
+  // show only the currently-selected entity).
+  //
+  // Response: { total, open, matchTotal, groupBy, groups: [...] }
+  // For backwards compat with older clients, when groupBy is omitted (or
+  // 'assignee') we ALSO include the legacy `assignees` field.
+  const VALID_GROUP_BY = new Set(['assignee', 'account', 'deptPrefix', 'fixVersion']);
   router.get('/stats', (req, res) => {
     const opts = _parseListQuery(req.query);
-    delete opts.assigneeEmail;
     delete opts.limit;
     delete opts.offset;
-    const stats = zohoStore.assigneeStats(opts);
+    const groupBy = VALID_GROUP_BY.has(req.query.groupBy) ? req.query.groupBy : 'assignee';
 
-    // Enrich each row with displayName from UserStore
-    const enriched = stats.map(row => {
-      const user = row.assigneeEmail && userStore ? userStore.getUser(row.assigneeEmail) : null;
+    const rows = zohoStore.groupedStats(opts, groupBy);
+
+    // Enrich each row's displayName when it has a richer source than the raw key.
+    const groups = rows.map(row => {
+      let displayName = row.displayName;
+      if (groupBy === 'assignee' && row.key && userStore) {
+        const user = userStore.getUser(row.key);
+        if (user) displayName = user.displayNameZoho || user.name || row.key;
+      }
       return {
-        assigneeEmail: row.assigneeEmail,
-        displayName: user ? (user.displayNameZoho || user.name || row.assigneeEmail) : row.assigneeEmail,
+        key: row.key,
+        displayName: displayName || row.key,
         total: Number(row.total || 0),
         openCount: Number(row.openCount || 0),
       };
     });
-    // matchTotal = sum across the (filter-aware) assignee distribution.
-    // This is what the UI should show as "N match filters", separate from
-    // the absolute database totals (`total` / `open`).
-    const matchTotal = enriched.reduce((sum, a) => sum + a.total, 0);
-    res.json({
+
+    const matchTotal = groups.reduce((sum, g) => sum + g.total, 0);
+    const body = {
       total: zohoStore.count(),
       open: zohoStore.countOpen(),
       matchTotal,
-      assignees: enriched,
-    });
+      groupBy,
+      groups,
+    };
+    // Legacy `assignees` field — old client builds may still read this.
+    if (groupBy === 'assignee') {
+      body.assignees = groups.map(g => ({
+        assigneeEmail: g.key,
+        displayName: g.displayName,
+        total: g.total,
+        openCount: g.openCount,
+      }));
+    }
+    res.json(body);
   });
 
   // ── GET /support/accounts ──────────────────────────────

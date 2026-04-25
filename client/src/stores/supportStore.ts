@@ -63,14 +63,30 @@ export interface SupportAssigneeStat {
   openCount: number
 }
 
+/** Generic group row from the `groupBy`-aware /support/stats endpoint. */
+export interface SupportGroup {
+  /** Identity for the row — assigneeEmail, accountId, deptPrefix, or fixVersion. */
+  key: string | null
+  displayName: string
+  total: number
+  openCount: number
+}
+
+export type SupportGroupBy = 'none' | 'assignee' | 'account' | 'deptPrefix' | 'fixVersion'
+
 export interface SupportStats {
   /** Absolute DB total (no filter applied). */
   total: number
   /** Absolute DB open count (no filter applied). */
   open: number
-  /** Sum across the filter-aware assignee distribution — "N match filters". */
+  /** Sum across the filter-aware grouped distribution — "N match filters". */
   matchTotal?: number
-  assignees: SupportAssigneeStat[]
+  /** Echo of the dimension we asked the server to group on. */
+  groupBy?: SupportGroupBy
+  /** Generic group rows for the active grouping. */
+  groups?: SupportGroup[]
+  /** Legacy — only present when groupBy === 'assignee'. */
+  assignees?: SupportAssigneeStat[]
 }
 
 export interface SupportSyncStatus {
@@ -148,6 +164,16 @@ export type SupportFilters = {
   orderBy?: 'modified' | 'created' | 'status'
   /** @deprecated use `sortDir`. */
   orderDir?: 'asc' | 'desc'
+  /**
+   * Top-level grouping mode for the /support page. Decides what the pill
+   * bar shows and which filter the active pill drives:
+   *   - none       → no pills, flat paged ticket list
+   *   - assignee   → pills are people; active sets `assigneeEmail`
+   *   - account    → pills are accounts; active sets `accountIds = [id]`
+   *   - deptPrefix → pills are dept prefixes; active sets `deptPrefixes = [prefix]`
+   *   - fixVersion → pills are versions; active sets `fixVersions = [version]`
+   */
+  groupBy?: SupportGroupBy
 }
 
 export type SupportPreset = 'standup' | 'allOpen' | 'stale' | 'myTickets' | 'custom'
@@ -162,12 +188,14 @@ const PRESETS: Record<SupportPreset, SupportFilters> = {
     orderBy: 'created',
     orderDir: 'asc',
     pageSize: DEFAULT_PAGE_SIZE,
+    groupBy: 'assignee',
   },
   allOpen: {
     openOnly: true,
     orderBy: 'modified',
     orderDir: 'desc',
     pageSize: DEFAULT_PAGE_SIZE,
+    groupBy: 'assignee',
   },
   stale: {
     openOnly: true,
@@ -175,14 +203,16 @@ const PRESETS: Record<SupportPreset, SupportFilters> = {
     orderBy: 'created',
     orderDir: 'asc',
     pageSize: DEFAULT_PAGE_SIZE,
+    groupBy: 'assignee',
   },
   myTickets: {
     // assigneeEmail is injected at selection time from auth store
     orderBy: 'modified',
     orderDir: 'desc',
     pageSize: DEFAULT_PAGE_SIZE,
+    groupBy: 'assignee',
   },
-  custom: { pageSize: DEFAULT_PAGE_SIZE },
+  custom: { pageSize: DEFAULT_PAGE_SIZE, groupBy: 'assignee' },
 }
 
 // ── Store ───────────────────────────────────────────────────
@@ -216,7 +246,14 @@ interface SupportState {
   setPreset: (preset: SupportPreset, overrides?: Partial<SupportFilters>) => void
   setFilters: (updates: Partial<SupportFilters>) => void
   clearFilter: (key: keyof SupportFilters) => void
-
+  /**
+   * Switch the top-level grouping mode for /support. Clears the prior
+   * grouping's entity selection (so e.g. switching from Person → Customer
+   * doesn't carry over an irrelevant assignee filter), reloads stats for
+   * the new dimension, and reloads tickets if the new mode has an active
+   * selection (or none == 'none').
+   */
+  setGroupBy: (groupBy: SupportGroupBy) => void
 }
 
 // v2 — Bundle 3 added pageSize/sort to the persisted filter; bumping the key
@@ -294,17 +331,24 @@ export const useSupportStore = create<SupportState>((set, get) => {
     },
 
     loadTickets: async () => {
-      // /support only renders tickets for the *active* assignee — other
-      // assignees show count only via /stats. Skip the network call entirely
-      // when no assignee is selected; the page state stays empty and the
-      // user gets cards-only.
-      if (!get().filters.assigneeEmail) {
+      // Skip the network call when there's nothing to show:
+      //  - groupBy=none (List mode) ALWAYS fetches paged tickets
+      //  - For grouped modes, only fetch when the active pill's filter is set
+      const f = get().filters
+      const groupBy: SupportGroupBy = f.groupBy ?? 'assignee'
+      const hasActiveSelection =
+        groupBy === 'none'
+        || (groupBy === 'assignee' && !!f.assigneeEmail)
+        || (groupBy === 'account' && (f.accountIds?.length ?? 0) > 0)
+        || (groupBy === 'deptPrefix' && (f.deptPrefixes?.length ?? 0) > 0)
+        || (groupBy === 'fixVersion' && (f.fixVersions?.length ?? 0) > 0)
+      if (!hasActiveSelection) {
         set({ tickets: [], totalTickets: 0, loading: false })
         return
       }
       set({ loading: true, error: null })
       try {
-        const qs = filtersToQuery(get().filters)
+        const qs = filtersToQuery(f)
         const data = await apiFetch<{ tickets: SupportTicket[]; total?: number }>(
           `/support/tickets${qs ? `?${qs}` : ''}`
         )
@@ -327,17 +371,23 @@ export const useSupportStore = create<SupportState>((set, get) => {
 
     loadStats: async () => {
       try {
-        // Stats use the same filter set as /tickets EXCEPT assigneeEmail
-        // (the cross-assignee distribution is the whole point) and paging
-        // params (don't apply to aggregate counts).
+        // Stats use the same filter set as /tickets minus paging params and
+        // the dimension we're grouping on (server strips that too, but
+        // sending it is wasteful). Pass the active groupBy.
         const f = get().filters
         const statsFilters: SupportFilters = { ...f }
-        delete statsFilters.assigneeEmail
         delete statsFilters.page
         delete statsFilters.pageSize
         delete statsFilters.limit
+        const groupBy: SupportGroupBy = f.groupBy ?? 'assignee'
+        if (groupBy === 'assignee') delete statsFilters.assigneeEmail
+        if (groupBy === 'account') delete statsFilters.accountIds
+        if (groupBy === 'deptPrefix') delete statsFilters.deptPrefixes
+        if (groupBy === 'fixVersion') delete statsFilters.fixVersions
         const qs = filtersToQuery(statsFilters)
-        const data = await apiFetch<SupportStats>(`/support/stats${qs ? `?${qs}` : ''}`)
+        const sep = qs ? '&' : '?'
+        const url = `/support/stats${qs ? `?${qs}` : ''}${groupBy !== 'none' ? `${sep}groupBy=${groupBy}` : ''}`
+        const data = await apiFetch<SupportStats>(url)
         set({ stats: data })
       } catch { /* non-fatal */ }
     },
@@ -388,6 +438,21 @@ export const useSupportStore = create<SupportState>((set, get) => {
       // looking at a different person).
       const onlyAssignee = Object.keys(updates).every(k => k === 'assigneeEmail')
       if (!isPagingOrSortOnly && !onlyAssignee) get().loadStats()
+    },
+
+    setGroupBy: (groupBy) => {
+      const cur = get().filters
+      const next: SupportFilters = { ...cur, groupBy, page: 1 }
+      // Clear the prior selection — it doesn't carry meaning across
+      // grouping modes. The user picks a fresh pill.
+      delete next.assigneeEmail
+      delete next.accountIds
+      delete next.deptPrefixes
+      delete next.fixVersions
+      persistState(get().preset, next)
+      set({ filters: next })
+      get().loadStats()
+      get().loadTickets()
     },
 
     clearFilter: (key) => {

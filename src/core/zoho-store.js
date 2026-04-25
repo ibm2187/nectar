@@ -259,61 +259,70 @@ class ZohoStore extends EventEmitter {
    * Internal: build the shared WHERE clause + params for listTickets / countTickets.
    * Keeps filter logic DRY and ensures both queries always agree.
    */
-  _buildTicketsWhere(opts) {
+  /**
+   * Build the shared WHERE clause for listTickets / countTickets / grouped
+   * stats. Pass `alias` (e.g. `t`) to qualify zoho_tickets columns when the
+   * caller is doing a JOIN where column names would otherwise be ambiguous
+   * (e.g. both zoho_tickets.status AND jira_tickets.status exist).
+   */
+  _buildTicketsWhere(opts, alias = '') {
     const where = [];
     const params = [];
+    // Prefix for zoho_tickets columns. The fixVersions subquery has its own
+    // local aliases (l, j) and is not affected.
+    const a = alias ? `${alias}.` : '';
 
     if (opts.assigneeEmail) {
-      where.push('assigneeEmail = ?');
+      where.push(`${a}assigneeEmail = ?`);
       params.push(opts.assigneeEmail.toLowerCase());
     }
     if (opts.statuses && opts.statuses.length > 0) {
-      where.push(`status IN (${opts.statuses.map(() => '?').join(',')})`);
+      where.push(`${a}status IN (${opts.statuses.map(() => '?').join(',')})`);
       params.push(...opts.statuses);
     }
     if (opts.statusTypes && opts.statusTypes.length > 0) {
-      where.push(`statusType IN (${opts.statusTypes.map(() => '?').join(',')})`);
+      where.push(`${a}statusType IN (${opts.statusTypes.map(() => '?').join(',')})`);
       params.push(...opts.statusTypes);
     }
     if (opts.priorities && opts.priorities.length > 0) {
-      where.push(`priority IN (${opts.priorities.map(() => '?').join(',')})`);
+      where.push(`${a}priority IN (${opts.priorities.map(() => '?').join(',')})`);
       params.push(...opts.priorities);
     }
     if (opts.deptPrefixes && opts.deptPrefixes.length > 0) {
-      where.push(`deptPrefix IN (${opts.deptPrefixes.map(() => '?').join(',')})`);
+      where.push(`${a}deptPrefix IN (${opts.deptPrefixes.map(() => '?').join(',')})`);
       params.push(...opts.deptPrefixes);
     }
     if (opts.accountIds && opts.accountIds.length > 0) {
-      where.push(`accountId IN (${opts.accountIds.map(() => '?').join(',')})`);
+      where.push(`${a}accountId IN (${opts.accountIds.map(() => '?').join(',')})`);
       params.push(...opts.accountIds);
     }
     if (opts.openOnly) {
-      where.push("(statusType != 'Closed' OR statusType IS NULL)");
+      where.push(`(${a}statusType != 'Closed' OR ${a}statusType IS NULL)`);
     }
     if (opts.closedOnly) {
-      where.push("statusType = 'Closed'");
+      where.push(`${a}statusType = 'Closed'`);
     }
     if (opts.minAgeDays && opts.minAgeDays > 0) {
       const cutoff = new Date(Date.now() - opts.minAgeDays * 24 * 60 * 60 * 1000).toISOString();
-      where.push('createdAt <= ?');
+      where.push(`${a}createdAt <= ?`);
       params.push(cutoff);
     }
     if (opts.maxAgeDays != null && opts.maxAgeDays >= 0) {
       const cutoff = new Date(Date.now() - opts.maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
-      where.push('createdAt >= ?');
+      where.push(`${a}createdAt >= ?`);
       params.push(cutoff);
     }
     if (opts.search) {
       const pat = `%${opts.search}%`;
-      where.push('(subject LIKE ? OR ticketNumber LIKE ?)');
+      where.push(`(${a}subject LIKE ? OR ${a}ticketNumber LIKE ?)`);
       params.push(pat, pat);
     }
     if (opts.hasJiraLinks) {
-      where.push('id IN (SELECT DISTINCT zohoTicketId FROM jira_zoho_links)');
+      where.push(`${a}id IN (SELECT DISTINCT zohoTicketId FROM jira_zoho_links)`);
     }
     if (opts.fixVersions && opts.fixVersions.length > 0) {
       const conds = opts.fixVersions.map(() => 'j.fixVersions LIKE ?').join(' OR ');
-      where.push(`id IN (
+      where.push(`${a}id IN (
         SELECT DISTINCT l.zohoTicketId
         FROM jira_zoho_links l
         JOIN jira_tickets j ON j.key = l.jiraKey
@@ -354,6 +363,100 @@ class ZohoStore extends EventEmitter {
       ORDER BY total DESC
     `;
     return this.db.prepare(sql).all(...params);
+  }
+
+  /**
+   * Generic grouped distribution for the /support page's top-level tabs.
+   * Returns one row per distinct value of `groupBy` (assignee | account |
+   * deptPrefix | fixVersion), respecting all listTickets filters except the
+   * one being grouped on. Each row: { key, displayName, total, openCount }.
+   *
+   * Powers the "Group by Person/Customer/Department/Release" tab bar — one
+   * fetch returns enough info to populate every pill across any grouping.
+   *
+   * Note: `fixVersion` requires a multi-table JOIN through jira_zoho_links
+   * → jira_tickets and JSON-array expansion via SQLite's `json_each`. Slower
+   * than the others but bounded by the size of the filtered ticket set.
+   */
+  groupedStats(opts = {}, groupBy = 'assignee') {
+    // Strip the filter dimension we're grouping on — otherwise the pills
+    // would show only the currently-selected entity.
+    const cleaned = { ...opts };
+    if (groupBy === 'assignee') delete cleaned.assigneeEmail;
+    if (groupBy === 'account') delete cleaned.accountIds;
+    if (groupBy === 'deptPrefix') delete cleaned.deptPrefixes;
+    if (groupBy === 'fixVersion') delete cleaned.fixVersions;
+
+    if (groupBy === 'assignee') {
+      const { where, params } = this._buildTicketsWhere(cleaned);
+      return this.db.prepare(`
+        SELECT
+          assigneeEmail AS key,
+          assigneeEmail AS displayName,
+          COUNT(*) AS total,
+          SUM(CASE WHEN statusType != 'Closed' OR statusType IS NULL THEN 1 ELSE 0 END) AS openCount
+        FROM zoho_tickets
+        ${where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''}
+        GROUP BY assigneeEmail
+        ORDER BY total DESC
+      `).all(...params);
+    }
+
+    if (groupBy === 'account') {
+      // zoho_accounts also has an `id` column — the hasJiraLinks WHERE
+      // clause adds `id IN (...)` which would be ambiguous without an
+      // alias. Qualify everything via `t`.
+      const { where, params } = this._buildTicketsWhere(cleaned, 't');
+      return this.db.prepare(`
+        SELECT
+          t.accountId AS key,
+          COALESCE(a.name, t.accountId) AS displayName,
+          COUNT(*) AS total,
+          SUM(CASE WHEN t.statusType != 'Closed' OR t.statusType IS NULL THEN 1 ELSE 0 END) AS openCount
+        FROM zoho_tickets t
+        LEFT JOIN zoho_accounts a ON a.id = t.accountId
+        ${where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''}
+        GROUP BY t.accountId
+        ORDER BY total DESC
+      `).all(...params);
+    }
+
+    if (groupBy === 'deptPrefix') {
+      const { where, params } = this._buildTicketsWhere(cleaned);
+      return this.db.prepare(`
+        SELECT
+          deptPrefix AS key,
+          deptPrefix AS displayName,
+          COUNT(*) AS total,
+          SUM(CASE WHEN statusType != 'Closed' OR statusType IS NULL THEN 1 ELSE 0 END) AS openCount
+        FROM zoho_tickets
+        ${where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''}
+        GROUP BY deptPrefix
+        ORDER BY total DESC
+      `).all(...params);
+    }
+
+    if (groupBy === 'fixVersion') {
+      // jira_tickets has its own `status` column that collides with
+      // zoho_tickets.status — must alias zoho_tickets columns.
+      const { where, params } = this._buildTicketsWhere(cleaned, 't');
+      return this.db.prepare(`
+        SELECT
+          v.value AS key,
+          v.value AS displayName,
+          COUNT(DISTINCT t.id) AS total,
+          COUNT(DISTINCT CASE WHEN t.statusType != 'Closed' OR t.statusType IS NULL THEN t.id END) AS openCount
+        FROM zoho_tickets t
+        JOIN jira_zoho_links l ON l.zohoTicketId = t.id
+        JOIN jira_tickets j ON j.key = l.jiraKey
+        JOIN json_each(j.fixVersions) v
+        ${where.length > 0 ? 'WHERE ' + where.join(' AND ') : ''}
+        GROUP BY v.value
+        ORDER BY total DESC
+      `).all(...params);
+    }
+
+    throw new Error(`Unknown groupBy: ${groupBy}`);
   }
 
   /**

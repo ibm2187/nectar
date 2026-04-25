@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { useSupportStore, type SupportPreset, type SupportTicket, type SupportFilters } from '../../stores/supportStore'
+import { useSupportStore, type SupportPreset, type SupportTicket, type SupportFilters, type SupportGroupBy } from '../../stores/supportStore'
 import { useAuthStore } from '../../stores/authStore'
 import { useWsStore } from '../../stores/wsStore'
 import { MultiSelectPopover } from '../../components/MultiSelectPopover'
@@ -95,6 +95,17 @@ const PRESET_ORDER: SupportPreset[] = ['standup', 'allOpen', 'stale', 'myTickets
 const STATUS_CHIPS = ['Investigating', 'Waiting for Viv Response', 'On Hold']
 const PRIORITY_CHIPS = ['Urgent', 'High', 'Medium', 'Low']
 
+// Top-level grouping tabs. Each one decides what the pill bar shows and which
+// filter the active pill drives. List mode has no pills — just the flat
+// paged table.
+const GROUP_BY_TABS: { key: SupportGroupBy; label: string; emptyHint?: string }[] = [
+  { key: 'none',       label: 'All' },
+  { key: 'assignee',   label: 'By Person',     emptyHint: 'Pick a person from the pills above to see their tickets.' },
+  { key: 'account',    label: 'By Customer',   emptyHint: 'Pick a customer from the pills above to see their tickets.' },
+  { key: 'deptPrefix', label: 'By Department', emptyHint: 'Pick a department from the pills above to see its tickets.' },
+  { key: 'fixVersion', label: 'By Release',    emptyHint: 'Pick a release from the pills above to see what ships in it.' },
+]
+
 // Age buckets — chip selector that maps to (minAgeDays, maxAgeDays).
 // Mutually exclusive: clicking one replaces any prior bucket; click again to clear.
 const AGE_BUCKETS: { label: string; min?: number; max?: number }[] = [
@@ -124,6 +135,7 @@ export function SupportPage() {
   const loadTickets = useSupportStore(s => s.loadTickets)
   const setPreset = useSupportStore(s => s.setPreset)
   const setFilters = useSupportStore(s => s.setFilters)
+  const setGroupBy = useSupportStore(s => s.setGroupBy)
   const currentUserEmail = useAuthStore(s => s.user?.email || null)
 
   // "My Tickets" preset requires injecting the current user's email.
@@ -140,27 +152,34 @@ export function SupportPage() {
     loadAll()
   }, [loadAll])
 
-  const activeAssigneeFilter = filters.assigneeEmail || null
+  const groupBy: SupportGroupBy = filters.groupBy ?? 'assignee'
 
-  // Tab/card list comes from the filter-aware /support/stats endpoint.
-  // Each row already has the per-assignee count for the current filter set,
-  // and the page only fetches *tickets* for the active assignee — so this
-  // scales to any number of matching tickets.
-  const filterAwareAssignees = useMemo(() => {
-    return (stats?.assignees ?? [])
-      .filter(a => a.assigneeEmail && a.total > 0)
-      .map(a => ({
-        assigneeEmail: a.assigneeEmail!,
-        displayName: a.displayName || a.assigneeEmail!,
-        count: a.total,
-      }))
-      .sort((a, b) => b.count - a.count)
+  // Pills come from the filter-aware /support/stats endpoint, grouped by
+  // whichever dimension the user has selected on the top-level tab bar.
+  // Each pill's count is exact for the current filter set; clicking a pill
+  // sets the corresponding filter and triggers a server-paged tickets fetch.
+  const groups = useMemo(() => {
+    return (stats?.groups ?? [])
+      .filter(g => g.key && g.total > 0)
+      .map(g => ({ key: g.key!, displayName: g.displayName, count: g.total }))
   }, [stats])
 
-  // "All" count = sum of filter-aware per-assignee totals (matchTotal from
-  // the API). Falls back to the assignees array sum when an older deploy
-  // omits the field.
-  const allTabCount = stats?.matchTotal ?? filterAwareAssignees.reduce((s, a) => s + a.count, 0)
+  // The "active" pill = whichever filter the current groupBy maps to.
+  const activeGroupKey: string | null = useMemo(() => {
+    if (groupBy === 'assignee') return filters.assigneeEmail || null
+    if (groupBy === 'account') return filters.accountIds?.[0] || null
+    if (groupBy === 'deptPrefix') return filters.deptPrefixes?.[0] || null
+    if (groupBy === 'fixVersion') return filters.fixVersions?.[0] || null
+    return null
+  }, [groupBy, filters.assigneeEmail, filters.accountIds, filters.deptPrefixes, filters.fixVersions])
+
+  // Click a pill → set the matching single-value filter for the active group
+  function setActiveGroupKey(key: string) {
+    if (groupBy === 'assignee') setFilters({ assigneeEmail: key, page: 1 })
+    else if (groupBy === 'account') setFilters({ accountIds: [key], page: 1 })
+    else if (groupBy === 'deptPrefix') setFilters({ deptPrefixes: [key], page: 1 })
+    else if (groupBy === 'fixVersion') setFilters({ fixVersions: [key], page: 1 })
+  }
 
   // Release options for the filter — pull non-shipped versions from the WS
   // releases store, dedup by version, sort by most-recent first.
@@ -354,25 +373,40 @@ export function SupportPage() {
         </div>
       )}
 
-      {/* Assignee tabs — counts derive from current tickets array so they
-          stay in sync with active filters. Tab labels show "(count in view)". */}
-      {filterAwareAssignees.length > 0 && (
-        <div className="flex items-center gap-1 flex-wrap border-b pb-2">
-          <TabButton
-            label={`All (${allTabCount})`}
-            active={!activeAssigneeFilter}
-            onClick={() => setFilters({ assigneeEmail: undefined })}
-          />
-          {filterAwareAssignees
-            .slice(0, 12)
-            .map(a => (
-              <TabButton
-                key={a.assigneeEmail}
-                label={`${a.displayName} (${a.count})`}
-                active={activeAssigneeFilter === a.assigneeEmail}
-                onClick={() => setFilters({ assigneeEmail: a.assigneeEmail })}
-              />
-            ))}
+      {/* Top-level grouping mode — Person / Customer / Department / Release / List.
+          Determines what the pill bar below shows and which filter the active pill drives. */}
+      <div className="flex items-center gap-1 border-b">
+        {GROUP_BY_TABS.map(t => (
+          <button
+            key={t.key}
+            onClick={() => setGroupBy(t.key)}
+            className={cn(
+              'px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+              groupBy === t.key
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Pill bar — one pill per row in /support/stats grouped by the active dimension.
+          Only renders for grouped modes; List mode goes straight to the table. */}
+      {groupBy !== 'none' && groups.length > 0 && (
+        <div className="flex items-center gap-1 flex-wrap pb-1">
+          {groups.slice(0, 30).map(g => (
+            <TabButton
+              key={g.key}
+              label={`${g.displayName} (${g.count})`}
+              active={activeGroupKey === g.key}
+              onClick={() => setActiveGroupKey(g.key)}
+            />
+          ))}
+          {groups.length > 30 && (
+            <span className="text-xs text-muted-foreground ml-2">+{groups.length - 30} more (use filters to narrow)</span>
+          )}
         </div>
       )}
 
@@ -383,9 +417,9 @@ export function SupportPage() {
         </Card>
       )}
 
-      {/* Per-assignee grouped table */}
+      {/* Active card / List mode table */}
       <div className="space-y-4">
-        {filterAwareAssignees.length === 0 && !loading && (
+        {groupBy !== 'none' && groups.length === 0 && !loading && (
           <Card>
             <CardContent className="p-8 text-center text-muted-foreground">
               No tickets match the current filters.
@@ -393,15 +427,29 @@ export function SupportPage() {
           </Card>
         )}
 
-        {/* Only the active assignee's card is shown — the tabs above act as
-            the navigation. No peer-card noise. */}
-        {activeAssigneeFilter && (() => {
-          const active = filterAwareAssignees.find(a => a.assigneeEmail === activeAssigneeFilter)
+        {/* List mode: just a paged table, no grouping pills */}
+        {groupBy === 'none' && (
+          <AssigneeCard
+            assigneeKey="__list__"
+            displayName="All matching tickets"
+            tickets={tickets}
+            ticketsTotal={totalTickets}
+            page={filters.page || 1}
+            pageSize={filters.pageSize || 25}
+            filters={filters}
+            setFilters={setFilters}
+            onPageChange={(p) => setFilters({ page: p })}
+          />
+        )}
+
+        {/* Grouped mode + active pill → server-paged tickets for that pill */}
+        {groupBy !== 'none' && activeGroupKey && (() => {
+          const active = groups.find(g => g.key === activeGroupKey)
           if (!active) return null
           return (
             <AssigneeCard
-              key={active.assigneeEmail}
-              assigneeKey={active.assigneeEmail}
+              key={active.key}
+              assigneeKey={active.key}
               displayName={active.displayName}
               tickets={tickets}
               ticketsTotal={totalTickets}
@@ -413,16 +461,16 @@ export function SupportPage() {
             />
           )
         })()}
-        {!activeAssigneeFilter && filterAwareAssignees.length > 0 && (
+
+        {/* Grouped mode + nothing selected → hint */}
+        {groupBy !== 'none' && !activeGroupKey && groups.length > 0 && (
           <Card>
             <CardContent className="p-8 text-center text-muted-foreground text-sm">
-              Pick a person from the tabs above to see their tickets.
+              {GROUP_BY_TABS.find(t => t.key === groupBy)?.emptyHint || 'Pick a tab above.'}
             </CardContent>
           </Card>
         )}
       </div>
-
-      {/* Pagination is rendered per-assignee Card; see AssigneeCard. */}
     </div>
   )
 }
