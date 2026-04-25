@@ -5,6 +5,7 @@ import { Card, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
 import { cn } from '../../lib/utils'
 import { JiraLink } from '../../components/JiraLink'
+import { JiraHoverCard } from '../../components/JiraHoverCard'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog'
 import { CapGuard } from '../../components/CapGuard'
 import { todayLocal } from '../../lib/date'
@@ -949,7 +950,7 @@ function TicketRow({ item }: { item: StandupTicketItem }) {
   return (
     <tr className="border-t border-white/5">
       <td className="py-1.5 px-3 w-[90px]">
-        <JiraLink jiraKey={item.key} className="font-mono text-xs" />
+        <JiraHoverCard jiraKey={item.key} className="font-mono text-xs" />
       </td>
       <td className="py-1.5 pr-2 text-foreground/80 text-sm">
         <span className="line-clamp-1">{item.summary}</span>

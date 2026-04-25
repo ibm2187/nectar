@@ -9,7 +9,7 @@ import { cn, exportToCsv } from '../../lib/utils'
 import { SavedViews } from '../../components/SavedViews'
 import { TicketRow, TicketDeployedCell, ReleaseBadge, PriorityBadge, RiskBadge, HealthBadge, getNextRelease, priorityOrdinal, riskOrdinal, NextReleaseVersionCell, NextReleaseDateCell, type ReleaseMembership, type TicketRowData, type TruthEntry } from '../../components/TicketRow'
 import { SortableHeader, useSortableData, useSortState, nextSortState, type SortState, type SortDir as SortableSortDir } from '../../components/SortableHeader'
-import { JiraLink } from '../../components/JiraLink'
+import { JiraHoverCard } from '../../components/JiraHoverCard'
 import { OutIcon } from '../../components/PersonBadge'
 import { STATUS_GROUPS, type StatusGroup } from '../../lib/status-colors'
 import { toLocalDateKey } from '../../lib/date'
@@ -916,7 +916,7 @@ function FlatTicketRow({ ticket: t, onReleaseClick }: { ticket: FlatTicket; onRe
   return (
     <tr className="border-b border-border/30 hover:bg-accent/30 transition-colors">
       <td className="px-3 py-2 align-top">
-        <JiraLink jiraKey={t.key} />
+        <JiraHoverCard jiraKey={t.key} />
       </td>
       <td className="px-3 py-2 align-top">
         <div className="line-clamp-2" title={t.summary}>{t.summary}</div>

@@ -1,4 +1,4 @@
-import { JiraLink } from './JiraLink'
+import { JiraHoverCard } from './JiraHoverCard'
 import { OutIcon } from './PersonBadge'
 import { cn } from '../lib/utils'
 import type { ZohoRef } from '../api/client'
@@ -70,7 +70,7 @@ export function TicketRow({ ticket: t, onReleaseClick }: {
   return (
     <tr className="border-b border-border/30 hover:bg-accent/30 transition-colors">
       <td className="px-3 py-2 align-top">
-        <JiraLink jiraKey={t.key} />
+        <JiraHoverCard jiraKey={t.key} />
       </td>
       <td className="px-3 py-2 align-top">
         <div className="line-clamp-2" title={t.summary}>{t.summary}</div>
