@@ -121,6 +121,44 @@ describe('JiraSync', () => {
       expect(bsRelease.jiraReleaseDate).toBe('2026-04-29');
     });
 
+    it('persists JIRA metadata to the DB (survives ReleaseManager reload)', () => {
+      jiraSync._syncVersionMeta({
+        id: '999',
+        name: '4.2.7.1-lumen',
+        released: false,
+        archived: false,
+        releaseDate: '2026-04-27',
+      });
+
+      // Rebuild ReleaseManager from the same DB to simulate a server restart.
+      const reloaded = new ReleaseManager(audit, { db });
+      const release = reloaded.get('4.2.7.1-lumen', 'webplatform');
+      expect(release).not.toBeNull();
+      expect(release.jiraVersionId).toBe('999');
+      expect(release.jiraVersionName).toBe('4.2.7.1-lumen');
+      expect(release.jiraReleaseDate).toBe('2026-04-27');
+    });
+
+    it('persists JIRA metadata to sharing repos across reload', () => {
+      // Pre-create a bluesummit release (as discovery would)
+      releases.create({ repo: 'bluesummit', version: '4.2.3', branch: 'VIV/4.2.3' });
+
+      jiraSync._syncVersionMeta({
+        id: '321',
+        name: '4.2.3',
+        released: false,
+        archived: false,
+        releaseDate: '2026-05-01',
+      });
+
+      const reloaded = new ReleaseManager(audit, { db });
+      const bsRelease = reloaded.get('4.2.3', 'bluesummit');
+      expect(bsRelease).not.toBeNull();
+      expect(bsRelease.jiraVersionId).toBe('321');
+      expect(bsRelease.jiraVersionName).toBe('4.2.3');
+      expect(bsRelease.jiraReleaseDate).toBe('2026-05-01');
+    });
+
     it('sets targetCustomers to empty (all) for plain version', () => {
       jiraSync._syncVersionMeta({
         id: '200', name: '4.3.0', released: false, archived: false,

@@ -327,6 +327,12 @@ class JiraSync extends EventEmitter {
       release.targetCustomerSource = source;
     }
 
+    // Flush the in-place mutations above to SQLite. Without this call, the
+    // release row keeps the null jiraVersionName/jiraReleaseDate written by
+    // releases.create() and the metadata is lost on server restart — the
+    // release row exists but never surfaces with a ship date on the UI.
+    this.releases.persist(release);
+
     // Emit event if release date changed
     if (oldDate && newDate && oldDate !== newDate && release.state !== 'done') {
       this.emit('release:date-changed', release, { oldDate, newDate });
@@ -360,7 +366,7 @@ class JiraSync extends EventEmitter {
         sharingRelease.jiraReleased = jiraVersion.released;
         sharingRelease.jiraReleaseDate = jiraVersion.releaseDate;
         sharingRelease.jiraArchived = jiraVersion.archived;
-        sharingRelease.updatedAt = new Date().toISOString();
+        this.releases.persist(sharingRelease);
       }
     }
   }
