@@ -125,8 +125,14 @@ describe('incident tools', () => {
       _seed(arr) { for (const i of arr) incidents.set(i.id, i); },
       list: (f = {}) => {
         let arr = [...incidents.values()];
-        if (f.status) arr = arr.filter(i => i.status === f.status);
+        if (f.status) {
+          // Match production: status accepts string OR string[]
+          const statuses = Array.isArray(f.status) ? f.status : [f.status];
+          arr = arr.filter(i => statuses.includes(i.status));
+        }
         if (f.customerId) arr = arr.filter(i => i.customerId === f.customerId);
+        if (f.severity) arr = arr.filter(i => i.severity === f.severity);
+        if (f.triggerType) arr = arr.filter(i => i.triggerType === f.triggerType);
         return arr;
       },
       get: (id) => incidents.get(id) || null,
@@ -165,29 +171,43 @@ describe('incident tools', () => {
     server = fakeServer();
     store = makeIncidentStore();
     store._seed([
-      { id: 'inc-1', status: 'open', severity: 'critical', triggerType: 'env-unhealthy', summary: 'bayada-prod down', customerId: 'bayada', envId: 'bayada-prod', openedAt: '2026-04-26T00:00:00Z', slackPosts: [{ channel: '#a', ts: '1' }] },
-      { id: 'inc-2', status: 'resolved', severity: 'warning', triggerType: 'deploy-failed', summary: 'lumen deploy failed', customerId: 'lumen', envId: 'lumen-prod', openedAt: '2026-04-25T00:00:00Z', resolvedAt: '2026-04-25T01:00:00Z', slackPosts: [] },
+      { id: 'inc-1', status: 'open',         severity: 'critical', triggerType: 'env-unhealthy', summary: 'bayada-prod down',     customerId: 'bayada', envId: 'bayada-prod', openedAt: '2026-04-26T00:00:00Z', slackPosts: [{ channel: '#a', ts: '1' }] },
+      { id: 'inc-2', status: 'resolved',     severity: 'warning',  triggerType: 'deploy-failed',  summary: 'lumen deploy failed',  customerId: 'lumen',  envId: 'lumen-prod',  openedAt: '2026-04-25T00:00:00Z', resolvedAt: '2026-04-25T01:00:00Z', slackPosts: [] },
+      { id: 'inc-3', status: 'acknowledged', severity: 'critical', triggerType: 'env-unhealthy', summary: 'lumen-prod degraded',  customerId: 'lumen',  envId: 'lumen-prod',  openedAt: '2026-04-26T01:00:00Z', slackPosts: [] },
+      { id: 'inc-4', status: 'reopened',     severity: 'warning',  triggerType: 'env-unhealthy', summary: 'flap',                customerId: 'lumen',  envId: 'lumen-prod',  openedAt: '2026-04-26T02:00:00Z', slackPosts: [] },
     ]);
     // Dev-mode authz: SSO disabled means authorize() returns true for all
     delete process.env.ENABLE_GOOGLE_SSO;
     registerTools(server, fakeDeps({ incidents: store }), { user: { email: 'admin@viv.com' } });
   });
 
-  it('list_incidents defaults to open only', async () => {
+  it('list_incidents defaults to "active" — open + acknowledged + reopened', async () => {
     const r = await server.call('list_incidents', {});
+    // open + acknowledged + reopened = 3 (excludes resolved)
+    expect(r.data.count).toBe(3);
+    const ids = r.data.incidents.map(i => i.id).sort();
+    expect(ids).toEqual(['inc-1', 'inc-3', 'inc-4']);
+  });
+
+  it('list_incidents status=open is narrower than active', async () => {
+    const r = await server.call('list_incidents', { status: 'open' });
     expect(r.data.count).toBe(1);
     expect(r.data.incidents[0].id).toBe('inc-1');
   });
 
-  it('list_incidents status=all returns both', async () => {
+  it('list_incidents status=all returns every status', async () => {
     const r = await server.call('list_incidents', { status: 'all' });
-    expect(r.data.count).toBe(2);
+    expect(r.data.count).toBe(4);
   });
 
   it('list_incidents narrows by customer', async () => {
     const r = await server.call('list_incidents', { status: 'all', customerId: 'lumen' });
-    expect(r.data.count).toBe(1);
-    expect(r.data.incidents[0].id).toBe('inc-2');
+    expect(r.data.count).toBe(3);
+  });
+
+  it('list_incidents narrows by severity', async () => {
+    const r = await server.call('list_incidents', { status: 'all', severity: 'critical' });
+    expect(r.data.count).toBe(2);
   });
 
   it('get_incident returns the full record', async () => {
@@ -259,19 +279,18 @@ describe('support ticket tools', () => {
       { id: '1', ticketNumber: 'VHC-1', subject: 'Login fails', status: 'Open', statusType: 'Open', priority: 'High', accountId: 'a1', assigneeEmail: 'x@viv.com', createdAt: '2026-04-25T00:00:00Z', modifiedAt: '2026-04-25T01:00:00Z', webUrl: 'https://x' },
       { id: '2', ticketNumber: 'VHC-2', subject: 'Slow page', status: 'Closed', statusType: 'Closed', priority: 'Low', accountId: 'a1', assigneeEmail: 'y@viv.com', createdAt: '2026-04-20T00:00:00Z', modifiedAt: '2026-04-21T00:00:00Z', webUrl: 'https://y' },
     ];
+    const filterTickets = (opts) => {
+      let arr = [...allTickets];
+      if (opts.openOnly) arr = arr.filter(t => t.statusType !== 'Closed');
+      if (opts.closedOnly) arr = arr.filter(t => t.statusType === 'Closed');
+      // Production expects ARRAY filters here — the regression we just fixed.
+      if (opts.deptPrefixes) arr = arr.filter(t => opts.deptPrefixes.includes(t.deptPrefix || (t.ticketNumber || '').split('-')[0]));
+      if (opts.accountIds) arr = arr.filter(t => opts.accountIds.includes(t.accountId));
+      return arr;
+    };
     const zohoStore = {
-      listTickets: (opts) => {
-        let arr = [...allTickets];
-        if (opts.openOnly) arr = arr.filter(t => t.statusType !== 'Closed');
-        if (opts.closedOnly) arr = arr.filter(t => t.statusType === 'Closed');
-        return arr.slice(opts.offset || 0, (opts.offset || 0) + opts.limit);
-      },
-      countTickets: (opts) => {
-        let arr = [...allTickets];
-        if (opts.openOnly) arr = arr.filter(t => t.statusType !== 'Closed');
-        if (opts.closedOnly) arr = arr.filter(t => t.statusType === 'Closed');
-        return arr.length;
-      },
+      listTickets: (opts) => filterTickets(opts).slice(opts.offset || 0, (opts.offset || 0) + opts.limit),
+      countTickets: (opts) => filterTickets(opts).length,
       getTicketByNumber: (n) => allTickets.find(t => t.ticketNumber === n) || null,
       listDeptPrefixes: () => [{ deptPrefix: 'VHC', count: 2 }],
     };
@@ -289,6 +308,37 @@ describe('support ticket tools', () => {
 
     const depts = await server.call('list_support_departments', {});
     expect(depts.data.departments[0].deptPrefix).toBe('VHC');
+  });
+
+  it('search_support_tickets accepts array filters (regression)', async () => {
+    const server = fakeServer();
+    const allTickets = [
+      { id: '1', ticketNumber: 'VHC-1', deptPrefix: 'VHC', accountId: 'a1', statusType: 'Open', subject: 'x' },
+      { id: '2', ticketNumber: 'BYD-1', deptPrefix: 'BYD', accountId: 'a2', statusType: 'Open', subject: 'y' },
+    ];
+    const filterTickets = (opts) => {
+      let arr = [...allTickets];
+      if (opts.openOnly) arr = arr.filter(t => t.statusType !== 'Closed');
+      if (opts.deptPrefixes) arr = arr.filter(t => opts.deptPrefixes.includes(t.deptPrefix));
+      if (opts.accountIds) arr = arr.filter(t => opts.accountIds.includes(t.accountId));
+      return arr;
+    };
+    registerTools(server, fakeDeps({
+      zohoStore: {
+        listTickets: (o) => filterTickets(o).slice(o.offset || 0, (o.offset || 0) + o.limit),
+        countTickets: (o) => filterTickets(o).length,
+        getTicketByNumber: () => null,
+        listDeptPrefixes: () => [],
+      },
+    }), {});
+
+    const r = await server.call('search_support_tickets', { deptPrefixes: ['VHC'] });
+    expect(r.data.total).toBe(1);
+    expect(r.data.tickets[0].ticketNumber).toBe('VHC-1');
+
+    const r2 = await server.call('search_support_tickets', { accountIds: ['a2'], status: 'all' });
+    expect(r2.data.total).toBe(1);
+    expect(r2.data.tickets[0].ticketNumber).toBe('BYD-1');
   });
 });
 
@@ -386,6 +436,28 @@ describe('JIRA ticket tools', () => {
 });
 
 // ── People ───────────────────────────────────────────────
+
+describe('get_release_prs', () => {
+  it('uses prStore.findByJiraKey (regression — was calling non-existent getByTicket)', async () => {
+    const server = fakeServer();
+    const release = { version: '4.1.2', repo: 'webplatform' };
+    const releases = {
+      list: () => [],
+      get: (v, r) => v === '4.1.2' ? release : null,
+      getTickets: () => [{ key: 'DEV-1' }, { key: 'DEV-2' }],
+    };
+    const prStore = {
+      findByJiraKey: (k) => k === 'DEV-1'
+        ? [{ prNumber: 25500, title: 'add field', author: 'alice', prMergedAt: '2026-04-20', repo: 'webplatform' }]
+        : [],
+    };
+    registerTools(server, fakeDeps({ releases: { ...releases }, prStore }), {});
+    const r = await server.call('get_release_prs', { version: '4.1.2', repo: 'webplatform' });
+    expect(r.data.count).toBe(1);
+    expect(r.data.prs[0].number).toBe(25500);
+    expect(r.data.prs[0].mergedAt).toBe('2026-04-20');
+  });
+});
 
 describe('list_people', () => {
   it('lists users from userStore', async () => {

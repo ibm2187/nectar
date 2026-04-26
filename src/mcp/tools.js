@@ -340,11 +340,18 @@ function registerTools(server, deps, reqCtx) {
       const tickets = releases.getTickets(release);
       const prs = [];
       for (const tk of tickets) {
-        const list = prStore.getByTicket(tk.key) || [];
-        for (const p of list) {
+        // PrStore exposes findByJiraKey, not getByTicket — defensive
+        // about either name in case future refactors land.
+        const lookup = prStore.findByJiraKey || prStore.getByTicket;
+        const list = lookup ? lookup.call(prStore, tk.key) : [];
+        for (const p of list || []) {
           prs.push({
-            number: p.number, title: p.title, author: p.author,
-            mergedAt: p.mergedAt, ticketKey: tk.key, repo: p.repo || repo,
+            number: p.prNumber || p.number,
+            title: p.title,
+            author: p.author,
+            mergedAt: p.mergedAt || p.prMergedAt,
+            ticketKey: tk.key,
+            repo: p.repo || repo,
           });
         }
       }
@@ -472,19 +479,25 @@ function registerTools(server, deps, reqCtx) {
 
   if (incidents) {
     t('list_incidents',
-      'List incidents. Defaults to open incidents — pass status=all/resolved to broaden. Filter by customerId or envId. Returns summary fields only; use get_incident for full detail.',
+      'List incidents. Defaults to "active" (open + acknowledged + reopened) since that\'s what dashboards show. Pass status=all to broaden, or a specific value. Filter by customerId, envId, severity, or triggerType. Returns summary fields only; use get_incident for full detail.',
       {
-        status: z.enum(['open', 'resolved', 'all']).default('open'),
+        status: z.enum(['active', 'open', 'acknowledged', 'reopened', 'resolved', 'all']).default('active'),
         customerId: z.string().optional(),
         envId: z.string().optional(),
+        severity: z.enum(['critical', 'warning', 'info']).optional(),
+        triggerType: z.string().optional().describe('e.g. env-unhealthy, deploy-failed'),
         limit: z.number().int().min(1).max(200).default(50),
       },
-      async ({ status, customerId, envId, limit }) => {
-        const filter = {};
-        if (status !== 'all') filter.status = status;
+      async ({ status, customerId, envId, severity, triggerType, limit }) => {
+        const filter = { limit };
+        // 'active' is the dashboard default — anything not yet resolved.
+        if (status === 'active') filter.status = ['open', 'acknowledged', 'reopened'];
+        else if (status !== 'all') filter.status = status;
         if (customerId) filter.customerId = customerId;
         if (envId) filter.envId = envId;
-        const list = incidents.list(filter).slice(0, limit);
+        if (severity) filter.severity = severity;
+        if (triggerType) filter.triggerType = triggerType;
+        const list = incidents.list(filter);
         return text({
           count: list.length,
           incidents: list.map(i => ({
@@ -658,32 +671,43 @@ function registerTools(server, deps, reqCtx) {
 
   if (zohoStore) {
     t('search_support_tickets',
-      'Search Zoho support tickets in the local mirror. Defaults to open tickets. Returns summary list.',
+      'Search Zoho support tickets in the local mirror. Defaults to open tickets. Returns summary list with pagination.',
       {
-        query: z.string().optional().describe('Free text across subject, ticketNumber, contact name'),
+        query: z.string().optional().describe('LIKE match across subject and ticketNumber'),
         status: z.enum(['open', 'closed', 'all']).default('open'),
-        accountId: z.string().optional().describe('Zoho account id'),
-        deptPrefix: z.string().optional().describe('Department prefix (VHC, BYD, THC, VIV)'),
-        assigneeEmail: z.string().optional(),
+        accountIds: z.array(z.string()).optional().describe('Zoho account ids'),
+        deptPrefixes: z.array(z.string()).optional().describe('Department prefixes — VHC, BYD, THC, VIV'),
+        priorities: z.array(z.string()).optional().describe('e.g. ["Urgent", "High"]'),
+        assigneeEmail: z.string().optional().describe('Lower-case Viv email'),
+        minAgeDays: z.number().int().optional(),
+        maxAgeDays: z.number().int().optional(),
         page: z.number().int().min(1).default(1),
         pageSize: z.number().int().min(1).max(100).default(25),
       },
-      async ({ query, status, accountId, deptPrefix, assigneeEmail, page, pageSize }) => {
+      async ({ query, status, accountIds, deptPrefixes, priorities, assigneeEmail, minAgeDays, maxAgeDays, page, pageSize }) => {
         const opts = { limit: pageSize, offset: (page - 1) * pageSize };
         if (query) opts.search = query;
         if (status === 'open') opts.openOnly = true;
         if (status === 'closed') opts.closedOnly = true;
-        if (accountId) opts.accountId = accountId;
-        if (deptPrefix) opts.deptPrefix = deptPrefix;
-        if (assigneeEmail) opts.assigneeEmail = assigneeEmail;
+        // Store expects ARRAYS for these — single-string params (the prior
+        // shape) were silently dropped by the WHERE-builder.
+        if (accountIds?.length) opts.accountIds = accountIds;
+        if (deptPrefixes?.length) opts.deptPrefixes = deptPrefixes;
+        if (priorities?.length) opts.priorities = priorities;
+        if (assigneeEmail) opts.assigneeEmail = assigneeEmail.toLowerCase();
+        if (minAgeDays != null) opts.minAgeDays = minAgeDays;
+        if (maxAgeDays != null) opts.maxAgeDays = maxAgeDays;
         const total = zohoStore.countTickets(opts);
         const list = zohoStore.listTickets(opts);
         return text({
-          page, pageSize, total, hasMore: page * pageSize < total,
+          page, pageSize, total,
+          hasMore: page * pageSize < total,
+          count: list.length,
           tickets: list.map(t => ({
             id: t.id, ticketNumber: t.ticketNumber, subject: t.subject,
             status: t.status, statusType: t.statusType, priority: t.priority,
             accountId: t.accountId, assigneeEmail: t.assigneeEmail,
+            deptPrefix: t.deptPrefix,
             createdAt: t.createdAt, modifiedAt: t.modifiedAt,
             webUrl: t.webUrl,
           })),
