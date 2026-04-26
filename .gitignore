@@ -45,3 +45,4 @@ docs/plans/
 # Claude Code state
 .claude/scheduled_tasks.lock
 .claude/
+.playwright-mcp/
