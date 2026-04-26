@@ -714,36 +714,62 @@ function registerTools(server, deps, reqCtx) {
 
   if (ticketStore) {
     t('search_jira_tickets',
-      'Search JIRA tickets in the local mirror. Returns summary fields. Filter by module, project, customer, status, fixVersion.',
+      'Search JIRA tickets in the local mirror. Returns summary fields with pagination. Combine `query` (text search) with structured filters. statusGroup is the easiest way to narrow to a lifecycle stage (e.g. "in-qa", "in-dev", "not-done").',
       {
-        query: z.string().optional().describe('Free text across key + summary'),
+        query: z.string().optional().describe('Free text across key/summary/assignee'),
+        assignee: z.string().optional().describe('Match assignee or qaAssignee (display name)'),
+        statusGroup: z.string().optional().describe('Lifecycle bucket — e.g. "in-qa", "in-dev", "not-done", "done"'),
+        statusCategory: z.string().optional().describe('"To Do", "In Progress", or "Done"'),
         module: z.string().optional(),
+        component: z.string().optional(),
         project: z.string().optional(),
-        customerId: z.string().optional(),
-        status: z.string().optional(),
-        fixVersion: z.string().optional(),
+        product: z.string().optional(),
+        customer: z.string().optional().describe('Customer tag (e.g. "bayada")'),
+        type: z.string().optional().describe('Issue type (Bug, Story, Task, etc.)'),
         page: z.number().int().min(1).default(1),
         pageSize: z.number().int().min(1).max(100).default(25),
       },
-      async ({ query, module, project, customerId, status, fixVersion, page, pageSize }) => {
-        const opts = { limit: pageSize, offset: (page - 1) * pageSize };
-        if (query) opts.query = query;
-        if (module) opts.module = module;
-        if (project) opts.project = project;
-        if (customerId) opts.customerId = customerId;
-        if (status) opts.status = status;
-        if (fixVersion) opts.fixVersion = fixVersion;
-        const list = (typeof ticketStore.search === 'function')
-          ? ticketStore.search(query || '', opts)
-          : ticketStore.getByFilter(opts);
+      async ({ query, assignee, statusGroup, statusCategory, module, component, project, product, customer, type, page, pageSize }) => {
+        const limit = pageSize;
+        const offset = (page - 1) * pageSize;
+
+        // Two backends. Use search() when there's a free-text query
+        // (it scans key/summary/assignee). Use getByFilter() otherwise
+        // for structured filters. Both return { tickets, total, hasMore }.
+        let result;
+        if (query) {
+          result = ticketStore.search(query, { limit, offset });
+        } else {
+          const opts = { limit, offset };
+          if (assignee) opts.person = assignee;
+          if (statusGroup) opts.statusGroup = statusGroup;
+          if (statusCategory) opts.statusCategory = statusCategory;
+          if (module) opts.module = module;
+          if (component) opts.component = component;
+          if (project) opts.project = project;
+          if (product) opts.product = product;
+          if (customer) opts.customer = customer;
+          if (type) opts.type = type;
+          result = ticketStore.getByFilter(opts);
+        }
+
+        const tickets = (result?.tickets || []).map(t => ({
+          key: t.key, summary: t.summary, status: t.status,
+          statusCategory: t.statusCategory,
+          assignee: t.assignee, qaAssignee: t.qaAssignee,
+          fixVersions: t.fixVersions, targetFixVersions: t.targetFixVersions,
+          module: t.module, component: t.component,
+          projects: t.projects, product: t.product, customerTags: t.customerTags,
+          type: t.type, priority: t.priority,
+          created: t.created, updated: t.updated,
+        }));
+
         return text({
-          page, pageSize, count: list.length,
-          tickets: list.map(t => ({
-            key: t.key, summary: t.summary, status: t.status,
-            assignee: t.assignee, fixVersion: t.fixVersion,
-            module: t.module, projects: t.projects, product: t.product,
-            updated: t.updated,
-          })),
+          page, pageSize,
+          total: result?.total ?? tickets.length,
+          hasMore: !!result?.hasMore,
+          count: tickets.length,
+          tickets,
         });
       }
     );

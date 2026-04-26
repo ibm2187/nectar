@@ -307,8 +307,16 @@ describe('JIRA ticket tools', () => {
     const rollups = {
       'webplatform:4.1.2': { done: 12, inQa: 3, awaitingCp: 1, inDev: 0, attention: 0, rogue: 0 },
     };
+    const all = Object.values(tickets);
     return {
-      search: () => Object.values(tickets),
+      // Match production shape — both helpers return { tickets, total, hasMore }.
+      search: () => ({ tickets: all, total: all.length, hasMore: false }),
+      getByFilter: (opts) => {
+        let arr = all;
+        if (opts.person) arr = arr.filter(t => t.assignee === opts.person || t.qaAssignee === opts.person);
+        if (opts.module) arr = arr.filter(t => t.module === opts.module);
+        return { tickets: arr, total: arr.length, hasMore: false };
+      },
       get: (k) => tickets[k] || null,
       getTruthForTicket: (k) => truthByKey[k] || [],
       getTruthRollup: (repo, version) => rollups[`${repo}:${version}`] || { done: 0, inQa: 0, awaitingCp: 0, inDev: 0, attention: 0, rogue: 0 },
@@ -322,12 +330,33 @@ describe('JIRA ticket tools', () => {
     const r = await server.call('search_jira_tickets', { query: 'field' });
     expect(r.data.count).toBe(1);
     expect(r.data.tickets[0].key).toBe('DEV-1');
+    expect(r.data.total).toBe(1);
+    expect(r.data.hasMore).toBe(false);
 
     const one = await server.call('get_jira_ticket', { key: 'DEV-1' });
     expect(one.data.summary).toBe('Add field');
 
     const miss = await server.call('get_jira_ticket', { key: 'DEV-99' });
     expect(miss.raw).toMatch(/not found/);
+  });
+
+  it('search_jira_tickets without query uses structured filters via getByFilter', async () => {
+    const server = fakeServer();
+    registerTools(server, fakeDeps({ ticketStore: makeTicketStore() }), {});
+    // No query — should still return results via getByFilter
+    const r = await server.call('search_jira_tickets', { assignee: 'a@viv' });
+    expect(r.data.count).toBe(1);
+    expect(r.data.tickets[0].key).toBe('DEV-1');
+  });
+
+  it('search_jira_tickets unwraps the result envelope (regression — used to crash on result.length)', async () => {
+    const server = fakeServer();
+    registerTools(server, fakeDeps({ ticketStore: makeTicketStore() }), {});
+    const r = await server.call('search_jira_tickets', {});
+    // Must succeed without throwing — was breaking because the tool
+    // treated { tickets, total, hasMore } as an Array.
+    expect(r.data).toBeDefined();
+    expect(Array.isArray(r.data.tickets)).toBe(true);
   });
 
   it('get_jira_ticket_truth returns per-release health info', async () => {
@@ -384,7 +413,7 @@ describe('full toolset snapshot', () => {
       alertRules: { list: () => [], get: () => null },
       alertRouter: { evaluateNow: async () => ({}) },
       zohoStore: { listTickets: () => [], countTickets: () => 0, getTicketByNumber: () => null, listDeptPrefixes: () => [] },
-      ticketStore: { search: () => [], get: () => null, getByFilter: () => [], getTruthForTicket: () => [], getTruthRollup: () => ({}) },
+      ticketStore: { search: () => ({ tickets: [], total: 0, hasMore: false }), get: () => null, getByFilter: () => ({ tickets: [], total: 0, hasMore: false }), getTruthForTicket: () => [], getTruthRollup: () => ({}) },
       prStore: { getByTicket: () => [] },
       userStore: { listUsers: () => [] },
       taskQueue: { getPending: () => [], claim: () => null, complete: () => null, getTask: () => null },
