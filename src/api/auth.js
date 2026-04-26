@@ -225,6 +225,9 @@ function createAuthMiddleware(apiKeys, userStore) {
         req.path.startsWith('/api/webhooks/') ||
         req.path === '/health' ||
         req.path === '/mcp' ||
+        req.path === '/mcp-oauth' ||
+        req.path.startsWith('/mcp-oauth/oauth/') ||
+        req.path.startsWith('/.well-known/') ||
         req.path === '/login' ||
         req.path.startsWith('/assets/') ||
         req.path.endsWith('.js') ||

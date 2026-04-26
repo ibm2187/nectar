@@ -688,6 +688,60 @@ function applySchema(db) {
       lastSyncDurationMs   INTEGER,
       updatedAt            TEXT
     );
+
+    -- ── mcp_oauth_clients (v17) ────────────────────────────────
+    -- OAuth 2.1 client registrations for the Streamable HTTP MCP at
+    -- /mcp-oauth. Created via Dynamic Client Registration (RFC 7591)
+    -- when an MCP client (e.g. Claude Desktop) first connects. PKCE
+    -- public clients leave clientSecretHash null.
+    CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+      clientId               TEXT PRIMARY KEY,
+      clientSecretHash       TEXT,                 -- nullable for public/PKCE clients
+      clientName             TEXT NOT NULL,
+      redirectUris           TEXT NOT NULL,        -- JSON array
+      tokenEndpointAuthMethod TEXT NOT NULL DEFAULT 'none',
+      grantTypes             TEXT NOT NULL DEFAULT '["authorization_code","refresh_token"]',
+      responseTypes          TEXT NOT NULL DEFAULT '["code"]',
+      scope                  TEXT NOT NULL DEFAULT 'mcp',
+      registeredByEmail      TEXT,                 -- null when registered via DCR (anonymous)
+      createdAt              TEXT NOT NULL,
+      lastUsedAt             TEXT
+    );
+
+    -- ── mcp_oauth_codes (v17) ──────────────────────────────────
+    -- One-time-use authorization codes. 5-minute TTL. PKCE challenge
+    -- captured at /authorize, verified at /token.
+    CREATE TABLE IF NOT EXISTS mcp_oauth_codes (
+      code                 TEXT PRIMARY KEY,
+      clientId             TEXT NOT NULL,
+      userEmail            TEXT NOT NULL,
+      redirectUri          TEXT NOT NULL,
+      codeChallenge        TEXT NOT NULL,
+      codeChallengeMethod  TEXT NOT NULL DEFAULT 'S256',
+      scope                TEXT,
+      expiresAt            TEXT NOT NULL,
+      usedAt               TEXT,                   -- nullable; set on first redemption
+      createdAt            TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_oauth_codes_expires ON mcp_oauth_codes(expiresAt);
+
+    -- ── mcp_oauth_tokens (v17) ─────────────────────────────────
+    -- Access + refresh tokens. tokenHash is the SHA-256 of the opaque
+    -- token string the client holds — we never store the token itself.
+    CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
+      tokenHash       TEXT PRIMARY KEY,
+      tokenType       TEXT NOT NULL,              -- 'access' | 'refresh'
+      clientId        TEXT NOT NULL,
+      userEmail       TEXT NOT NULL,
+      scope           TEXT,
+      expiresAt       TEXT NOT NULL,
+      revokedAt       TEXT,                        -- nullable; user/admin can revoke
+      parentTokenHash TEXT,                        -- access→refresh chain (for revoke cascade)
+      createdAt       TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_user    ON mcp_oauth_tokens(userEmail);
+    CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_client  ON mcp_oauth_tokens(clientId);
+    CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_expires ON mcp_oauth_tokens(expiresAt);
   `);
 }
 
@@ -1217,6 +1271,53 @@ function applyMigrations(db) {
         );
       `);
       db.prepare('INSERT OR IGNORE INTO zoho_sync_meta (id, backfillStatus, backfillProgress, backfillTotal) VALUES (1, \'pending\', 0, 0)').run();
+    },
+    // v17: MCP OAuth tables — clients, codes, tokens. Powers the new
+    // /mcp-oauth Streamable HTTP MCP for Claude Desktop's custom
+    // connector. Fresh installs already have these via applySchema.
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+          clientId               TEXT PRIMARY KEY,
+          clientSecretHash       TEXT,
+          clientName             TEXT NOT NULL,
+          redirectUris           TEXT NOT NULL,
+          tokenEndpointAuthMethod TEXT NOT NULL DEFAULT 'none',
+          grantTypes             TEXT NOT NULL DEFAULT '["authorization_code","refresh_token"]',
+          responseTypes          TEXT NOT NULL DEFAULT '["code"]',
+          scope                  TEXT NOT NULL DEFAULT 'mcp',
+          registeredByEmail      TEXT,
+          createdAt              TEXT NOT NULL,
+          lastUsedAt             TEXT
+        );
+        CREATE TABLE IF NOT EXISTS mcp_oauth_codes (
+          code                 TEXT PRIMARY KEY,
+          clientId             TEXT NOT NULL,
+          userEmail            TEXT NOT NULL,
+          redirectUri          TEXT NOT NULL,
+          codeChallenge        TEXT NOT NULL,
+          codeChallengeMethod  TEXT NOT NULL DEFAULT 'S256',
+          scope                TEXT,
+          expiresAt            TEXT NOT NULL,
+          usedAt               TEXT,
+          createdAt            TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mcp_oauth_codes_expires ON mcp_oauth_codes(expiresAt);
+        CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
+          tokenHash       TEXT PRIMARY KEY,
+          tokenType       TEXT NOT NULL,
+          clientId        TEXT NOT NULL,
+          userEmail       TEXT NOT NULL,
+          scope           TEXT,
+          expiresAt       TEXT NOT NULL,
+          revokedAt       TEXT,
+          parentTokenHash TEXT,
+          createdAt       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_user    ON mcp_oauth_tokens(userEmail);
+        CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_client  ON mcp_oauth_tokens(clientId);
+        CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_expires ON mcp_oauth_tokens(expiresAt);
+      `);
     },
   ];
 

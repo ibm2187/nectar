@@ -22,6 +22,10 @@ function createWebServer(services, config) {
   const app = express();
   app.set('trust proxy', 1); // Trust first proxy (ALB) for X-Forwarded-For
   app.use(express.json({ limit: '1mb' }));
+  // application/x-www-form-urlencoded — required by the MCP OAuth
+  // consent form POST and by RFC 6749 token endpoints. Harmless for
+  // every other route since they don't read req.body for form posts.
+  app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
   // ── Gzip compression for API responses ────────────────
   // JSON responses (especially /releases/home) can be 1-2MB uncompressed.
@@ -55,6 +59,27 @@ function createWebServer(services, config) {
   // ── Auth routes (before auth middleware) ──────────────
   const { createAuthRoutes, createAuthMiddleware } = require('../api/auth');
   app.use('/api/auth', createAuthRoutes({ userStore, teamStore, ticketStore }));
+
+  // ── MCP OAuth routes (before auth middleware) ─────────
+  // The OAuth surface (.well-known + /mcp-oauth/oauth/*) MUST be
+  // reachable without prior Nectar auth — the whole point is to bootstrap
+  // identity for an external MCP client. /authorize enforces the Nectar
+  // SSO session itself; everything else is intentionally public.
+  const { createMcpOAuthRoutes } = require('../api/mcp-oauth');
+  const { McpOAuthStore } = require('../core/mcp-oauth-store');
+  const mcpOAuthStore = new McpOAuthStore();
+  // Anonymous DCR + token endpoints could be flooded — a tighter limit
+  // than the regular /api/ rate avoids filling mcp_oauth_clients with
+  // bogus registrations. Same window as /api/ (60s) but lower ceiling.
+  const mcpOAuthLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'too_many_requests', error_description: 'Slow down — try again in a minute' },
+  });
+  app.use('/mcp-oauth/oauth/', mcpOAuthLimiter);
+  app.use(createMcpOAuthRoutes({ baseUrl: process.env.NECTAR_URL, store: mcpOAuthStore }));
 
   // ── Auth middleware (conditional on ENABLE_GOOGLE_SSO) ─
   const authMiddleware = createAuthMiddleware(apiKeys, userStore);
@@ -133,7 +158,9 @@ function createWebServer(services, config) {
 
   // SPA fallback — serve index.html for client-side routes
   app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api/') || req.path.startsWith('/ws') || req.path.startsWith('/mcp')) return next();
+    if (req.path.startsWith('/api/') || req.path.startsWith('/ws') ||
+        req.path.startsWith('/mcp') || req.path.startsWith('/mcp-oauth') ||
+        req.path.startsWith('/.well-known/')) return next();
     const indexPath = path.join(staticDir, 'index.html');
     if (fs.existsSync(indexPath)) {
       res.sendFile(indexPath);
@@ -422,6 +449,19 @@ function createWebServer(services, config) {
     releaseTruth: services.releaseTruth,
     taskQueue,
     apiKeys,
+  });
+
+  // ── MCP OAuth server (Claude Desktop custom connector) ─
+  // Parallel /mcp-oauth Streamable HTTP MCP, gated by OAuth bearer
+  // tokens issued by the routes mounted above. The existing /mcp path
+  // (api-key auth, used by Hive + Claude Code stdio bridge) is untouched.
+  const { mountMcpOAuth } = require('../mcp/server-oauth');
+  mountMcpOAuth(app, '/mcp-oauth', {
+    customerStore,
+    releases,
+    releaseTruth: services.releaseTruth,
+    taskQueue,
+    oauthStore: mcpOAuthStore,
   });
 
   // ── HTTP server with WebSocket upgrade ────────────────
