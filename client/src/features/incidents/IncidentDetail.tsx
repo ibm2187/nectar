@@ -2,8 +2,10 @@ import { useEffect, useState, useCallback } from 'react'
 import { apiFetch } from '../../api/client'
 import type { IncidentWithEvents, IncidentEvent, AlertSeverity, IncidentStatus } from '../../api/client'
 import { Button } from '../../components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog'
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetBody } from '../../components/ui/sheet'
 import { Badge } from '../../components/ui/badge'
+import { SearchableSelect } from '../../components/SearchableSelect'
+import { useBasicUsers } from '../../lib/use-basic-users'
 
 const STATUS_BADGE: Record<IncidentStatus, string> = {
   open: 'bg-red-100 text-red-800 border-red-300',
@@ -31,6 +33,9 @@ const EVENT_ICON: Record<string, string> = {
   'dedup-suppressed': '🔕',
 }
 
+interface SlackChannel { id: string; name: string; isPrivate: boolean }
+interface SlackPostResult { channel: string; ok: boolean; error?: string; code?: string }
+
 interface Props {
   incidentId: string
   onClose: () => void
@@ -38,10 +43,16 @@ interface Props {
 }
 
 export function IncidentDetail({ incidentId, onClose, onChanged }: Props) {
+  // Basic user directory — non-admin (the previous useAccessStore.loadAll
+  // hit /access/* which is user.admin-gated, leaving non-admins with an
+  // empty assignee picker).
+  const { users: accessUsers } = useBasicUsers()
+
   const [incident, setIncident] = useState<IncidentWithEvents | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [noteText, setNoteText] = useState('')
+  const [updateText, setUpdateText] = useState('')
+  const [postToSlack, setPostToSlack] = useState(true)
   const [working, setWorking] = useState(false)
 
   const refresh = useCallback(async () => {
@@ -50,6 +61,9 @@ export function IncidentDetail({ incidentId, onClose, onChanged }: Props) {
     try {
       const data = await apiFetch<IncidentWithEvents>(`/alerts/incidents/${incidentId}`)
       setIncident(data)
+      // Default the broadcast checkbox to true only when there's a thread
+      // to broadcast into; otherwise the post would have nowhere to land.
+      setPostToSlack((data.slackPosts?.length ?? 0) > 0)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load')
     } finally {
@@ -75,10 +89,10 @@ export function IncidentDetail({ incidentId, onClose, onChanged }: Props) {
     }
   }
 
-  async function submitNote() {
-    if (!noteText.trim()) return
-    await doAction('/note', { text: noteText })
-    setNoteText('')
+  async function submitUpdate() {
+    if (!updateText.trim()) return
+    await doAction('/note', { text: updateText, broadcast: postToSlack })
+    setUpdateText('')
   }
 
   async function changeSeverity(severity: AlertSeverity) {
@@ -98,14 +112,15 @@ export function IncidentDetail({ incidentId, onClose, onChanged }: Props) {
   }
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+    <Sheet open onOpenChange={(open) => !open && onClose()}>
+      <SheetContent className="md:max-w-2xl">
+        <SheetHeader>
+          <SheetTitle className="flex items-center gap-2 pr-8">
             <span>{incident ? SEVERITY_ICON[incident.severity] : '🚨'}</span>
             <span>{incident?.summary || 'Incident'}</span>
-          </DialogTitle>
-        </DialogHeader>
+          </SheetTitle>
+        </SheetHeader>
+        <SheetBody>
 
         {loading && <p className="text-sm text-muted-foreground">Loading...</p>}
         {error && <p className="text-sm text-red-600">Error: {error}</p>}
@@ -153,6 +168,13 @@ export function IncidentDetail({ incidentId, onClose, onChanged }: Props) {
               </div>
             )}
 
+            {/* Slack status panel — surfaces threading state instead of leaving
+                "did the Slack post work?" as an invisible question. */}
+            <SlackStatusPanel
+              incident={incident}
+              onPosted={async () => { await refresh(); onChanged() }}
+            />
+
             {/* Actions */}
             <div className="flex flex-wrap gap-2 pt-2 border-t">
               {incident.status === 'open' && (
@@ -170,13 +192,14 @@ export function IncidentDetail({ incidentId, onClose, onChanged }: Props) {
                   Reopen
                 </Button>
               )}
-              <AssignButton
+              <AssignControl
                 incidentId={incidentId}
                 currentUserId={incident.assigneeUserId}
+                users={accessUsers}
                 onAssigned={() => { refresh(); onChanged() }}
               />
               <select
-                className="border rounded px-2 py-1 text-sm"
+                className="border rounded px-2 py-1 text-sm bg-background"
                 value={incident.severity}
                 disabled={working}
                 onChange={(e) => changeSeverity(e.target.value as AlertSeverity)}
@@ -185,30 +208,36 @@ export function IncidentDetail({ incidentId, onClose, onChanged }: Props) {
                 <option value="warning">Severity: Warning</option>
                 <option value="info">Severity: Info</option>
               </select>
-              {incident.slackChannel && incident.slackTs && (
-                <a
-                  href={slackThreadUrl(incident.slackChannel, incident.slackTs)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-sm underline text-primary self-center"
-                >
-                  View in Slack
-                </a>
-              )}
             </div>
 
-            {/* Add note */}
+            {/* Post an update */}
             <div className="pt-2 border-t space-y-2">
-              <div className="text-xs text-muted-foreground">Add a note</div>
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-muted-foreground">Post an update</div>
+                <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={postToSlack}
+                    disabled={(incident.slackPosts?.length ?? 0) === 0}
+                    onChange={(e) => setPostToSlack(e.target.checked)}
+                  />
+                  <span className={(incident.slackPosts?.length ?? 0) === 0 ? 'text-muted-foreground/60' : ''}>
+                    Also post to Slack thread
+                    {(incident.slackPosts?.length ?? 0) === 0 && ' (no thread yet)'}
+                  </span>
+                </label>
+              </div>
               <div className="flex gap-2">
                 <input
-                  className="flex-1 border rounded px-3 py-2 text-sm"
-                  placeholder="e.g. Restarted Redis, monitoring..."
-                  value={noteText}
-                  onChange={(e) => setNoteText(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') submitNote() }}
+                  className="flex-1 border rounded px-3 py-2 text-sm bg-background"
+                  placeholder={postToSlack
+                    ? 'Status update — e.g. Restarted Redis, monitoring...'
+                    : 'Internal note (won\'t be posted to Slack)'}
+                  value={updateText}
+                  onChange={(e) => setUpdateText(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') submitUpdate() }}
                 />
-                <Button size="sm" disabled={working || !noteText.trim()} onClick={submitNote}>
+                <Button size="sm" disabled={working || !updateText.trim()} onClick={submitUpdate}>
                   Post
                 </Button>
               </div>
@@ -223,8 +252,9 @@ export function IncidentDetail({ incidentId, onClose, onChanged }: Props) {
             </div>
           </div>
         )}
-      </DialogContent>
-    </Dialog>
+        </SheetBody>
+      </SheetContent>
+    </Sheet>
   )
 }
 
@@ -233,15 +263,24 @@ function TimelineEntry({ event }: { event: IncidentEvent }) {
   const actor = event.actorName || 'system'
   const time = new Date(event.at).toLocaleString()
   const details = formatEventDetails(event)
+  const isUpdate = event.type === 'note'
+  const broadcast = isUpdate && (event.payload as Record<string, unknown>)?.broadcast !== false
 
   return (
     <li className="flex gap-3 text-sm">
       <span className="w-5 text-center">{icon}</span>
       <div className="flex-1">
         <div>
-          <span className="font-medium capitalize">{event.type.replace(/-/g, ' ')}</span>
+          <span className="font-medium capitalize">
+            {isUpdate ? 'Update' : event.type.replace(/-/g, ' ')}
+          </span>
           {' by '}
           <span className="text-muted-foreground">{actor}</span>
+          {isUpdate && (
+            <Badge variant="outline" className="ml-2 text-[9px] px-1 py-0">
+              {broadcast ? 'Slack' : 'Internal'}
+            </Badge>
+          )}
         </div>
         {details && <div className="text-xs text-muted-foreground mt-0.5">{details}</div>}
         <div className="text-xs text-muted-foreground">{time}</div>
@@ -263,20 +302,22 @@ function formatEventDetails(event: IncidentEvent): string | null {
   }
 }
 
-function AssignButton({ incidentId, currentUserId, onAssigned }: {
+function AssignControl({ incidentId, currentUserId, users, onAssigned }: {
   incidentId: string
   currentUserId: string | null
+  users: { email: string; name: string | null }[]
   onAssigned: () => void
 }) {
-  async function assign() {
-    const name = prompt('Assign to (email or leave blank to unassign):', currentUserId || '')
-    if (name === null) return
+  const [open, setOpen] = useState(false)
+  async function assign(email: string | null) {
+    setOpen(false)
     try {
+      const user = email ? users.find(u => u.email === email) : null
       await apiFetch(`/alerts/incidents/${incidentId}/assign`, {
         method: 'POST',
         body: JSON.stringify({
-          assigneeUserId: name.trim() || null,
-          assigneeName: name.trim() || null,
+          assigneeUserId: email,
+          assigneeName: user?.name || email,
         }),
       })
       onAssigned()
@@ -286,14 +327,201 @@ function AssignButton({ incidentId, currentUserId, onAssigned }: {
   }
 
   return (
-    <Button size="sm" variant="outline" onClick={assign}>
-      {currentUserId ? 'Reassign' : 'Assign'}
-    </Button>
+    <div className="relative">
+      <Button size="sm" variant="outline" onClick={() => setOpen(o => !o)}>
+        {currentUserId ? `Assigned: ${currentUserId}` : 'Assign'}
+        <span className="ml-1 text-[10px]">▾</span>
+      </Button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute z-50 mt-1 w-64 max-h-72 overflow-y-auto rounded-md border border-border bg-card shadow-xl">
+            <button
+              type="button"
+              onClick={() => assign(null)}
+              className="w-full text-left px-3 py-2 text-xs hover:bg-accent border-b text-muted-foreground"
+            >
+              Unassign
+            </button>
+            {users.map(u => (
+              <button
+                key={u.email}
+                type="button"
+                onClick={() => assign(u.email)}
+                className={`w-full text-left px-3 py-1.5 text-xs hover:bg-accent ${u.email === currentUserId ? 'bg-accent/50' : ''}`}
+              >
+                {u.name || u.email}
+                <div className="text-[10px] text-muted-foreground">{u.email}</div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Slack threading status — shows which channels the incident is threaded
+ * to (or, when none, exposes a late-post button so the user can recover
+ * from "bot wasn't in the channel" without recreating the incident).
+ */
+function SlackStatusPanel({
+  incident,
+  onPosted,
+}: {
+  incident: IncidentWithEvents
+  onPosted: () => void | Promise<void>
+}) {
+  const [picking, setPicking] = useState(false)
+  const [channels, setChannels] = useState<SlackChannel[] | null>(null)
+  const [picked, setPicked] = useState('')
+  const [posting, setPosting] = useState(false)
+  const [postError, setPostError] = useState<string | null>(null)
+
+  const slackPosts = incident.slackPosts || []
+
+  useEffect(() => {
+    if (!picking || channels) return
+    apiFetch<{ ok: boolean; channels: SlackChannel[]; error?: string }>('/alerts/slack/channels')
+      .then(r => setChannels(r.channels || []))
+      .catch(() => setChannels([]))
+  }, [picking, channels])
+
+  async function postNow() {
+    if (!picked) return
+    setPosting(true)
+    setPostError(null)
+    try {
+      const res = await apiFetch<{ slackPostResults: SlackPostResult[] }>(
+        `/alerts/incidents/${incident.id}/post-to-slack`,
+        { method: 'POST', body: JSON.stringify({ channel: picked }) },
+      )
+      const failure = (res.slackPostResults || []).find(p => !p.ok)
+      if (failure) {
+        setPostError(`${failure.channel}: ${failure.error || failure.code}`)
+      } else {
+        setPicking(false)
+        setPicked('')
+        await onPosted()
+      }
+    } catch (err) {
+      setPostError(err instanceof Error ? err.message : 'Post failed')
+    } finally {
+      setPosting(false)
+    }
+  }
+
+  if (slackPosts.length > 0) {
+    return (
+      <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-2.5 text-xs space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <span className="text-emerald-700 dark:text-emerald-400">Threaded in:</span>{' '}
+            {slackPosts.map((p, i) => (
+              <span key={p.channel + p.ts}>
+                {i > 0 && ', '}
+                <a
+                  href={slackThreadUrl(p.channel, p.ts)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary hover:underline font-mono"
+                >#{p.channel}</a>
+              </span>
+            ))}
+          </div>
+          {!picking && (
+            <Button size="sm" variant="outline" onClick={() => setPicking(true)}>
+              + Add channel
+            </Button>
+          )}
+        </div>
+        {picking && (
+          <ChannelPickerInline
+            channels={channels}
+            picked={picked}
+            setPicked={setPicked}
+            posting={posting}
+            postNow={postNow}
+            cancel={() => { setPicking(false); setPicked(''); setPostError(null) }}
+            error={postError}
+          />
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-amber-700 dark:text-amber-400">
+          Not posted to Slack — updates won't broadcast.
+        </div>
+        {!picking && (
+          <Button size="sm" variant="outline" onClick={() => setPicking(true)}>
+            Post to Slack…
+          </Button>
+        )}
+      </div>
+      {picking && (
+        <ChannelPickerInline
+          channels={channels}
+          picked={picked}
+          setPicked={setPicked}
+          posting={posting}
+          postNow={postNow}
+          cancel={() => { setPicking(false); setPicked(''); setPostError(null) }}
+          error={postError}
+        />
+      )}
+    </div>
+  )
+}
+
+function ChannelPickerInline({
+  channels, picked, setPicked, posting, postNow, cancel, error,
+}: {
+  channels: SlackChannel[] | null
+  picked: string
+  setPicked: (s: string) => void
+  posting: boolean
+  postNow: () => void
+  cancel: () => void
+  error: string | null
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2">
+        <SearchableSelect
+          className="flex-1"
+          items={(channels || []).map(c => ({
+            value: c.name,
+            label: c.name,
+            icon: c.isPrivate ? '🔒' : '#',
+          }))}
+          value={picked || null}
+          onChange={(v) => setPicked(v || '')}
+          placeholder={channels ? 'Pick a channel…' : 'Loading channels…'}
+          searchPlaceholder="Search Slack channels…"
+          emptyHint="No channels — invite @Nectar to one and reload."
+          disabled={!channels}
+        />
+        <Button size="sm" disabled={posting || !picked} onClick={postNow}>
+          {posting ? 'Posting…' : 'Post'}
+        </Button>
+        <Button size="sm" variant="outline" onClick={cancel}>Cancel</Button>
+      </div>
+      {channels && channels.length === 0 && (
+        <p className="text-[11px] text-muted-foreground">
+          The Nectar bot isn't in any channels yet — invite @Nectar to a channel and reopen this incident.
+        </p>
+      )}
+      {error && <p className="text-[11px] text-red-600">{error}</p>}
+    </div>
   )
 }
 
 function slackThreadUrl(channel: string, ts: string): string {
-  // Slack deep-link format: /archives/CHANNEL/pTIMESTAMP_WITHOUT_DOT
   const bareTs = String(ts).replace(/\./g, '')
   return `slack://channel?team=&id=${encodeURIComponent(channel)}&message=p${bareTs}`
 }

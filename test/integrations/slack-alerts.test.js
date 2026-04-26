@@ -209,12 +209,44 @@ describe('SlackNotifier.postAlert', () => {
     const first = await slack.postAlert({ channels: ['#bad'], text: 'hi' });
     expect(first[0].ok).toBe(false);
     expect(first[0].error).toBe('not_in_channel');
+    // Machine-readable code is exposed too — UI keys off this for the
+    // "invite the bot" hint instead of substring-matching the error.
+    expect(first[0].code).toBe('not_in_channel');
+    expect(first[0].channel).toBe('#bad');
 
     // Second post to same bad channel — should short-circuit without calling Slack
     postMessage.mockClear();
     const second = await slack.postAlert({ channels: ['#bad'], text: 'again' });
     expect(second[0].ok).toBe(false);
+    expect(second[0].code).toBe('previously_failed');
     expect(postMessage).not.toHaveBeenCalled();
+  });
+
+  it('forgetBadChannels clears the cache so a recovery retry actually attempts the post', async () => {
+    // Hive flagged the BLOCK on PR #91: the recovery flow short-circuited
+    // forever from cache. forgetBadChannels is the explicit knob the
+    // recovery endpoint pulls when the user signals "I fixed it, try again".
+    const err = new Error('failed');
+    err.data = { error: 'not_in_channel' };
+    const postMessage = vi.fn().mockRejectedValueOnce(err).mockResolvedValueOnce({ ok: true, ts: 't' });
+    const { slack } = makeSlack({ postMessage });
+
+    const first = await slack.postAlert({ channels: ['#bad'], text: '1' });
+    expect(first[0].ok).toBe(false);
+    expect(slack._badChannels.has('#bad')).toBe(true);
+
+    slack.forgetBadChannels(['#bad']);
+    expect(slack._badChannels.has('#bad')).toBe(false);
+
+    const second = await slack.postAlert({ channels: ['#bad'], text: '2' });
+    // Now actually called Slack again — and the second mock returns ok.
+    expect(postMessage).toHaveBeenCalledTimes(2);
+    expect(second[0].ok).toBe(true);
+  });
+
+  it('forgetBadChannels is a no-op when no cache exists yet', () => {
+    const { slack } = makeSlack();
+    expect(() => slack.forgetBadChannels(['#never-failed'])).not.toThrow();
   });
 });
 

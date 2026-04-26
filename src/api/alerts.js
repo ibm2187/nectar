@@ -35,6 +35,19 @@ function createAlertsRouter(services) {
     res.json(result);
   }));
 
+  // ── GET /alerts/slack/channels ──────────────────────────
+  // Channels the Nectar bot is currently a member of. Drives the Slack
+  // channel selector on /incidents — eliminates the typo class of bugs
+  // that used to leave incidents with no thread (and silent round-trip
+  // failures downstream).
+  router.get('/slack/channels', asyncHandler(async (req, res) => {
+    if (!slack || !slack.isConfigured()) {
+      return res.json({ ok: false, error: 'Slack is not connected', channels: [] });
+    }
+    const result = await slack.listChannels();
+    res.json(result);
+  }));
+
   // ── Rules CRUD ─────────────────────────────────────────
   router.get('/rules', (req, res) => {
     const { triggerType, enabled } = req.query;
@@ -198,21 +211,33 @@ function createAlertsRouter(services) {
         actorName: actor.name,
       });
 
-      // Optional: broadcast to Slack channel if provided
+      // Optional: broadcast to Slack channel if provided.
+      // Returns the post results (success and failure) so the UI can
+      // surface "channel_not_found" / "not_in_channel" inline instead of
+      // silently swallowing them.
+      let slackPosts = null;
       if (body.slackChannel && slack && slack.isConfigured()) {
-        const posts = await slack.postAlert({
+        // Manual creation is an explicit user action — clear any cached
+        // "previously failed" marker so a freshly-invited bot can post.
+        if (typeof slack.forgetBadChannels === 'function') {
+          slack.forgetBadChannels([body.slackChannel]);
+        }
+        slackPosts = await slack.postAlert({
           channels: [body.slackChannel],
           text: `:rotating_light: *${incident.summary}* (manual incident)` +
             (incident.description ? `\n${incident.description}` : ''),
           mention: body.mention || null,
         });
-        for (const p of posts) {
+        for (const p of slackPosts) {
           if (p.ok && p.ts) {
             incidents.trackSlackPost(incident.id, { channel: p.channel, ts: p.ts });
           }
         }
       }
-      res.status(201).json(incidents.get(incident.id));
+      res.status(201).json({
+        ...incidents.get(incident.id),
+        slackPostResults: slackPosts,
+      });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -257,12 +282,16 @@ function createAlertsRouter(services) {
   });
 
   router.post('/incidents/:id/note', (req, res) => {
-    const { text } = req.body || {};
+    const { text, broadcast } = req.body || {};
     if (!text) return res.status(400).json({ error: 'text is required' });
     const actor = getActor(req);
     try {
+      // `broadcast` defaults to true when the incident has any Slack thread
+      // (parity with the prior behavior). Setting it to false marks the note
+      // as internal-only so the AlertRouter skips the thread reply.
       const incident = incidents.addNote(req.params.id, {
         text,
+        broadcast: broadcast === false ? false : true,
         actorUserId: actor.userId,
         actorName: actor.name,
       });
@@ -272,6 +301,43 @@ function createAlertsRouter(services) {
       res.status(400).json({ error: err.message });
     }
   });
+
+  // ── POST /alerts/incidents/:id/post-to-slack ────────────
+  // Late-broadcast or recovery-after-failure. If the initial create couldn't
+  // post (bot wasn't in the channel; channel typo; Slack down), the user
+  // can fix the underlying problem and try again from the detail modal.
+  router.post('/incidents/:id/post-to-slack', asyncHandler(async (req, res) => {
+    if (!slack || !slack.isConfigured()) {
+      return res.status(503).json({ ok: false, error: 'Slack is not connected' });
+    }
+    const { channel } = req.body || {};
+    if (!channel) return res.status(400).json({ ok: false, error: 'channel is required' });
+    const incident = incidents.get(req.params.id);
+    if (!incident) return res.status(404).json({ ok: false, error: 'incident not found' });
+
+    // Recovery flow — user has explicitly fixed the channel-membership
+    // problem and is asking to retry. Clear the cached "previously failed"
+    // marker so _postOne actually attempts the post instead of short-
+    // circuiting from cache.
+    if (typeof slack.forgetBadChannels === 'function') {
+      slack.forgetBadChannels([channel]);
+    }
+
+    const posts = await slack.postAlert({
+      channels: [channel],
+      text: `:rotating_light: *${incident.summary}*` +
+        (incident.description ? `\n${incident.description}` : ''),
+    });
+    for (const p of posts) {
+      if (p.ok && p.ts) {
+        incidents.trackSlackPost(incident.id, { channel: p.channel, ts: p.ts });
+      }
+    }
+    res.json({
+      incident: incidents.get(incident.id),
+      slackPostResults: posts,
+    });
+  }));
 
   router.post('/incidents/:id/assign', (req, res) => {
     const body = req.body || {};

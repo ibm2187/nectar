@@ -383,6 +383,41 @@ class SlackNotifier {
    * @param {string} [opts.threadTs] - post as a threaded reply (to a specific channel's anchor ts)
    * @returns {Promise<Array<{ channel, ok, ts?, error? }>>}
    */
+  /**
+   * List channels the bot is currently a member of (so it can post without
+   * a `not_in_channel` failure). Walks public + private via conversations.list,
+   * filters to `is_member`. Used by the incident creation UI to populate the
+   * channel selector — eliminates the typo class of bugs.
+   */
+  async listChannels() {
+    if (!this.isConfigured()) return { ok: false, error: 'Slack not connected', channels: [] };
+    const channels = [];
+    try {
+      for (const types of ['public_channel', 'private_channel']) {
+        let cursor;
+        do {
+          const resp = await this.app.client.conversations.list({
+            types,
+            limit: 1000,
+            cursor,
+            exclude_archived: true,
+          });
+          for (const c of resp.channels || []) {
+            if (c.is_member) {
+              channels.push({ id: c.id, name: c.name, isPrivate: types === 'private_channel' });
+            }
+          }
+          cursor = resp.response_metadata?.next_cursor;
+        } while (cursor);
+      }
+      channels.sort((a, b) => a.name.localeCompare(b.name));
+      return { ok: true, channels };
+    } catch (err) {
+      log.error(`Slack listChannels failed: ${err.message}`);
+      return { ok: false, error: err.message, channels: [] };
+    }
+  }
+
   async postAlert({ channels = [], text = '', blocks = null, mention = null, threadTs = null } = {}) {
     if (!this.ready) {
       return channels.map(c => ({ channel: c, ok: false, error: 'Slack not connected' }));
@@ -422,7 +457,11 @@ class SlackNotifier {
     }
 
     if (this._badChannels && this._badChannels.has(target)) {
-      return { ok: false, error: `Channel ${target} previously failed` };
+      // Standardized failure shape: callers check `code` (machine-readable)
+      // or `error` (human). The cache hit reuses the same `not_in_channel`
+      // code we'd return on a fresh failure, so the UI's recovery hint
+      // stays accurate.
+      return { ok: false, error: `Channel ${target} previously failed`, code: 'previously_failed', channel: target };
     }
 
     try {
@@ -432,16 +471,31 @@ class SlackNotifier {
       const resp = await this.app.client.chat.postMessage(opts);
       return { ok: true, ts: resp.ts, channel: resp.channel || target };
     } catch (err) {
-      const code = err.data?.error || err.message;
-      if (String(code).includes('channel_not_found') || String(code).includes('not_in_channel')) {
+      // Surface the Slack API's machine-readable error code — UIs can react
+      // to specific cases (e.g. 'not_in_channel' → "invite the bot" hint).
+      const code = err.data?.error || null;
+      const message = err.data?.error || err.message;
+      if (String(message).includes('channel_not_found') || String(message).includes('not_in_channel')) {
         if (!this._badChannels) this._badChannels = new Set();
         this._badChannels.add(target);
-        log.warn(`Slack: disabled notifications to ${target} (${code})`);
+        log.warn(`Slack: disabled notifications to ${target} (${message})`);
       } else {
-        log.error(`Slack postAlert to ${target} failed: ${code}`);
+        log.error(`Slack postAlert to ${target} failed: ${message}`);
       }
-      return { ok: false, error: String(code) };
+      return { ok: false, error: String(message), code, channel: target };
     }
+  }
+
+  /**
+   * Clear the cached "this channel previously failed" markers for the given
+   * channels. Used by recovery flows (incident /post-to-slack, manual retry)
+   * where the user has explicitly signaled the channel state has changed —
+   * e.g. they invited @Nectar to a channel that previously errored. Without
+   * this, the cache permanently masks the retry until process restart.
+   */
+  forgetBadChannels(channels) {
+    if (!this._badChannels) return;
+    for (const ch of channels || []) this._badChannels.delete(ch);
   }
 
   async stop() {

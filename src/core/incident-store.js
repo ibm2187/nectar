@@ -320,7 +320,12 @@ class IncidentStore extends EventEmitter {
     return updated;
   }
 
-  addNote(id, { text, actorUserId = null, actorName = null } = {}) {
+  /**
+   * Add a note / status update to an incident. `broadcast` (default true)
+   * controls whether the AlertRouter relays it to the Slack thread — set
+   * to false for internal-only notes.
+   */
+  addNote(id, { text, broadcast = true, actorUserId = null, actorName = null } = {}) {
     if (!text || !String(text).trim()) {
       throw new Error('IncidentStore.addNote: text is required');
     }
@@ -330,7 +335,7 @@ class IncidentStore extends EventEmitter {
       type: 'note',
       actorUserId,
       actorName,
-      payload: { text: String(text) },
+      payload: { text: String(text), broadcast: !!broadcast },
     });
     this._patch(id, { updatedAt: new Date().toISOString() });
     const updated = this.get(id);

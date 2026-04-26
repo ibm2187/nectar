@@ -2597,6 +2597,19 @@ module.exports = function createRoutes(services, config) {
   // ── Users — admin only ────────────────────────────────
 
   if (userStore) {
+    // Lightweight directory of known users — no role/capability/key data.
+    // Used by surfaces where any signed-in user needs an "assign to" picker
+    // (incidents, etc.) without needing user.admin. Returns just enough to
+    // render a name + email row.
+    router.get('/users/basic', (req, res) => {
+      const users = userStore.listUsers().map(u => ({
+        email: u.email,
+        name: u.name,
+        picture: u.picture,
+      }));
+      res.json(users);
+    });
+
     router.get('/users', requireCapability('user.admin'), (req, res) => {
       const users = userStore.listUsers().map(u => ({
         email: u.email,

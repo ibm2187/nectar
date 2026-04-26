@@ -522,7 +522,11 @@ class AlertRouter extends EventEmitter {
   async onIncidentNoteAdded(incident, event) {
     const noteText = event.payload?.text || '';
     if (!noteText) return;
-    await this._postRoundTrip(incident, `:memo: Note from ${event.actorName || 'unknown'}: ${noteText}`);
+    // Internal notes (broadcast=false) stay off-Slack; the timeline still
+    // shows them. Default true preserves the prior behavior for older notes
+    // that don't carry the flag.
+    if (event.payload?.broadcast === false) return;
+    await this._postRoundTrip(incident, `:memo: Update from ${event.actorName || 'unknown'}: ${noteText}`);
   }
 
   async _postRoundTrip(incident, text) {

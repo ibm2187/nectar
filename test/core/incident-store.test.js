@@ -258,6 +258,17 @@ describe('IncidentStore', () => {
       const events = store.listEvents(inc.id).filter(e => e.type === 'note');
       expect(events).toHaveLength(2);
     });
+
+    it('persists broadcast=true by default and broadcast=false explicitly', () => {
+      // The AlertRouter reads payload.broadcast to decide whether to relay
+      // to the Slack thread; default true preserves the prior behavior.
+      const inc = openBasic(store);
+      store.addNote(inc.id, { text: 'broadcast', actorName: 'a' });
+      store.addNote(inc.id, { text: 'internal-only', broadcast: false, actorName: 'a' });
+      const notes = store.listEvents(inc.id).filter(e => e.type === 'note');
+      expect(notes[0].payload.broadcast).toBe(true);
+      expect(notes[1].payload.broadcast).toBe(false);
+    });
   });
 
   // ── Severity ───────────────────────────────────────────

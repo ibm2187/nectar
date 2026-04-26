@@ -490,3 +490,145 @@ describe('Incidents — lifecycle actions', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('GET /api/alerts/slack/channels', () => {
+  it('returns channels the bot is a member of', async () => {
+    const { app } = makeApp({
+      slackOverrides: {
+        listChannels: vi.fn(async () => ({
+          ok: true,
+          channels: [
+            { id: 'C1', name: 'alerts-prod', isPrivate: false },
+            { id: 'C2', name: 'alerts-staging', isPrivate: false },
+          ],
+        })),
+      },
+    });
+    const res = await request(app, 'GET', '/api/alerts/slack/channels');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.channels).toHaveLength(2);
+    expect(res.body.channels[0].name).toBe('alerts-prod');
+  });
+
+  it('returns ok=false with empty channels when Slack is not connected', async () => {
+    const { app } = makeApp({ slackReady: false });
+    const res = await request(app, 'GET', '/api/alerts/slack/channels');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.channels).toEqual([]);
+  });
+});
+
+describe('Incidents — Slack failure surfacing', () => {
+  it('returns slackPostResults from POST /incidents so the UI can show failures', async () => {
+    // Bot not in #alerts-prod — postAlert returns ok=false. The endpoint
+    // used to silently swallow this; now it must echo the result so the
+    // dialog can tell the user "channel needs the bot invited".
+    const { app } = makeApp({
+      slackOverrides: {
+        postAlert: vi.fn(async ({ channels }) => channels.map(c => ({
+          channel: c, ok: false, error: 'Bot not in channel', code: 'not_in_channel',
+        }))),
+      },
+    });
+    const res = await request(app, 'POST', '/api/alerts/incidents', {
+      summary: 'Slow page loads',
+      slackChannel: '#alerts-prod',
+    });
+    expect(res.status).toBe(201);
+    expect(Array.isArray(res.body.slackPostResults)).toBe(true);
+    expect(res.body.slackPostResults[0].ok).toBe(false);
+    expect(res.body.slackPostResults[0].code).toBe('not_in_channel');
+    // Incident still created — Slack failure shouldn't block the record.
+    expect(res.body.id).toBeTruthy();
+    expect(res.body.slackPosts).toEqual([]);
+  });
+});
+
+describe('POST /api/alerts/incidents/:id/post-to-slack', () => {
+  it('late-broadcasts to a channel and tracks the post', async () => {
+    const { app, incidents } = makeApp();
+    const inc = incidents.open({ summary: 'Test', source: 'manual', triggerType: 'manual' });
+
+    const res = await request(app, 'POST', `/api/alerts/incidents/${inc.id}/post-to-slack`, {
+      channel: '#alerts-prod',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.slackPostResults[0].ok).toBe(true);
+    expect(res.body.incident.slackPosts).toHaveLength(1);
+    expect(res.body.incident.slackPosts[0].channel).toBe('#alerts-prod');
+  });
+
+  it('400s when channel is missing', async () => {
+    const { app, incidents } = makeApp();
+    const inc = incidents.open({ summary: 'Test', source: 'manual', triggerType: 'manual' });
+    const res = await request(app, 'POST', `/api/alerts/incidents/${inc.id}/post-to-slack`, {});
+    expect(res.status).toBe(400);
+  });
+
+  it('404s for an unknown incident', async () => {
+    const { app } = makeApp();
+    const res = await request(app, 'POST', '/api/alerts/incidents/bogus/post-to-slack', { channel: '#x' });
+    expect(res.status).toBe(404);
+  });
+
+  it('clears the bad-channel cache before retry (the whole point of recovery)', async () => {
+    // The failure mode this test exists to prevent: user creates an
+    // incident with a channel the bot isn't in → channel ends up in
+    // _badChannels → user invites the bot → user clicks "Post to Slack"
+    // in the detail panel → without `forgetBadChannels` the retry
+    // short-circuits from cache and never actually posts. (Hive review
+    // on PR #91 flagged this as a BLOCK.)
+    const forgetBadChannels = vi.fn();
+    const postAlert = vi.fn(async ({ channels }) => channels.map(c => ({ channel: c, ok: true, ts: 't' })));
+    const { app, incidents } = makeApp({
+      slackOverrides: { forgetBadChannels, postAlert },
+    });
+    const inc = incidents.open({ summary: 'T', source: 'manual', triggerType: 'manual' });
+
+    await request(app, 'POST', `/api/alerts/incidents/${inc.id}/post-to-slack`, { channel: '#x' });
+
+    expect(forgetBadChannels).toHaveBeenCalledWith(['#x']);
+    // Order matters — clear MUST happen before postAlert.
+    expect(forgetBadChannels.mock.invocationCallOrder[0])
+      .toBeLessThan(postAlert.mock.invocationCallOrder[0]);
+  });
+});
+
+describe('POST /api/alerts/incidents — manual creation also clears bad-channel cache', () => {
+  it('forgets the channel before posting (manual create is an explicit user signal too)', async () => {
+    const forgetBadChannels = vi.fn();
+    const { app } = makeApp({ slackOverrides: { forgetBadChannels } });
+
+    await request(app, 'POST', '/api/alerts/incidents', {
+      summary: 'Test',
+      slackChannel: '#alerts-prod',
+    });
+
+    expect(forgetBadChannels).toHaveBeenCalledWith(['#alerts-prod']);
+  });
+});
+
+describe('POST /api/alerts/incidents/:id/note — broadcast flag', () => {
+  it('persists broadcast=false so the AlertRouter can skip the thread reply', async () => {
+    const { app, incidents } = makeApp();
+    const inc = incidents.open({ summary: 'Test', source: 'manual', triggerType: 'manual' });
+    const res = await request(app, 'POST', `/api/alerts/incidents/${inc.id}/note`, {
+      text: 'internal-only',
+      broadcast: false,
+    });
+    expect(res.status).toBe(200);
+    const events = incidents.listEvents(inc.id).filter(e => e.type === 'note');
+    expect(events).toHaveLength(1);
+    expect(events[0].payload.broadcast).toBe(false);
+  });
+
+  it('defaults broadcast to true when omitted', async () => {
+    const { app, incidents } = makeApp();
+    const inc = incidents.open({ summary: 'Test', source: 'manual', triggerType: 'manual' });
+    await request(app, 'POST', `/api/alerts/incidents/${inc.id}/note`, { text: 'normal' });
+    const events = incidents.listEvents(inc.id).filter(e => e.type === 'note');
+    expect(events[0].payload.broadcast).toBe(true);
+  });
+});
