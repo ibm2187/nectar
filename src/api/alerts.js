@@ -158,6 +158,26 @@ function createAlertsRouter(services) {
     res.json({ ok: true, results: posts });
   }));
 
+  // ── POST /alerts/rules/:id/evaluate-now ─────────────────
+  // Force-evaluate the rule against the current alert_state snapshot.
+  // Bypasses the flap guard — escapes the case where an incident was
+  // manually resolved but the env stayed unhealthy and the steady-state
+  // count has ratcheted past the flap threshold.
+  // Rate-limited per rule (default 30s); the AlertRouter handles the
+  // gate so the same logic applies if any future surface calls it.
+  router.post('/rules/:id/evaluate-now', asyncHandler(async (req, res) => {
+    if (!alertRouter || typeof alertRouter.evaluateNow !== 'function') {
+      return res.status(503).json({ error: 'AlertRouter not available' });
+    }
+    const rule = alertRules.get(req.params.id);
+    if (!rule) return res.status(404).json({ error: 'rule not found' });
+    const result = await alertRouter.evaluateNow(req.params.id);
+    if (result.reason === 'rate-limited') {
+      return res.status(429).json(result);
+    }
+    res.json(result);
+  }));
+
   // ── Incidents ──────────────────────────────────────────
 
   router.get('/incidents', (req, res) => {

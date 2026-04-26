@@ -233,6 +233,12 @@ const webplatformScanner = new WebplatformScanner(repoManager, config);
 const EnvironmentPoller = require('./core/environment-poller');
 const envPoller = new EnvironmentPoller(customerStore, config);
 
+// Wire env-lookup so AlertRouter.evaluateNow can resolve env metadata
+// from an envId stored in alert_state.
+alertRouter.setEnvLookup((envId) =>
+  customerStore.listEnvironments().find(e => e.id === envId) || null
+);
+
 const ThemeConfig = require('./core/theme-config');
 const themeConfig = new ThemeConfig();
 

@@ -585,3 +585,138 @@ describe('AlertRouter incident round-trip', () => {
     expect(lastCall.text).toMatch(/redis restart queued/);
   });
 });
+
+// ══════════════════════════════════════════════════════════════
+// Bundle 8: re-open after manual resolve, dispatch-failed events,
+// sustained re-arm, evaluate-now
+// ══════════════════════════════════════════════════════════════
+
+describe('AlertRouter — re-arm after manual resolve while still unhealthy', () => {
+  it('opens a fresh incident within flapThreshold polls of a still-unhealthy env', async () => {
+    const { alertRules, router, incidents, slack, posts } = setup();
+    alertRules.create({
+      id: 'r1', name: 'r1', triggerType: 'env-unhealthy', filter: {},
+      channels: ['#alerts'], severity: 'critical', enabled: true,
+    });
+
+    const obs = { envId: 'e1', envName: 'E1', customerId: 'c1', envTier: 'production', status: 'unhealthy', failingComponents: ['db'] };
+    // Two polls to fire the first incident (flapThreshold=2).
+    await router.observeEnvHealth(obs);
+    await router.observeEnvHealth(obs);
+    expect(posts).toHaveLength(1);
+    const inc1 = incidents.findActiveBySubject('env-health:e1');
+    expect(inc1).toBeTruthy();
+
+    // User manually resolves while env is still unhealthy.
+    incidents.resolve(inc1.id, { actorName: 'nukul', resolution: 'manual' });
+    expect(incidents.get(inc1.id).status).toBe('resolved');
+
+    // Steady-state polls would normally just bump the count. With the
+    // re-arm fix, the next poll is treated as a transition (count=1).
+    posts.length = 0;
+    await router.observeEnvHealth(obs); // count=1
+    expect(posts).toHaveLength(0);
+    await router.observeEnvHealth(obs); // count=2 → fires
+    expect(posts).toHaveLength(1);
+    const inc2 = incidents.findActiveBySubject('env-health:e1');
+    expect(inc2).toBeTruthy();
+    expect(inc2.id).not.toBe(inc1.id);
+  });
+});
+
+describe('AlertRouter — dispatch-failed events surface Slack post failures', () => {
+  it('writes a dispatch-failed timeline event when _postAlert returns ok=false', async () => {
+    const { alertRules, router, incidents, slack } = setup();
+    // Make Slack pretend the bot is not in the channel.
+    slack.postAlert.mockImplementation(async ({ channels }) =>
+      channels.map(c => ({ channel: c, ok: false, error: 'not_in_channel', code: 'not_in_channel' }))
+    );
+    alertRules.create({
+      id: 'r1', name: 'r1', triggerType: 'env-unhealthy', filter: {},
+      channels: ['#alerts'], severity: 'critical', enabled: true,
+    });
+
+    const obs = { envId: 'e1', envName: 'E1', customerId: 'c1', envTier: 'production', status: 'unhealthy' };
+    await router.observeEnvHealth(obs);
+    await router.observeEnvHealth(obs);
+
+    const inc = incidents.findActiveBySubject('env-health:e1');
+    const events = incidents.listEvents(inc.id);
+    const failure = events.find(e => e.type === 'dispatch-failed');
+    expect(failure).toBeTruthy();
+    expect(failure.payload.channel).toBe('#alerts');
+    expect(failure.payload.code).toBe('not_in_channel');
+    // No slackPosts tracked → SlackStatusPanel will render the recovery
+    // picker (Bundle 7 path).
+    expect(incidents.get(inc.id).slackPosts).toEqual([]);
+  });
+});
+
+describe('AlertRouter — sustained re-arms after manual resolve', () => {
+  it('clears alert_state.escalated when an env-unhealthy incident is manually resolved', async () => {
+    const { alertRules, router, incidents, db } = setup();
+    alertRules.create({
+      id: 'r1', name: 'r1', triggerType: 'env-unhealthy', filter: {},
+      channels: ['#alerts'], severity: 'critical', enabled: true,
+    });
+    const obs = { envId: 'e1', envName: 'E1', customerId: 'c1', envTier: 'production', status: 'unhealthy' };
+    await router.observeEnvHealth(obs);
+    await router.observeEnvHealth(obs);
+    const inc = incidents.findActiveBySubject('env-health:e1');
+
+    // Mark sustained as fired so we can verify the flag clears.
+    db.prepare('UPDATE alert_state SET escalated = 1 WHERE key = ?').run('env-health:e1');
+
+    // Manual resolve via incident-store; AlertRouter listens via index.js
+    // event hook. We invoke the hook directly here.
+    const resolved = incidents.resolve(inc.id, { actorName: 'nukul', resolution: 'manual' });
+    const resolvedEvent = incidents.listEvents(inc.id).find(e => e.type === 'resolved');
+    await router.onIncidentResolved(resolved, resolvedEvent);
+
+    const state = db.prepare('SELECT escalated FROM alert_state WHERE key = ?').get('env-health:e1');
+    expect(state.escalated).toBe(0);
+  });
+});
+
+describe('AlertRouter.evaluateNow', () => {
+  it('force-fires a rule against current alert_state, bypassing the flap guard', async () => {
+    const { alertRules, router, incidents, posts } = setup({ flapThreshold: 5 });
+    const rule = alertRules.create({
+      name: 'r1', triggerType: 'env-unhealthy', filter: {},
+      channels: ['#alerts'], severity: 'critical', enabled: true,
+    });
+    router.setEnvLookup(() => ({ id: 'e1', name: 'E1', customerId: 'c1', tier: 'production' }));
+
+    // One poll only — well below flapThreshold=5 — would normally not fire.
+    await router.observeEnvHealth({ envId: 'e1', envName: 'E1', customerId: 'c1', envTier: 'production', status: 'unhealthy' });
+    expect(posts).toHaveLength(0);
+
+    const result = await router.evaluateNow(rule.id);
+    expect(result.ok).toBe(true);
+    expect(result.fired).toBe(1);
+    expect(posts).toHaveLength(1);
+    expect(incidents.findActiveBySubject('env-health:e1')).toBeTruthy();
+  });
+
+  it('rate-limits per rule', async () => {
+    const { alertRules, router } = setup();
+    const rule = alertRules.create({
+      name: 'r1', triggerType: 'env-unhealthy', filter: {},
+      channels: ['#alerts'], severity: 'critical', enabled: true,
+    });
+    router.setEnvLookup(() => null); // no envs to fire on; rate-limit logic still applies
+
+    const first = await router.evaluateNow(rule.id);
+    expect(first.ok).toBe(true);
+    const second = await router.evaluateNow(rule.id);
+    expect(second.ok).toBe(false);
+    expect(second.reason).toBe('rate-limited');
+  });
+
+  it('returns rule not found for unknown ruleId', async () => {
+    const { router } = setup();
+    const result = await router.evaluateNow('nope');
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/not found/);
+  });
+});

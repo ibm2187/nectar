@@ -151,14 +151,36 @@ describe('AlertRulesPanel — listing', () => {
   })
 })
 
+/** Open the channel picker and click the channel whose unprefixed name matches. */
+async function pickChannel(name: string) {
+  fireEvent.click(screen.getByText(/Add a Slack channel/i))
+  // Picker option button accessible name is "{icon} {label}" (e.g. "# alerts-prod").
+  // Find by role + a substring matcher rather than an exact match.
+  const buttons = await screen.findAllByRole('button')
+  const option = buttons.find(b => {
+    const text = b.textContent?.trim() || ''
+    // Strip leading "# " or "🔒 " icon prefix before comparing.
+    return text.replace(/^[#🔒]\s*/, '') === name
+  })
+  if (!option) throw new Error(`No picker option found for channel "${name}"`)
+  fireEvent.click(option)
+}
+
 describe('AlertRulesPanel — editor', () => {
   it('disables Save until all channels validate OK', async () => {
     wireApi({
       '/alerts/rules': () => ({ rules: [] }),
       '/alerts/triggers': () => ({ triggers: SAMPLE_TRIGGERS }),
+      '/alerts/slack/channels': () => ({
+        ok: true,
+        channels: [
+          { id: 'C1', name: 'not-invited', isPrivate: false },
+          { id: 'C2', name: 'ok', isPrivate: false },
+        ],
+      }),
       '/alerts/validate-channel': (opts) => {
         const body = JSON.parse((opts?.body as string) || '{}')
-        if (body.channel === '#ok') return { ok: true, inChannel: true, channelId: 'C1', name: 'ok' }
+        if (body.channel === '#ok') return { ok: true, inChannel: true, channelId: 'C2', name: 'ok' }
         return { ok: false, code: 'not_in_channel', error: 'Bot is not in channel' }
       },
     })
@@ -167,29 +189,24 @@ describe('AlertRulesPanel — editor', () => {
     await waitFor(() => expect(screen.getByText('+ New Rule')).toBeInTheDocument())
     fireEvent.click(screen.getByText('+ New Rule'))
 
-    // Dialog opens
     await waitFor(() => expect(screen.getByText('New Alert Rule')).toBeInTheDocument())
-
-    // Fill name
     fireEvent.change(screen.getByPlaceholderText(/e.g. Prod health alerts/i), { target: { value: 'Test Rule' } })
 
-    // Save disabled initially (no channels validated)
     const saveButton = screen.getByRole('button', { name: /Create/i })
     expect(saveButton).toBeDisabled()
 
-    // Add a bad channel
-    const channelsInput = screen.getByPlaceholderText(/alerts-prod/i)
-    fireEvent.change(channelsInput, { target: { value: '#not-invited' } })
-    fireEvent.blur(channelsInput)
+    // Wait for the channel picker to enable (Slack list loaded).
+    await waitFor(() => expect(screen.getByText(/Add a Slack channel/i)).not.toBeDisabled())
 
+    // Pick the bad channel — validation fails, save stays disabled.
+    await pickChannel('not-invited')
     await waitFor(() => expect(screen.getByText(/not_in_channel/i)).toBeInTheDocument())
     expect(saveButton).toBeDisabled()
 
-    // Replace with a good channel
-    fireEvent.change(channelsInput, { target: { value: '#ok' } })
-    fireEvent.blur(channelsInput)
-
-    await waitFor(() => expect(screen.getByText(/#ok ✓/)).toBeInTheDocument())
+    // Remove the failing chip, then pick the good one.
+    fireEvent.click(screen.getByLabelText(/Remove #not-invited/i))
+    await pickChannel('ok')
+    await waitFor(() => expect(screen.getByText('#ok')).toBeInTheDocument())
     expect(saveButton).not.toBeDisabled()
   })
 
@@ -204,6 +221,10 @@ describe('AlertRulesPanel — editor', () => {
         return { rules: [] }
       },
       '/alerts/triggers': () => ({ triggers: SAMPLE_TRIGGERS }),
+      '/alerts/slack/channels': () => ({
+        ok: true,
+        channels: [{ id: 'C1', name: 'alerts-prod', isPrivate: false }],
+      }),
       '/alerts/validate-channel': () => ({ ok: true, inChannel: true }),
     })
 
@@ -214,11 +235,9 @@ describe('AlertRulesPanel — editor', () => {
     fireEvent.change(screen.getByPlaceholderText(/e.g. Prod health alerts/i), {
       target: { value: 'Prod health' },
     })
-    const channelsInput = screen.getByPlaceholderText(/alerts-prod/i)
-    fireEvent.change(channelsInput, { target: { value: '#alerts-prod' } })
-    fireEvent.blur(channelsInput)
-
-    await waitFor(() => expect(screen.getByText(/#alerts-prod ✓/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Add a Slack channel/i)).not.toBeDisabled())
+    await pickChannel('alerts-prod')
+    await waitFor(() => expect(screen.getByText('#alerts-prod')).toBeInTheDocument())
 
     fireEvent.click(screen.getByRole('button', { name: /Create/i }))
 
@@ -264,6 +283,7 @@ describe('AlertRulesPanel — actions', () => {
 
     render(<AlertRulesPanel />)
     await waitFor(() => screen.getByText('Prod health'))
+    fireEvent.click(screen.getByRole('button', { name: /Actions for Prod health/i }))
     fireEvent.click(screen.getByRole('button', { name: 'Test' }))
     await waitFor(() => expect(testCalls).toEqual(['/alerts/rules/alrt-1/test']))
   })
@@ -283,6 +303,7 @@ describe('AlertRulesPanel — actions', () => {
 
     render(<AlertRulesPanel />)
     await waitFor(() => screen.getByText('Prod health'))
+    fireEvent.click(screen.getByRole('button', { name: /Actions for Prod health/i }))
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(deleteCalls).toEqual(['/alerts/rules/alrt-1']))
   })
@@ -429,6 +450,10 @@ describe('AlertRulesPanel — filter multi-selects', () => {
       }
       if (path === '/alerts/rules') return Promise.resolve({ rules: [] })
       if (path === '/alerts/triggers') return Promise.resolve({ triggers: SAMPLE_TRIGGERS })
+      if (path === '/alerts/slack/channels') return Promise.resolve({
+        ok: true,
+        channels: [{ id: 'C1', name: 'alerts-prod', isPrivate: false }],
+      })
       if (path === '/alerts/validate-channel') return Promise.resolve({ ok: true, inChannel: true })
       return Promise.resolve({})
     })
@@ -439,10 +464,9 @@ describe('AlertRulesPanel — filter multi-selects', () => {
     await waitFor(() => screen.getByText('New Alert Rule'))
 
     fireEvent.change(screen.getByPlaceholderText(/e.g. Prod health alerts/i), { target: { value: 'Rule 1' } })
-    const channelsInput = screen.getByPlaceholderText(/alerts-prod/i)
-    fireEvent.change(channelsInput, { target: { value: '#alerts-prod' } })
-    fireEvent.blur(channelsInput)
-    await waitFor(() => screen.getByText(/#alerts-prod ✓/))
+    await waitFor(() => expect(screen.getByText(/Add a Slack channel/i)).not.toBeDisabled())
+    await pickChannel('alerts-prod')
+    await waitFor(() => screen.getByText('#alerts-prod'))
 
     // Pick Bayada
     fireEvent.click(screen.getByText(/Any customer/i))

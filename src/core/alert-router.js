@@ -98,7 +98,31 @@ class AlertRouter extends EventEmitter {
     const prevStatus = prev ? prev.status : null;
     let nextState;
 
-    if (prevStatus === obs.status) {
+    // ── Detect "stuck after manual resolve" ────────────
+    // If we previously fired an incident for this env and the user
+    // manually resolved it BUT the env is still unhealthy, we need to
+    // re-arm — otherwise the steady-state branch ratchets
+    // consecutiveCount past flapThreshold and we never fire again,
+    // leaving the env silently degraded.
+    //
+    // Treatment: when we see this condition, force the steady-state
+    // poll to be treated as a fresh transition (count resets to 1,
+    // incidentId cleared). Within `flapThreshold` more polls a new
+    // incident opens and a fresh Slack post lands — same cadence as
+    // the original alert, no spam.
+    let isStaleResolved = false;
+    if (
+      prevStatus === obs.status &&
+      obs.status !== 'healthy' &&
+      prev?.incidentId
+    ) {
+      const priorIncident = this.incidents.get(prev.incidentId);
+      if (priorIncident && priorIncident.status === 'resolved') {
+        isStaleResolved = true;
+      }
+    }
+
+    if (prevStatus === obs.status && !isStaleResolved) {
       // Steady state. Bump consecutiveCount but don't reset firstFailedAt
       // (we want "how long have we been unhealthy" for sustained alerts).
       nextState = {
@@ -241,6 +265,91 @@ class AlertRouter extends EventEmitter {
   }
 
   // ══════════════════════════════════════════════════════
+  // Public: explicit "evaluate now" — escapes the flap-guard ratchet
+  // ══════════════════════════════════════════════════════
+
+  /**
+   * Force-evaluate a rule against the current alert_state snapshot. This
+   * is the user's explicit knob to escape stuck conditions (e.g. the
+   * incident was manually resolved but the env is still unhealthy and
+   * the steady-state count has ratcheted past flapThreshold).
+   *
+   * Bypasses the flap guard. Still respects dedup via findActiveBySubject —
+   * if an active incident exists, no new one is opened.
+   *
+   * Rate-limited to once per `_evaluateNowMinIntervalMs` per rule.
+   *
+   * @param {string} ruleId
+   * @returns {{ok: boolean, fired: number, skipped: number, reason?: string, error?: string}}
+   */
+  async evaluateNow(ruleId) {
+    if (!this._evalNowLast) this._evalNowLast = new Map();
+    const minInterval = this._evaluateNowMinIntervalMs ?? 30_000;
+    const last = this._evalNowLast.get(ruleId) || 0;
+    const nowMs = this.now();
+    if (nowMs - last < minInterval) {
+      const waitSec = Math.ceil((minInterval - (nowMs - last)) / 1000);
+      return { ok: false, fired: 0, skipped: 0, reason: 'rate-limited', error: `Try again in ${waitSec}s` };
+    }
+    this._evalNowLast.set(ruleId, nowMs);
+
+    const rule = this.alertRules.get(ruleId);
+    if (!rule) return { ok: false, fired: 0, skipped: 0, error: 'rule not found' };
+
+    // Walk current alert_state rows. Each represents the last observed
+    // status for one env. We re-build a context object from each and
+    // re-route it through the same handler the poller would have used.
+    const rows = this.db.prepare("SELECT * FROM alert_state WHERE key LIKE 'env-health:%'").all();
+    let fired = 0;
+    let skipped = 0;
+
+    for (const row of rows) {
+      const envId = row.key.replace(/^env-health:/, '');
+      const env = this._lookupEnv(envId);
+      if (!env) { skipped++; continue; }
+
+      const baseContext = {
+        envId,
+        envName: env.name || env.nodeEnv || envId,
+        customerId: env.customerId,
+        envTier: env.tier,
+        components: safeParse(row.failingComponents, []),
+        version: null,
+        url: env.url || null,
+      };
+
+      // Only fire when this env's current status matches the rule's intent
+      if (rule.triggerType === 'env-unhealthy' && row.status === 'unhealthy') {
+        const matches = this.alertRules.findMatching('env-unhealthy', baseContext);
+        if (!matches.some(m => m.id === ruleId)) { skipped++; continue; }
+        const result = await this._fireEnvUnhealthy(baseContext, { firstFailedAt: row.firstFailedAt });
+        if (result.incidentId) fired++;
+        else skipped++;
+      } else if (rule.triggerType === 'env-degraded-sustained' && row.status !== 'healthy' && row.firstFailedAt) {
+        // Clear escalated so checkSustained can re-fire for this streak.
+        this._patchState(row.key, { escalated: 0 });
+        await this.checkSustained([{ ...baseContext, firstFailedAt: row.firstFailedAt }]);
+        fired++;
+      } else {
+        skipped++;
+      }
+    }
+    return { ok: true, fired, skipped };
+  }
+
+  /**
+   * Set the env-lookup function — called by `evaluateNow` to resolve an
+   * envId from alert_state into the full env record (for customerId/tier
+   * filter matching). Wired after construction so the customerStore
+   * doesn't have to be ready when AlertRouter is instantiated.
+   */
+  setEnvLookup(fn) { this._envLookup = fn; }
+
+  _lookupEnv(envId) {
+    return typeof this._envLookup === 'function' ? this._envLookup(envId) : null;
+  }
+
+  // ══════════════════════════════════════════════════════
   // Internal: individual trigger handlers
   // ══════════════════════════════════════════════════════
 
@@ -301,7 +410,22 @@ class AlertRouter extends EventEmitter {
         text,
       });
       for (const p of posts) {
-        if (p.ok && p.ts) this.incidents.trackSlackPost(incident.id, { channel: p.channel, ts: p.ts });
+        if (p.ok && p.ts) {
+          this.incidents.trackSlackPost(incident.id, { channel: p.channel, ts: p.ts });
+        } else {
+          // Surface dispatch failures on the incident timeline so the user
+          // sees WHY the auto-fire didn't reach Slack (most commonly
+          // `not_in_channel`). Bundle 7's SlackStatusPanel already renders
+          // the amber "Not posted" state + recovery picker when slackPosts
+          // stays empty — the failure event makes the cause visible.
+          this.incidents.recordSystemEvent(incident.id, 'dispatch-failed', {
+            channel: p.channel,
+            code: p.code || null,
+            error: p.error || 'unknown',
+            ruleId: rule.id,
+          });
+          log.warn(`AlertRouter: dispatch-failed for incident=${incident.id} rule=${rule.id} channel=${p.channel} code=${p.code || '?'}`);
+        }
       }
       this.alertRules.recordFired(rule.id);
     }
@@ -499,6 +623,14 @@ class AlertRouter extends EventEmitter {
 
   async onIncidentResolved(incident, event) {
     if (event?.payload?.resolution === 'auto') return; // already threaded by _fireEnvRecovered
+    // Re-arm sustained: if a user manually resolves an env-unhealthy
+    // incident while the env is still degraded, the sticky `escalated=1`
+    // flag in alert_state would prevent any future sustained alert for
+    // the same streak. Clearing it lets sustained re-fire when the
+    // configured threshold passes from the resolve moment.
+    if (incident.triggerType === 'env-unhealthy' && incident.envId) {
+      this._patchState(`env-health:${incident.envId}`, { escalated: 0 });
+    }
     await this._postRoundTrip(incident, `:white_check_mark: Resolved by ${event.actorName || 'unknown'}${event.payload?.note ? ` — ${event.payload.note}` : ''}`);
   }
 
@@ -598,10 +730,12 @@ class AlertRouter extends EventEmitter {
   }
 
   _saveState(state) {
-    // Preserve lastFiredStatus if present in prev state — we don't write
-    // it directly; _markFired handles that. Here we just upsert the
-    // observation-tracking fields.
-    const existing = this.db.prepare('SELECT lastAlertedAt, incidentId FROM alert_state WHERE key = ?').get(state.key);
+    // Preserve lastAlertedAt across observation polls (it's only set by
+    // _markFired). incidentId, however, must be persisted exactly as the
+    // caller passed it — `null` here means "this is a transition, drop
+    // the prior incident link" (used by the stale-resolved re-arm path);
+    // overlaying the existing value would defeat that.
+    const existing = this.db.prepare('SELECT lastAlertedAt FROM alert_state WHERE key = ?').get(state.key);
     this.db.prepare(`
       INSERT INTO alert_state (key, status, failingComponents, firstFailedAt, lastAlertedAt, consecutiveCount, incidentId, escalated, updatedAt)
       VALUES (@key, @status, @failingComponents, @firstFailedAt, @lastAlertedAt, @consecutiveCount, @incidentId, @escalated, @updatedAt)
@@ -620,7 +754,7 @@ class AlertRouter extends EventEmitter {
       firstFailedAt: state.firstFailedAt || null,
       lastAlertedAt: state.lastAlertedAt || existing?.lastAlertedAt || null,
       consecutiveCount: state.consecutiveCount || 0,
-      incidentId: state.incidentId || existing?.incidentId || null,
+      incidentId: state.incidentId || null,
       escalated: state.escalated ? 1 : 0,
       updatedAt: state.updatedAt,
     });

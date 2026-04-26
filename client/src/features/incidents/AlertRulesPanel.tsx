@@ -1,11 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { apiFetch } from '../../api/client'
 import type { AlertRule, AlertTrigger, AlertSeverity, ChannelValidationResult, Customer } from '../../api/client'
 import { Button } from '../../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog'
 import { Badge } from '../../components/ui/badge'
+import { SearchableSelect } from '../../components/SearchableSelect'
 import { useWsStore } from '../../stores/wsStore'
+
+interface SlackChannel {
+  id: string
+  name: string
+  isPrivate: boolean
+}
 
 const SEVERITY_BADGE: Record<AlertSeverity, string> = {
   critical: 'bg-red-100 text-red-800 border-red-300',
@@ -75,6 +83,26 @@ export function AlertRulesPanel() {
     }
   }
 
+  async function evaluateNow(rule: AlertRule) {
+    setBusyId(rule.id)
+    try {
+      const result = await apiFetch<{ ok: boolean; fired?: number; skipped?: number; reason?: string; error?: string }>(
+        `/alerts/rules/${rule.id}/evaluate-now`,
+        { method: 'POST' }
+      )
+      if (result.ok) {
+        alert(`Evaluated. Fired: ${result.fired ?? 0}, skipped: ${result.skipped ?? 0}`)
+      } else {
+        alert(result.reason === 'rate-limited' ? `Rate-limited — ${result.error}` : (result.error || 'Evaluation failed'))
+      }
+      await refresh()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Evaluation failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   const triggerLabel = useCallback((key: string) =>
     triggers.find(t => t.key === key)?.label || key, [triggers])
 
@@ -97,61 +125,74 @@ export function AlertRulesPanel() {
           </p>
         )}
         {!loading && rules.length > 0 && (
-          <table className="w-full text-sm">
-            <thead className="border-b bg-muted/30">
-              <tr className="text-left">
-                <th className="px-3 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Trigger</th>
-                <th className="px-3 py-2 font-medium">Channels</th>
-                <th className="px-3 py-2 font-medium">Severity</th>
-                <th className="px-3 py-2 font-medium">Filters</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rules.map(rule => (
-                <tr key={rule.id} className="border-b">
-                  <td className="px-3 py-2 font-medium">{rule.name}</td>
-                  <td className="px-3 py-2 text-muted-foreground text-xs">{triggerLabel(rule.triggerType)}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex flex-wrap gap-1">
-                      {rule.channels.map(c => <Badge key={c} variant="outline">{c}</Badge>)}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2">
-                    <Badge className={`${SEVERITY_BADGE[rule.severity]} border`}>{rule.severity}</Badge>
-                  </td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">{summarizeFilter(rule.filter)}</td>
-                  <td className="px-3 py-2">
-                    <button
-                      onClick={() => toggle(rule)}
-                      disabled={busyId === rule.id}
-                      className={
-                        'text-xs px-2 py-0.5 rounded ' +
-                        (rule.enabled
-                          ? 'bg-green-100 text-green-800 border border-green-300'
-                          : 'bg-gray-100 text-gray-700 border border-gray-300')
-                      }
-                    >
-                      {rule.enabled ? 'Enabled' : 'Disabled'}
-                    </button>
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="flex gap-1">
-                      <Button size="sm" variant="ghost" onClick={() => test(rule)} disabled={busyId === rule.id}>
-                        Test
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setEditor({ rule })}>Edit</Button>
-                      <Button size="sm" variant="ghost" onClick={() => remove(rule)} disabled={busyId === rule.id}>
-                        Delete
-                      </Button>
-                    </div>
-                  </td>
+          <div className="overflow-x-auto -mx-6 px-6">
+            <table className="w-full text-sm">
+              <thead className="border-b bg-muted/30">
+                <tr className="text-left">
+                  <th className="px-2 py-1.5 font-medium whitespace-nowrap">Name</th>
+                  <th className="px-2 py-1.5 font-medium whitespace-nowrap">Trigger</th>
+                  <th className="px-2 py-1.5 font-medium whitespace-nowrap">Channels</th>
+                  <th className="px-2 py-1.5 font-medium whitespace-nowrap">Sev</th>
+                  <th className="px-2 py-1.5 font-medium whitespace-nowrap">Filters</th>
+                  <th className="px-2 py-1.5 font-medium whitespace-nowrap">Status</th>
+                  <th className="px-2 py-1.5 font-medium whitespace-nowrap text-right"></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rules.map(rule => (
+                  <tr key={rule.id} className="border-b align-top">
+                    <td className="px-2 py-1.5 font-medium">{rule.name}</td>
+                    <td className="px-2 py-1.5 text-muted-foreground text-xs max-w-[10rem]">
+                      <div className="truncate" title={triggerLabel(rule.triggerType)}>
+                        {triggerLabel(rule.triggerType)}
+                      </div>
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <ChannelsCell channels={rule.channels} />
+                    </td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">
+                      <Badge className={`${SEVERITY_BADGE[rule.severity]} border`}>{rule.severity}</Badge>
+                    </td>
+                    <td className="px-2 py-1.5 text-xs text-muted-foreground">
+                      <FilterCell filter={rule.filter} />
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <div className="flex flex-col gap-0.5 items-start">
+                        <button
+                          onClick={() => toggle(rule)}
+                          disabled={busyId === rule.id}
+                          className={
+                            'text-xs px-2 py-0.5 rounded whitespace-nowrap ' +
+                            (rule.enabled
+                              ? 'bg-green-100 text-green-800 border border-green-300'
+                              : 'bg-gray-100 text-gray-700 border border-gray-300')
+                          }
+                        >
+                          {rule.enabled ? 'Enabled' : 'Disabled'}
+                        </button>
+                        <span
+                          className="text-[10px] text-muted-foreground whitespace-nowrap"
+                          title={rule.lastFiredAt || ''}
+                        >
+                          fired {formatRelativeTime(rule.lastFiredAt)}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
+                      <RowActions
+                        rule={rule}
+                        busy={busyId === rule.id}
+                        onTest={() => test(rule)}
+                        onEvaluate={() => evaluateNow(rule)}
+                        onEdit={() => setEditor({ rule })}
+                        onDelete={() => remove(rule)}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </CardContent>
 
@@ -167,14 +208,182 @@ export function AlertRulesPanel() {
   )
 }
 
-function summarizeFilter(filter: AlertRule['filter']): string {
+/**
+ * Per-row overflow menu — collapses Test / Evaluate / Edit / Delete
+ * behind a single "⋯" button so the table stays narrow. Closes on
+ * outside-click and after any action runs.
+ */
+function RowActions({ rule, busy, onTest, onEvaluate, onEdit, onDelete }: {
+  rule: AlertRule
+  busy: boolean
+  onTest: () => void
+  onEvaluate: () => void
+  onEdit: () => void
+  onDelete: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  // Portal the menu to <body> so it escapes the table's overflow-x-auto
+  // wrapper (which forces overflow-y:auto and clips dropdowns).
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current) return
+    const r = triggerRef.current.getBoundingClientRect()
+    const menuWidth = 144 // w-36
+    setPos({ top: r.bottom + 4, left: r.right - menuWidth })
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    function onDown(e: MouseEvent) {
+      const t = e.target as Node
+      if (triggerRef.current?.contains(t)) return
+      if (menuRef.current?.contains(t)) return
+      setOpen(false)
+    }
+    function onScroll() { setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [open])
+
+  function run(fn: () => void) {
+    setOpen(false)
+    fn()
+  }
+
+  const item = 'w-full text-left px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-50 disabled:pointer-events-none'
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        disabled={busy}
+        className="px-2 py-1 rounded hover:bg-accent text-muted-foreground disabled:opacity-50"
+        aria-label={`Actions for ${rule.name}`}
+        title="Actions"
+      >
+        ⋯
+      </button>
+      {open && pos && createPortal(
+        <div
+          ref={menuRef}
+          style={{ position: 'fixed', top: pos.top, left: pos.left }}
+          className="w-36 rounded-md border border-border bg-card text-card-foreground shadow-xl z-50 py-1"
+        >
+          <button type="button" className={item} onClick={() => run(onTest)} disabled={busy}>
+            Test
+          </button>
+          <button
+            type="button"
+            className={item}
+            onClick={() => run(onEvaluate)}
+            disabled={busy}
+            title="Re-evaluate against current state — escapes the flap-guard ratchet after a manual resolve"
+          >
+            Evaluate now
+          </button>
+          <button type="button" className={item} onClick={() => run(onEdit)}>
+            Edit
+          </button>
+          <div className="border-t my-1" />
+          <button
+            type="button"
+            className={`${item} text-red-600`}
+            onClick={() => run(onDelete)}
+            disabled={busy}
+          >
+            Delete
+          </button>
+        </div>,
+        document.body
+      )}
+    </>
+  )
+}
+
+/** Compact channels cell: shows up to 2 chips inline, then "+N more" with full list in tooltip. */
+function ChannelsCell({ channels }: { channels: string[] }) {
+  if (channels.length === 0) return <span className="text-xs text-muted-foreground italic">none</span>
+  const visible = channels.slice(0, 2)
+  const overflow = channels.length - visible.length
+  return (
+    <div className="flex flex-wrap gap-1 max-w-[10rem]">
+      {visible.map(c => (
+        <span
+          key={c}
+          className="text-xs px-1.5 py-0.5 rounded bg-muted text-foreground border border-border max-w-[9rem] truncate inline-block"
+          title={c}
+        >
+          {c}
+        </span>
+      ))}
+      {overflow > 0 && (
+        <span
+          className="text-xs px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground border border-border whitespace-nowrap"
+          title={channels.join(', ')}
+        >
+          +{overflow} more
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** Relative-time formatter: "5 min ago", "2 hours ago", "never". */
+function formatRelativeTime(iso: string | null | undefined): string {
+  if (!iso) return 'never'
+  const ts = Date.parse(iso)
+  if (!Number.isFinite(ts)) return '—'
+  const diffMs = Date.now() - ts
+  if (diffMs < 0) return 'just now'
+  const sec = Math.floor(diffMs / 1000)
+  if (sec < 60) return `${sec}s ago`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min} min ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr} hour${hr === 1 ? '' : 's'} ago`
+  const d = Math.floor(hr / 24)
+  if (d < 30) return `${d} day${d === 1 ? '' : 's'} ago`
+  const mo = Math.floor(d / 30)
+  return `${mo} mo ago`
+}
+
+function summarizeFilterParts(filter: AlertRule['filter']): string[] {
   const parts: string[] = []
   if (filter.customerIds?.length) parts.push(`customers: ${filter.customerIds.join(', ')}`)
   if (filter.envIds?.length) parts.push(`envs: ${filter.envIds.length}`)
   if (filter.envTier?.length) parts.push(`tier: ${filter.envTier.join(', ')}`)
   if (filter.components?.length) parts.push(`components: ${filter.components.join(', ')}`)
   if (typeof filter.sustainedMinutes === 'number') parts.push(`≥${filter.sustainedMinutes}m`)
-  return parts.length ? parts.join(' · ') : 'any'
+  return parts
+}
+
+/**
+ * Filters cell — one row per filter type so a long components list
+ * (e.g. tier:..., components:...) wraps cleanly into multiple lines
+ * inside a bounded width instead of pushing the whole table sideways.
+ * Each row truncates to a single line with the full value in `title`.
+ */
+function FilterCell({ filter }: { filter: AlertRule['filter'] }) {
+  const parts = summarizeFilterParts(filter)
+  if (parts.length === 0) return <span className="italic">any</span>
+  return (
+    <div className="max-w-[10rem] space-y-0.5">
+      {parts.map(p => (
+        <div key={p} className="truncate" title={p}>{p}</div>
+      ))}
+    </div>
+  )
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -189,8 +398,24 @@ function RuleEditor({ triggers, initial, onClose, onSaved }: {
 }) {
   const [name, setName] = useState(initial?.name || '')
   const [triggerType, setTriggerType] = useState(initial?.triggerType || triggers[0]?.key || '')
-  const [channelsText, setChannelsText] = useState((initial?.channels || []).join(', '))
+  const [channels, setChannels] = useState<string[]>(initial?.channels || [])
   const [mention, setMention] = useState(initial?.mention || '')
+
+  // Slack channel directory — fetched once on mount so the picker
+  // shows a real, typo-proof list. Same source as ManualIncidentDialog.
+  const [slackChannels, setSlackChannels] = useState<SlackChannel[] | null>(null)
+  const [slackChannelsError, setSlackChannelsError] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    apiFetch<{ ok: boolean; channels: SlackChannel[]; error?: string }>('/alerts/slack/channels')
+      .then(r => {
+        if (cancelled) return
+        if (!r.ok) setSlackChannelsError(r.error || 'Slack not connected')
+        setSlackChannels(r.channels || [])
+      })
+      .catch(err => { if (!cancelled) setSlackChannelsError(err.message) })
+    return () => { cancelled = true }
+  }, [])
   const [severity, setSeverity] = useState<AlertSeverity>(initial?.severity || 'critical')
   const [enabled, setEnabled] = useState(initial ? initial.enabled : true)
   const [filter, setFilter] = useState<AlertRule['filter']>(initial?.filter || {})
@@ -201,15 +426,41 @@ function RuleEditor({ triggers, initial, onClose, onSaved }: {
 
   const selectedTrigger = triggers.find(t => t.key === triggerType)
 
-  const channels = useMemo(
-    () => channelsText.split(',').map(c => c.trim()).filter(Boolean),
-    [channelsText]
-  )
+  // Channels already attached to the rule are skipped from the picker;
+  // we still keep them in state if the workspace listing didn't return
+  // them (private channel the bot just got removed from, etc.) so the
+  // user can see-and-remove instead of being silently locked in.
+  const pickerItems = useMemo(() => {
+    const list = slackChannels || []
+    return list
+      .filter(c => !channels.includes(`#${c.name}`))
+      .map(c => ({
+        value: `#${c.name}`,
+        label: c.name,
+        icon: c.isPrivate ? '🔒' : '#',
+      }))
+  }, [slackChannels, channels])
 
-  // Validate all channels on blur (or when channels change + user stops typing)
-  async function validateAll() {
+  function addChannel(ch: string | null) {
+    if (!ch) return
+    if (channels.includes(ch)) return
+    setChannels(cs => [...cs, ch])
+  }
+
+  function removeChannel(ch: string) {
+    setChannels(cs => cs.filter(c => c !== ch))
+    setChannelValidation(v => {
+      const { [ch]: _drop, ...rest } = v
+      void _drop
+      return rest
+    })
+  }
+
+  // Validate any channels that haven't been validated yet. Runs after
+  // channels change (each picker pick triggers this via the effect below).
+  const validateAll = useCallback(async () => {
     for (const ch of channels) {
-      if (channelValidation[ch]) continue // already validated
+      if (channelValidation[ch]) continue
       setChannelValidation(v => ({ ...v, [ch]: 'pending' }))
       try {
         const res = await apiFetch<ChannelValidationResult>('/alerts/validate-channel', {
@@ -224,18 +475,9 @@ function RuleEditor({ triggers, initial, onClose, onSaved }: {
         }))
       }
     }
-  }
+  }, [channels, channelValidation])
 
-  // Reset validation when channel text changes so edits re-validate
-  useEffect(() => {
-    setChannelValidation(prev => {
-      const next: typeof prev = {}
-      for (const ch of channels) {
-        if (prev[ch]) next[ch] = prev[ch]
-      }
-      return next
-    })
-  }, [channelsText])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { validateAll() }, [channels])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const allChannelsOk = channels.length > 0 && channels.every(ch => {
     const v = channelValidation[ch]
@@ -313,18 +555,43 @@ function RuleEditor({ triggers, initial, onClose, onSaved }: {
           </div>
 
           <div>
-            <label className="text-xs font-medium text-muted-foreground">
-              Channels * <span className="font-normal">(comma-separated)</span>
-            </label>
-            <input
-              className="w-full border rounded px-3 py-2 text-sm mt-1"
-              value={channelsText}
-              onChange={(e) => setChannelsText(e.target.value)}
-              onBlur={validateAll}
-              placeholder="#alerts-prod, #on-call"
-            />
+            <label className="text-xs font-medium text-muted-foreground">Channels *</label>
+            <div className="mt-1">
+              <SearchableSelect
+                className="w-full"
+                items={pickerItems}
+                value={null}
+                onChange={addChannel}
+                placeholder={
+                  slackChannelsError
+                    ? `Slack: ${slackChannelsError}`
+                    : !slackChannels
+                      ? 'Loading channels…'
+                      : pickerItems.length === 0
+                        ? 'No more channels available'
+                        : 'Add a Slack channel…'
+                }
+                searchPlaceholder="Search Slack channels…"
+                disabled={!slackChannels || !!slackChannelsError || pickerItems.length === 0}
+                emptyHint={
+                  slackChannels && slackChannels.length === 0
+                    ? 'Bot is not in any channels — add @Nectar to a channel and reopen this dialog'
+                    : 'No matches.'
+                }
+              />
+            </div>
             <div className="flex flex-wrap gap-1 mt-2">
-              {channels.map(ch => <ChannelValidationBadge key={ch} channel={ch} state={channelValidation[ch]} />)}
+              {channels.length === 0 && (
+                <span className="text-xs text-muted-foreground italic">No channels selected.</span>
+              )}
+              {channels.map(ch => (
+                <ChannelChip
+                  key={ch}
+                  channel={ch}
+                  state={channelValidation[ch]}
+                  onRemove={() => removeChannel(ch)}
+                />
+              ))}
             </div>
           </div>
 
@@ -384,17 +651,31 @@ function RuleEditor({ triggers, initial, onClose, onSaved }: {
   )
 }
 
-function ChannelValidationBadge({ channel, state }: {
+function ChannelChip({ channel, state, onRemove }: {
   channel: string
   state: ChannelValidationResult | 'pending' | null | undefined
+  onRemove: () => void
 }) {
-  if (!state) return <Badge variant="outline" className="text-muted-foreground">{channel} · not checked</Badge>
-  if (state === 'pending') return <Badge variant="outline">{channel} · checking...</Badge>
-  if (state.ok) return <Badge className="bg-green-100 text-green-800 border-green-300 border">{channel} ✓</Badge>
+  let cls = 'bg-muted text-foreground border-border'
+  let suffix: string | null = null
+  let title: string | undefined
+  if (!state) suffix = '· not checked'
+  else if (state === 'pending') suffix = '· checking…'
+  else if (state.ok) { cls = 'bg-green-100 text-green-800 border-green-300'; suffix = '✓' }
+  else { cls = 'bg-red-100 text-red-800 border-red-300'; suffix = `✗ ${state.code || ''}`.trim(); title = state.error }
   return (
-    <Badge className="bg-red-100 text-red-800 border-red-300 border" title={state.error}>
-      {channel} ✗ {state.code || state.error}
-    </Badge>
+    <span className={`${cls} border text-xs px-2 py-0.5 rounded inline-flex items-center gap-1.5`} title={title}>
+      <span>{channel}</span>
+      {suffix && <span className="opacity-80">{suffix}</span>}
+      <button
+        type="button"
+        onClick={onRemove}
+        className="hover:text-red-600 leading-none text-sm"
+        aria-label={`Remove ${channel}`}
+      >
+        ×
+      </button>
+    </span>
   )
 }
 
