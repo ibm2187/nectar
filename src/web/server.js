@@ -15,7 +15,12 @@ const log = require('../core/log');
  * @returns {{ app, httpServer, wss, close }}
  */
 function createWebServer(services, config) {
-  const { releases, customers, discovery, jiraSync, customerStore, envPoller, apiKeys, taskQueue, userStore, teamStore, ticketStore } = services;
+  const {
+    releases, customers, discovery, jiraSync, customerStore, envPoller,
+    apiKeys, taskQueue, userStore, teamStore, ticketStore,
+    incidents, alertRules, alertRouter,
+    zohoStore, prStore, risk,
+  } = services;
   const port = parseInt(process.env.WEB_PORT) || 4000;
   const token = process.env.WEB_TOKEN;
 
@@ -441,28 +446,29 @@ function createWebServer(services, config) {
     );
   }
 
-  // ── MCP server (for Hive integration) ─────────────────
+  // ── MCP servers (Hive + Claude Desktop) ───────────────
+  // Both endpoints share tool defs from src/mcp/tools.js. /mcp uses
+  // api-key auth (Hive + Claude Code stdio bridge); /mcp-oauth uses
+  // OAuth bearer (Claude Desktop custom connector).
+  const mcpDeps = {
+    customerStore,
+    releases,
+    releaseTruth: services.releaseTruth,
+    taskQueue,
+    incidents,
+    alertRules,
+    alertRouter,
+    zohoStore,
+    ticketStore,
+    prStore,
+    userStore,
+    risk,
+  };
   const { mountMcp } = require('../mcp/server');
-  mountMcp(app, '/mcp', {
-    customerStore,
-    releases,
-    releaseTruth: services.releaseTruth,
-    taskQueue,
-    apiKeys,
-  });
+  mountMcp(app, '/mcp', { ...mcpDeps, apiKeys });
 
-  // ── MCP OAuth server (Claude Desktop custom connector) ─
-  // Parallel /mcp-oauth Streamable HTTP MCP, gated by OAuth bearer
-  // tokens issued by the routes mounted above. The existing /mcp path
-  // (api-key auth, used by Hive + Claude Code stdio bridge) is untouched.
   const { mountMcpOAuth } = require('../mcp/server-oauth');
-  mountMcpOAuth(app, '/mcp-oauth', {
-    customerStore,
-    releases,
-    releaseTruth: services.releaseTruth,
-    taskQueue,
-    oauthStore: mcpOAuthStore,
-  });
+  mountMcpOAuth(app, '/mcp-oauth', { ...mcpDeps, oauthStore: mcpOAuthStore });
 
   // ── HTTP server with WebSocket upgrade ────────────────
   const httpServer = http.createServer(app);
