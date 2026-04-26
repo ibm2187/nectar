@@ -437,6 +437,50 @@ describe('JIRA ticket tools', () => {
 
 // ── People ───────────────────────────────────────────────
 
+describe('get_release_risk', () => {
+  it('passes the version string to risk.assess (regression — was passing release object)', async () => {
+    const server = fakeServer();
+    const release = { version: '4.1.2', repo: 'webplatform' };
+    let received = null;
+    const risk = { assess: async (v) => { received = v; return { score: 'low', numericScore: 5, factors: [] }; } };
+    const releases = { list: () => [], get: () => release, getTickets: () => [] };
+    registerTools(server, fakeDeps({ releases, risk }), {});
+    const r = await server.call('get_release_risk', { version: '4.1.2', repo: 'webplatform' });
+    expect(received).toBe('4.1.2');
+    expect(r.data.score).toBe('low');
+  });
+});
+
+describe('list_releases_for_ticket', () => {
+  it('uses ticket.fixVersions/targetFixVersions instead of scanning every release', async () => {
+    const server = fakeServer();
+    const allReleases = [
+      { version: '4.1.2', repo: 'webplatform', state: 'done', jiraReleaseDate: '2026-04-15' },
+      { version: '4.2.0', repo: 'webplatform', state: 'cutting', jiraReleaseDate: null },
+      { version: '4.2.0', repo: 'android',    state: 'cutting', jiraReleaseDate: null },
+    ];
+    const releases = {
+      list: () => allReleases,
+      get: () => null,
+      // If the tool ever falls back to per-release getTickets we want to know.
+      getTickets: () => { throw new Error('should not call getTickets — must use ticket.fixVersions'); },
+    };
+    const ticketStore = {
+      get: (k) => k === 'DEV-1'
+        ? { key: 'DEV-1', state: 'done', fixVersions: ['4.1.2'], targetFixVersions: ['4.2.0'] }
+        : null,
+      search: () => ({ tickets: [], total: 0, hasMore: false }),
+      getByFilter: () => ({ tickets: [], total: 0, hasMore: false }),
+      getTruthForTicket: () => [],
+      getTruthRollup: () => ({}),
+    };
+    registerTools(server, fakeDeps({ releases, ticketStore }), {});
+    const r = await server.call('list_releases_for_ticket', { key: 'DEV-1' });
+    // 4.1.2 (webplatform) + 4.2.0 (webplatform + android) = 3 matches
+    expect(r.data.count).toBe(3);
+  });
+});
+
 describe('get_release_prs', () => {
   it('uses prStore.findByJiraKey (regression — was calling non-existent getByTicket)', async () => {
     const server = fakeServer();

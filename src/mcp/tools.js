@@ -369,7 +369,9 @@ function registerTools(server, deps, reqCtx) {
       if (!risk) return errText('Risk engine unavailable in this MCP context');
       const release = releases.get(version, repo);
       if (!release) return text(`Release ${repo}:${version} not found`);
-      try { return text(await risk.assess(release)); }
+      // assess() takes a version STRING, not a release object — passing
+      // the object stringifies to "[object Object]" and fails lookup.
+      try { return text(await risk.assess(version)); }
       catch (err) { return errText(err.message); }
     }
   );
@@ -536,12 +538,12 @@ function registerTools(server, deps, reqCtx) {
       'Acknowledge an open incident. Threads a Slack reply if Slack posts exist. Requires incident.write capability.',
       { incidentId: z.string(), note: z.string().optional() },
       async ({ incidentId, note }) => {
-        try { authorizeMcpTool(reqCtx, 'incident.write'); }
-        catch (err) { return errText(err.message); }
-        const principal = principalLabel(reqCtx);
-        const acked = incidents.acknowledge(incidentId, { actorName: principal, note: note || null });
-        if (!acked) return text(`Incident ${incidentId} not found or already acknowledged`);
-        return text({ ok: true, status: acked.status });
+        try {
+          authorizeMcpTool(reqCtx, 'incident.write');
+          const acked = incidents.acknowledge(incidentId, { actorName: principalLabel(reqCtx), note: note || null });
+          if (!acked) return text(`Incident ${incidentId} not found`);
+          return text({ ok: true, id: acked.id, status: acked.status, acknowledgedAt: acked.acknowledgedAt });
+        } catch (err) { return errText(err.message); }
       }
     );
 
@@ -549,16 +551,16 @@ function registerTools(server, deps, reqCtx) {
       'Resolve an open or acknowledged incident. resolution defaults to "manual". Requires incident.write capability.',
       {
         incidentId: z.string(),
-        resolution: z.enum(['manual', 'auto', 'wontfix']).default('manual'),
+        resolution: z.enum(['manual', 'auto']).default('manual'),
         note: z.string().optional(),
       },
       async ({ incidentId, resolution, note }) => {
-        try { authorizeMcpTool(reqCtx, 'incident.write'); }
-        catch (err) { return errText(err.message); }
-        const principal = principalLabel(reqCtx);
-        const resolved = incidents.resolve(incidentId, { actorName: principal, resolution, note: note || null });
-        if (!resolved) return text(`Incident ${incidentId} not found`);
-        return text({ ok: true, status: resolved.status, resolution: resolved.resolution });
+        try {
+          authorizeMcpTool(reqCtx, 'incident.write');
+          const resolved = incidents.resolve(incidentId, { actorName: principalLabel(reqCtx), resolution, note: note || null });
+          if (!resolved) return text(`Incident ${incidentId} not found`);
+          return text({ ok: true, id: resolved.id, status: resolved.status, resolution: resolved.resolution, resolvedAt: resolved.resolvedAt });
+        } catch (err) { return errText(err.message); }
       }
     );
 
@@ -566,12 +568,12 @@ function registerTools(server, deps, reqCtx) {
       'Reopen a resolved incident. Requires incident.write capability.',
       { incidentId: z.string(), note: z.string().optional() },
       async ({ incidentId, note }) => {
-        try { authorizeMcpTool(reqCtx, 'incident.write'); }
-        catch (err) { return errText(err.message); }
-        const principal = principalLabel(reqCtx);
-        const reopened = incidents.reopen(incidentId, { actorName: principal, note: note || null });
-        if (!reopened) return text(`Incident ${incidentId} not found`);
-        return text({ ok: true, status: reopened.status });
+        try {
+          authorizeMcpTool(reqCtx, 'incident.write');
+          const reopened = incidents.reopen(incidentId, { actorName: principalLabel(reqCtx), note: note || null });
+          if (!reopened) return text(`Incident ${incidentId} not found`);
+          return text({ ok: true, id: reopened.id, status: reopened.status });
+        } catch (err) { return errText(err.message); }
       }
     );
 
@@ -583,12 +585,12 @@ function registerTools(server, deps, reqCtx) {
         broadcast: z.boolean().default(true),
       },
       async ({ incidentId, text: noteText, broadcast }) => {
-        try { authorizeMcpTool(reqCtx, 'incident.write'); }
-        catch (err) { return errText(err.message); }
-        const principal = principalLabel(reqCtx);
-        const updated = incidents.addNote(incidentId, { text: noteText, broadcast, actorName: principal });
-        if (!updated) return text(`Incident ${incidentId} not found`);
-        return text({ ok: true });
+        try {
+          authorizeMcpTool(reqCtx, 'incident.write');
+          const updated = incidents.addNote(incidentId, { text: noteText, broadcast, actorName: principalLabel(reqCtx) });
+          if (!updated) return text(`Incident ${incidentId} not found`);
+          return text({ ok: true, id: updated.id });
+        } catch (err) { return errText(err.message); }
       }
     );
 
@@ -599,17 +601,17 @@ function registerTools(server, deps, reqCtx) {
         assigneeEmail: z.string().describe('Email of the Nectar user to assign'),
       },
       async ({ incidentId, assigneeEmail }) => {
-        try { authorizeMcpTool(reqCtx, 'incident.write'); }
-        catch (err) { return errText(err.message); }
-        const principal = principalLabel(reqCtx);
-        const user = userStore?.getUser(assigneeEmail) || null;
-        const assigned = incidents.assign(incidentId, {
-          assigneeUserId: assigneeEmail,
-          assigneeName: user?.name || assigneeEmail,
-          actorName: principal,
-        });
-        if (!assigned) return text(`Incident ${incidentId} not found`);
-        return text({ ok: true, assigneeUserId: assigned.assigneeUserId });
+        try {
+          authorizeMcpTool(reqCtx, 'incident.write');
+          const user = userStore?.getUser(assigneeEmail) || null;
+          const assigned = incidents.assign(incidentId, {
+            assigneeUserId: assigneeEmail,
+            assigneeName: user?.name || assigneeEmail,
+            actorName: principalLabel(reqCtx),
+          });
+          if (!assigned) return text(`Incident ${incidentId} not found`);
+          return text({ ok: true, id: assigned.id, assigneeUserId: assigned.assigneeUserId });
+        } catch (err) { return errText(err.message); }
       }
     );
   }
@@ -809,19 +811,30 @@ function registerTools(server, deps, reqCtx) {
     );
 
     t('list_releases_for_ticket',
-      'Find all releases that include a JIRA ticket (across repos and platforms).',
+      'Find all releases that include a JIRA ticket (across repos and platforms). Uses the ticket\'s own fixVersions/targetFixVersions — much faster than scanning every release.',
       { key: z.string().describe('Ticket key (e.g. DEV-12345)') },
       async ({ key }) => {
-        const all = releases.list();
-        const matches = all.filter(r => releases.getTickets(r).some(t => t.key === key));
-        return text({
-          key,
-          count: matches.length,
-          releases: matches.map(r => ({
-            version: r.version, repo: r.repo, state: r.state,
-            jiraReleaseDate: r.jiraReleaseDate,
-          })),
-        });
+        const ticket = ticketStore.get(key);
+        if (!ticket) return text(`Ticket ${key} not found`);
+        // Match the production /tickets/:key/releases handler — pivot
+        // off the ticket's fixVersions instead of scanning every release.
+        const versions = new Set([
+          ...(ticket.fixVersions || []),
+          ...(ticket.targetFixVersions || []),
+        ]);
+        const result = [];
+        for (const v of versions) {
+          for (const r of releases.list()) {
+            if (r.version === v) {
+              result.push({
+                version: r.version, repo: r.repo, state: r.state,
+                jiraReleaseDate: r.jiraReleaseDate,
+                ticketState: ticket.state,
+              });
+            }
+          }
+        }
+        return text({ key, count: result.length, releases: result });
       }
     );
 
