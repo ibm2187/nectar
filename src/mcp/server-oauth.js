@@ -23,9 +23,20 @@ const { isValidCapability } = require('../core/capabilities');
 const { findCustomer } = require('./server');
 
 function createNectarOAuthMcpServer({ customerStore, releases, releaseTruth, taskQueue }) {
+  // Icon URL that Claude Desktop and other MCP clients display next to
+  // the connector name (MCP spec 2025-06-18 Implementation.icons). The
+  // asset is served by the OAuth router at /mcp-oauth/icon.svg.
+  const baseUrl = (process.env.NECTAR_URL || 'https://nectar.vivtechnologies.com').replace(/\/$/, '');
+  const iconSrc = `${baseUrl}/mcp-oauth/icon.svg`;
   const server = new McpServer({
     name: 'nectar-oauth',
+    title: 'Nectar',
     version: '1.0.0',
+    description: 'Nectar release-intelligence MCP — customer/env/release data and incident tools.',
+    websiteUrl: baseUrl,
+    icons: [
+      { src: iconSrc, mimeType: 'image/svg+xml', sizes: ['any'] },
+    ],
   });
 
   // Per-request principal context. Uses AsyncLocalStorage so concurrent

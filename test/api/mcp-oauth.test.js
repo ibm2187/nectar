@@ -94,6 +94,18 @@ describe('GET /.well-known/oauth-protected-resource/mcp-oauth', () => {
     expect(res.status).toBe(200);
     expect(res.body.resource).toBe('https://test.example.com/mcp-oauth');
     expect(res.body.authorization_servers).toEqual(['https://test.example.com']);
+    expect(res.body.logo_uri).toBe('https://test.example.com/mcp-oauth/icon.svg');
+  });
+});
+
+describe('GET /mcp-oauth/icon.svg', () => {
+  it('serves the Nectar icon SVG with cache headers', async () => {
+    const { app } = makeApp();
+    const res = await request(app, 'GET', '/mcp-oauth/icon.svg');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/svg/);
+    expect(res.headers['cache-control']).toMatch(/max-age/);
+    expect(String(res.body)).toMatch(/<svg/);
   });
 });
 

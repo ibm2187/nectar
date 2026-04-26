@@ -27,6 +27,8 @@
  */
 
 const { Router } = require('express');
+const fs = require('fs');
+const path = require('path');
 const jwt = require('jsonwebtoken');
 const log = require('../core/log');
 const { McpOAuthStore } = require('../core/mcp-oauth-store');
@@ -51,14 +53,34 @@ function createMcpOAuthRoutes(opts = {}) {
 
   const router = Router();
 
+  // ── Static icon ──────────────────────────────────────────
+  // Served from this router so it's reachable on a fresh deploy without
+  // depending on the SPA build, and so MCP clients can pull it without
+  // chasing through the React static handler. Cached aggressively —
+  // the asset is content-immutable (we'll bump the URL if it changes).
+  const ICON_URL = `${baseUrl}/mcp-oauth/icon.svg`;
+  const ICON_PATH = path.join(__dirname, '..', '..', 'client', 'public', 'nectar-icon.svg');
+  let iconBuf = null;
+  try { iconBuf = fs.readFileSync(ICON_PATH); }
+  catch { log.warn(`MCP OAuth: icon asset missing at ${ICON_PATH}`); }
+  router.get('/mcp-oauth/icon.svg', (req, res) => {
+    if (!iconBuf) return res.status(404).send('icon not found');
+    res.set('Content-Type', 'image/svg+xml');
+    res.set('Cache-Control', 'public, max-age=86400, immutable');
+    res.send(iconBuf);
+  });
+
   // ── Discovery: protected resource metadata (RFC 9728) ────
   // Tells MCP clients which authorization server to use for /mcp-oauth.
   router.get('/.well-known/oauth-protected-resource/mcp-oauth', (req, res) => {
     res.json({
       resource: `${baseUrl}/mcp-oauth`,
+      resource_name: 'Nectar',
       authorization_servers: [baseUrl],
       bearer_methods_supported: ['header'],
       scopes_supported: ['mcp'],
+      // Non-standard but a few MCP clients (and the consent screen) read it.
+      logo_uri: ICON_URL,
     });
   });
 
@@ -74,6 +96,9 @@ function createMcpOAuthRoutes(opts = {}) {
       code_challenge_methods_supported: ['S256'],
       token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
       scopes_supported: ['mcp'],
+      service_documentation: `${baseUrl}/`,
+      op_policy_uri: `${baseUrl}/`,
+      logo_uri: ICON_URL,
     });
   });
 
@@ -127,6 +152,9 @@ function createMcpOAuthRoutes(opts = {}) {
       response_types: created.responseTypes,
       token_endpoint_auth_method: created.tokenEndpointAuthMethod,
       scope: created.scope,
+      // RFC 7591 — some MCP clients display this in the connector UI
+      // alongside the server name.
+      logo_uri: ICON_URL,
     });
   });
 
