@@ -215,6 +215,7 @@ function createMcpOAuthRoutes(opts = {}) {
       redirectUri: redirect_uri,
       formAction: `${baseUrl}/mcp-oauth/oauth/authorize/consent`,
       query: req.query,
+      iconUrl: ICON_URL,
     }));
   });
 
@@ -363,51 +364,168 @@ h1{font-size:20px;color:#b91c1c}code{background:#f1f5f9;padding:2px 6px;border-r
  * decision (and the original PKCE/redirect params, hidden) back to
  * /authorize/consent.
  */
-function renderConsentPage({ clientName, clientId, userEmail, userName, scope, redirectUri, formAction, query }) {
+function renderConsentPage({ clientName, clientId, userEmail, userName, scope, redirectUri, formAction, query, iconUrl }) {
   const hidden = ['client_id', 'redirect_uri', 'state', 'scope', 'code_challenge', 'code_challenge_method', 'response_type']
     .map(k => query[k] != null ? `<input type="hidden" name="${k}" value="${escapeAttr(String(query[k]))}">` : '')
     .join('');
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Authorize ${escapeHtml(clientName)}</title>
+  // Every color is explicit — the previous version relied on the browser
+  // default for body text/background, which rendered illegibly under
+  // some user agent themes. CSS vars switch via prefers-color-scheme.
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Authorize ${escapeHtml(clientName)} — Nectar</title>
 <style>
-  :root { color-scheme: light dark; }
-  body { font: 14px/1.5 system-ui, -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 48px 24px; }
-  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 28px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-  @media (prefers-color-scheme: dark) {
-    body { background: #0b1120; color: #e2e8f0; }
-    .card { background: #111827; border-color: #1f2937; }
-    .meta { color: #94a3b8; }
-    code { background: #1e293b; }
+  :root {
+    color-scheme: light dark;
+    --bg:        #f8fafc;
+    --card-bg:   #ffffff;
+    --border:    #e2e8f0;
+    --border-2:  #f1f5f9;
+    --text:      #0f172a;
+    --text-2:    #475569;
+    --text-3:    #64748b;
+    --accent-bg: #eff6ff;
+    --accent-bd: #bfdbfe;
+    --accent-fg: #1e40af;
+    --code-bg:   #f1f5f9;
+    --code-fg:   #0f172a;
+    --primary:   #2563eb;
+    --primary-h: #1d4ed8;
+    --primary-fg:#ffffff;
+    --btn-bg:    #ffffff;
+    --btn-fg:    #0f172a;
+    --btn-h-bg:  #f8fafc;
+    --shadow:    0 1px 2px rgba(15,23,42,0.06), 0 8px 24px rgba(15,23,42,0.04);
   }
-  h1 { font-size: 20px; margin: 0 0 8px; }
-  .meta { color: #475569; font-size: 13px; }
-  .row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e2e8f08c; font-size: 13px; }
-  .row:last-of-type { border-bottom: none; }
-  .row .k { color: #64748b; }
-  .scope { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; padding: 8px 12px; border-radius: 8px; margin: 16px 0; font-size: 13px; }
-  .actions { display: flex; gap: 12px; margin-top: 20px; }
-  button { flex: 1; padding: 10px 16px; border-radius: 8px; border: 1px solid #e2e8f0; background: #fff; font-size: 14px; cursor: pointer; }
-  button.primary { background: #2563eb; color: white; border-color: #2563eb; }
-  button.primary:hover { background: #1d4ed8; }
-  button.secondary:hover { background: #f8fafc; }
-  code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:        #0b1120;
+      --card-bg:   #111827;
+      --border:    #1f2937;
+      --border-2:  #1f293770;
+      --text:      #e2e8f0;
+      --text-2:    #94a3b8;
+      --text-3:    #64748b;
+      --accent-bg: #1e3a8a40;
+      --accent-bd: #1e40af;
+      --accent-fg: #93c5fd;
+      --code-bg:   #1e293b;
+      --code-fg:   #e2e8f0;
+      --primary:   #3b82f6;
+      --primary-h: #2563eb;
+      --primary-fg:#ffffff;
+      --btn-bg:    #1f2937;
+      --btn-fg:    #e2e8f0;
+      --btn-h-bg:  #283446;
+      --shadow:    0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.25);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 48px 16px;
+  }
+  .card {
+    width: 100%;
+    max-width: 460px;
+    background: var(--card-bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 32px 28px;
+    box-shadow: var(--shadow);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .brand img { width: 36px; height: 36px; border-radius: 8px; }
+  .brand .label { color: var(--text-2); font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; font-weight: 600; }
+  h1 { font-size: 20px; line-height: 1.3; margin: 0 0 6px; color: var(--text); font-weight: 600; }
+  p.meta { color: var(--text-2); font-size: 13px; margin: 0 0 20px; }
+  .scope {
+    background: var(--accent-bg);
+    border: 1px solid var(--accent-bd);
+    color: var(--accent-fg);
+    padding: 12px 14px;
+    border-radius: 10px;
+    margin: 0 0 20px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .scope strong { color: var(--accent-fg); }
+  .rows { border-top: 1px solid var(--border-2); margin: 0 0 20px; }
+  .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-2);
+    font-size: 13px;
+    color: var(--text);
+  }
+  .row .k { color: var(--text-3); flex-shrink: 0; }
+  .row .v { color: var(--text); text-align: right; word-break: break-all; min-width: 0; }
+  code {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .actions { display: flex; gap: 10px; margin-top: 8px; }
+  button {
+    flex: 1;
+    padding: 11px 16px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: var(--btn-bg);
+    color: var(--btn-fg);
+    font: 600 14px/1 inherit;
+    cursor: pointer;
+    transition: background 0.12s ease;
+  }
+  button:hover { background: var(--btn-h-bg); }
+  button.primary {
+    background: var(--primary);
+    color: var(--primary-fg);
+    border-color: var(--primary);
+  }
+  button.primary:hover { background: var(--primary-h); border-color: var(--primary-h); }
 </style></head><body>
 <div class="card">
-  <h1>Authorize ${escapeHtml(clientName)}</h1>
-  <p class="meta">An MCP client wants to access Nectar on your behalf.</p>
+  <div class="brand">
+    ${iconUrl ? `<img src="${escapeAttr(iconUrl)}" alt="Nectar" />` : ''}
+    <span class="label">Nectar · Authorize connector</span>
+  </div>
+  <h1>Allow ${escapeHtml(clientName)} to access Nectar?</h1>
+  <p class="meta">It will be able to call Nectar MCP tools as <strong>${escapeHtml(userEmail)}</strong>.</p>
 
   <div class="scope">
-    <strong>Requested access:</strong> ${escapeHtml(scope)} — call all Nectar MCP tools as <strong>${escapeHtml(userEmail)}</strong>.
-    Per-tool capability checks still apply (you only get what your Nectar role grants).
+    <strong>Requested scope:</strong> ${escapeHtml(scope)}.
+    Per-tool capability checks still apply — the connector only gets what your Nectar role grants.
   </div>
 
-  <div class="row"><span class="k">Signed in as</span><span>${escapeHtml(userName)} &lt;${escapeHtml(userEmail)}&gt;</span></div>
-  <div class="row"><span class="k">Client ID</span><span><code>${escapeHtml(clientId)}</code></span></div>
-  <div class="row"><span class="k">Redirect URI</span><span><code>${escapeHtml(redirectUri)}</code></span></div>
+  <div class="rows">
+    <div class="row"><span class="k">Signed in as</span><span class="v">${escapeHtml(userName)} &lt;${escapeHtml(userEmail)}&gt;</span></div>
+    <div class="row"><span class="k">Client ID</span><span class="v"><code>${escapeHtml(clientId)}</code></span></div>
+    <div class="row"><span class="k">Redirect URI</span><span class="v"><code>${escapeHtml(redirectUri)}</code></span></div>
+  </div>
 
   <form method="POST" action="${escapeAttr(formAction)}">
     ${hidden}
     <div class="actions">
-      <button type="submit" name="decision" value="deny" class="secondary">Deny</button>
+      <button type="submit" name="decision" value="deny">Deny</button>
       <button type="submit" name="decision" value="allow" class="primary">Allow</button>
     </div>
   </form>
