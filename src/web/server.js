@@ -26,7 +26,16 @@ function createWebServer(services, config) {
 
   const app = express();
   app.set('trust proxy', 1); // Trust first proxy (ALB) for X-Forwarded-For
-  app.use(express.json({ limit: '1mb' }));
+  // Default 1mb JSON parser for the entire app — except POST /api/issues,
+  // which carries base64 image attachments and applies its own larger
+  // parser inside the route. Express body-parser is idempotent (sets
+  // req._body on first run), so the global parser must not run for that
+  // route or the route-scoped limit becomes dead code.
+  const defaultJson = express.json({ limit: '1mb' });
+  app.use((req, res, next) => {
+    if (req.method === 'POST' && req.path === '/api/issues') return next();
+    return defaultJson(req, res, next);
+  });
   // application/x-www-form-urlencoded — required by the MCP OAuth
   // consent form POST and by RFC 6749 token endpoints. Harmless for
   // every other route since they don't read req.body for form posts.

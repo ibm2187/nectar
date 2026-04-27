@@ -88,9 +88,14 @@ const ISSUE_ATTACHMENT_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', '
 // its raw.githubusercontent.com URL.
 const ISSUE_ATTACHMENT_BRANCH = 'issue-attachments';
 
+// Strict base64 — no whitespace, no URL-safe variant; matches what
+// `Buffer.from(s, 'base64')` will round-trip cleanly to bytes.
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
 /**
  * Validate inbound attachments[] from POST /issues. Each must be an image
- * (png/jpeg/gif/webp) under 5 MiB; max 5 per request.
+ * (png/jpeg/gif/webp) under 1 MiB, with a well-formed base64 payload;
+ * max 5 per request.
  * @param {unknown} attachments
  * @returns {{error?: string, attachments: Array<{filename: string, contentType: string, contentBase64: string, sizeBytes: number}>}}
  */
@@ -109,6 +114,9 @@ function validateIssueAttachments(attachments) {
       return { error: `attachment contentType must be one of ${[...ISSUE_ATTACHMENT_MIME].join(', ')}`, attachments: [] };
     }
     if (typeof dataBase64 !== 'string' || !dataBase64) return { error: 'attachment.dataBase64 is required', attachments: [] };
+    if (dataBase64.length % 4 !== 0 || !BASE64_RE.test(dataBase64)) {
+      return { error: `attachment ${filename} is not valid base64`, attachments: [] };
+    }
     // Approximate decoded size from base64 length — exact enough for the cap.
     const sizeBytes = Math.floor(dataBase64.length * 3 / 4);
     if (sizeBytes > ISSUE_ATTACHMENT_MAX_BYTES) {

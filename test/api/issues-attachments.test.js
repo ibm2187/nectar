@@ -69,8 +69,18 @@ function createServicesWithGithub(githubOverrides = {}) {
   };
 }
 
+// Mirror src/web/server.js parser layering: a 1mb global JSON parser that
+// skips POST /api/issues so the route can apply its own larger parser.
+// Without this mirror, route-scoped body limits are dead code and bugs
+// like the per-route 8mb parser being shadowed by the 1mb global slip
+// through the suite undetected.
 function createTestApp(services) {
   const app = express();
+  const defaultJson = express.json({ limit: '1mb' });
+  app.use((req, res, next) => {
+    if (req.method === 'POST' && req.path === '/api/issues') return next();
+    return defaultJson(req, res, next);
+  });
   app.use('/api', createRoutes(services, {}));
   return app;
 }
@@ -281,6 +291,31 @@ describe('POST /api/issues — attachments', () => {
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/title/);
+    expect(services.github.uploadContent).not.toHaveBeenCalled();
+  });
+
+  it('accepts an attachment near the documented 1 MB cap (route-scoped parser is live)', async () => {
+    // Build ~1 MB of valid base64. 1 MB = 1048576 bytes raw → 1398104 base64 chars
+    // (must be a multiple of 4). 1398104 / 4 * 3 = 1048578 → just over the cap by
+    // 2 bytes; trim to 1048572 bytes (1398096 base64 chars) to land safely under.
+    const rawBytes = 1048572;
+    const b64Len = Math.ceil(rawBytes / 3) * 4; // 1398096
+    const dataBase64 = 'A'.repeat(b64Len);
+    const res = await request(app, 'POST', '/api/issues', {
+      title: 'big attachment',
+      attachments: [{ filename: 'big.png', contentType: 'image/png', dataBase64 }],
+    });
+    expect(res.status).toBe(201);
+    expect(services.github.uploadContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects malformed base64 payload', async () => {
+    const res = await request(app, 'POST', '/api/issues', {
+      title: 't',
+      attachments: [{ filename: 'a.png', contentType: 'image/png', dataBase64: 'not!valid base64@@@' }],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/base64/);
     expect(services.github.uploadContent).not.toHaveBeenCalled();
   });
 
