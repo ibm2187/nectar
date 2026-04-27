@@ -248,6 +248,40 @@ describe('AlertRulesPanel — editor', () => {
     expect(payload.triggerType).toBe('env-unhealthy')
   })
 
+  it('marks private non-member channels with a "needs invite" hint in the picker', async () => {
+    wireApi({
+      '/alerts/rules': () => ({ rules: [] }),
+      '/alerts/triggers': () => ({ triggers: SAMPLE_TRIGGERS }),
+      '/alerts/slack/channels': () => ({
+        ok: true,
+        channels: [
+          { id: 'G1', name: 'execs-only', isPrivate: true, isMember: false },
+          { id: 'G2', name: 'lumen-internal', isPrivate: true, isMember: true },
+          { id: 'C1', name: 'public-not-joined', isPrivate: false, isMember: false },
+        ],
+      }),
+    })
+
+    render(<AlertRulesPanel />)
+    await waitFor(() => screen.getByText('+ New Rule'))
+    fireEvent.click(screen.getByText('+ New Rule'))
+    await waitFor(() => expect(screen.getByText(/Add a Slack channel/i)).not.toBeDisabled())
+    fireEvent.click(screen.getByText(/Add a Slack channel/i))
+
+    const buttons = await screen.findAllByRole('button')
+    const optionText = (name: string) => {
+      const b = buttons.find(btn => (btn.textContent || '').includes(name))
+      return b?.textContent?.trim() || ''
+    }
+
+    // Private + non-member: must surface the "needs invite" hint.
+    expect(optionText('execs-only')).toMatch(/needs invite/i)
+    // Private + already a member: no hint.
+    expect(optionText('lumen-internal')).not.toMatch(/needs invite/i)
+    // Public + non-member: no hint (auto-join is silent on save).
+    expect(optionText('public-not-joined')).not.toMatch(/needs invite/i)
+  })
+
   it('trigger dropdown description updates when user changes trigger', async () => {
     wireApi({
       '/alerts/rules': () => ({ rules: [] }),

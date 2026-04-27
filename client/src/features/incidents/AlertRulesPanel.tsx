@@ -8,12 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Badge } from '../../components/ui/badge'
 import { SearchableSelect } from '../../components/SearchableSelect'
 import { useWsStore } from '../../stores/wsStore'
-
-interface SlackChannel {
-  id: string
-  name: string
-  isPrivate: boolean
-}
+import { slackChannelToPickerItem, type SlackChannel } from './slackChannel'
 
 const SEVERITY_BADGE: Record<AlertSeverity, string> = {
   critical: 'bg-red-100 text-red-800 border-red-300',
@@ -431,14 +426,9 @@ function RuleEditor({ triggers, initial, onClose, onSaved }: {
   // them (private channel the bot just got removed from, etc.) so the
   // user can see-and-remove instead of being silently locked in.
   const pickerItems = useMemo(() => {
-    const list = slackChannels || []
-    return list
+    return (slackChannels || [])
       .filter(c => !channels.includes(`#${c.name}`))
-      .map(c => ({
-        value: `#${c.name}`,
-        label: c.name,
-        icon: c.isPrivate ? '🔒' : '#',
-      }))
+      .map(c => slackChannelToPickerItem(c, '#'))
   }, [slackChannels, channels])
 
   function addChannel(ch: string | null) {
@@ -575,7 +565,7 @@ function RuleEditor({ triggers, initial, onClose, onSaved }: {
                 disabled={!slackChannels || !!slackChannelsError || pickerItems.length === 0}
                 emptyHint={
                   slackChannels && slackChannels.length === 0
-                    ? 'Bot is not in any channels — add @Nectar to a channel and reopen this dialog'
+                    ? 'No Slack channels available — check Slack connection / scopes.'
                     : 'No matches.'
                 }
               />

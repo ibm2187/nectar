@@ -299,6 +299,12 @@ class SlackNotifier {
    * channel is reachable. Returns a structured result so callers can
    * render a specific UI error (not-in-channel vs not-found).
    *
+   * For PUBLIC channels where the bot isn't a member yet, this will
+   * try to self-add via `conversations.join` (needs `channels:join`
+   * scope). Private channels can't be self-joined — Slack has no API
+   * for it — so they still return `not_in_channel` with the
+   * `/invite @Nectar` hint.
+   *
    * @param {string} channelName - channel name with or without '#', or channel ID
    * @returns {Promise<{ ok: boolean, inChannel?: boolean, channelId?: string, name?: string, error?: string, code?: string }>}
    */
@@ -348,8 +354,17 @@ class SlackNotifier {
       if (channel.is_archived) {
         return { ok: false, error: 'Channel is archived', code: 'is_archived' };
       }
-      const inChannel = !!channel.is_member;
-      if (!inChannel) {
+      if (!channel.is_member) {
+        if (!channel.is_private) {
+          try {
+            await this.app.client.conversations.join({ channel: channelId });
+            log.info(`Slack: auto-joined #${channel.name} (${channelId})`);
+            return { ok: true, inChannel: true, channelId, name: channel.name };
+          } catch (joinErr) {
+            const code = joinErr.data?.error || joinErr.message || 'unknown';
+            log.warn(`Slack: auto-join failed for #${channel.name}: ${code}`);
+          }
+        }
         return {
           ok: false,
           inChannel: false,
@@ -384,38 +399,57 @@ class SlackNotifier {
    * @returns {Promise<Array<{ channel, ok, ts?, error? }>>}
    */
   /**
-   * List channels the bot is currently a member of (so it can post without
-   * a `not_in_channel` failure). Walks public + private via conversations.list,
-   * filters to `is_member`. Used by the incident creation UI to populate the
-   * channel selector — eliminates the typo class of bugs.
+   * List public + private channels the workspace exposes to this bot.
+   * Returns BOTH member and non-member channels so the picker can show
+   * everything; the alert-rule save flow handles the not-yet-joined
+   * case (auto-joins publics, asks for /invite on privates).
+   *
+   * Sorted with members first (alpha) then non-members (alpha) so the
+   * "easy" choices float to the top of the dropdown.
    */
   async listChannels() {
     if (!this.isConfigured()) return { ok: false, error: 'Slack not connected', channels: [] };
-    const channels = [];
-    try {
-      for (const types of ['public_channel', 'private_channel']) {
+    // Each type is fetched in its own try/catch so a missing scope on
+    // one (e.g. groups:read) still surfaces the other type's channels.
+    const fetchType = async (types) => {
+      const found = [];
+      try {
         let cursor;
         do {
           const resp = await this.app.client.conversations.list({
-            types,
-            limit: 1000,
-            cursor,
-            exclude_archived: true,
+            types, limit: 1000, cursor, exclude_archived: true,
           });
           for (const c of resp.channels || []) {
-            if (c.is_member) {
-              channels.push({ id: c.id, name: c.name, isPrivate: types === 'private_channel' });
-            }
+            found.push({
+              id: c.id,
+              name: c.name,
+              isPrivate: types === 'private_channel',
+              isMember: !!c.is_member,
+            });
           }
           cursor = resp.response_metadata?.next_cursor;
         } while (cursor);
+        return { channels: found };
+      } catch (err) {
+        const code = err.data?.error || err.message || 'unknown';
+        log.warn(`Slack listChannels(${types}) failed: ${code}`);
+        return { channels: found, error: `${types}: ${code}` };
       }
-      channels.sort((a, b) => a.name.localeCompare(b.name));
-      return { ok: true, channels };
-    } catch (err) {
-      log.error(`Slack listChannels failed: ${err.message}`);
-      return { ok: false, error: err.message, channels: [] };
+    };
+    const results = await Promise.all([
+      fetchType('public_channel'),
+      fetchType('private_channel'),
+    ]);
+    const channels = results.flatMap(r => r.channels);
+    const errors = results.map(r => r.error).filter(Boolean);
+    channels.sort((a, b) => {
+      if (a.isMember !== b.isMember) return a.isMember ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    if (channels.length === 0 && errors.length > 0) {
+      return { ok: false, error: errors.join('; '), channels: [] };
     }
+    return { ok: true, channels };
   }
 
   async postAlert({ channels = [], text = '', blocks = null, mention = null, threadTs = null } = {}) {
