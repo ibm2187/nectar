@@ -31,6 +31,8 @@ function createWebServer(services, config) {
   // parser inside the route. Express body-parser is idempotent (sets
   // req._body on first run), so the global parser must not run for that
   // route or the route-scoped limit becomes dead code.
+  // If you add more attachment-bearing routes (e.g. POST /api/issues/:id/attachments),
+  // extend the gate below or they'll silently fall back to the 1mb global.
   const defaultJson = express.json({ limit: '1mb' });
   app.use((req, res, next) => {
     if (req.method === 'POST' && req.path === '/api/issues') return next();
