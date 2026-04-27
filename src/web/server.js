@@ -473,6 +473,13 @@ function createWebServer(services, config) {
   // ── HTTP server with WebSocket upgrade ────────────────
   const httpServer = http.createServer(app);
 
+  // Must be larger than the ALB idle_timeout (60s) so the ALB never
+  // tries to reuse a pooled connection that Node has just FIN'd —
+  // that race shows up as random ALB 502s with no app log.
+  // headersTimeout must be > keepAliveTimeout.
+  httpServer.keepAliveTimeout = 65_000;
+  httpServer.headersTimeout = 66_000;
+
   httpServer.on('upgrade', (request, socket, head) => {
     const pathname = new URL(request.url, 'http://localhost').pathname;
     if (pathname === '/ws') {
