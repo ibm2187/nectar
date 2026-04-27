@@ -46,6 +46,14 @@ const GROUP_SCHEMA = {
       envSustained: { label: 'Sustained Degradation', description: 'Escalation fired when an environment stays unhealthy for N minutes' },
     },
   },
+  nectarIssues: {
+    label: 'Nectar Issues',
+    description: 'Notifications about issues filed against the Nectar repo — DMs to the reporter and a broadcast to #nectar',
+    notifications: {
+      issueOpened: { label: 'New Issue Opened', description: 'Posts to #nectar when a new issue is opened, whether via the Nectar UI or directly on github.com (channel name overridable via NECTAR_SLACK_CHANNEL)' },
+      issueActivity: { label: 'Activity on My Issue', description: 'DM when anything happens on an issue you opened — new comments, linked PRs (Closes/Fixes/Resolves #N), and so on' },
+    },
+  },
 };
 
 // Reverse lookup: notification key → group key

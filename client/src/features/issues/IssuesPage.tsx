@@ -29,6 +29,7 @@ interface Issue {
   closedAt: string | null
   comments: number
   author: IssueAuthor | null
+  reporter: { email: string; name: string | null } | null
   labels: IssueLabel[]
 }
 
@@ -69,6 +70,8 @@ export function IssuesPage() {
       if (i.title.toLowerCase().includes(q)) return true
       if (i.number.toString().includes(q)) return true
       if (i.author?.login.toLowerCase().includes(q)) return true
+      if (i.reporter?.email.toLowerCase().includes(q)) return true
+      if (i.reporter?.name?.toLowerCase().includes(q)) return true
       if (i.labels.some(l => l.name.toLowerCase().includes(q))) return true
       return false
     })
@@ -209,13 +212,28 @@ function IssueRow({ issue }: { issue: Issue }) {
           </div>
           <div className="text-xs text-muted-foreground mt-1">
             opened {relative}
-            {issue.author && <> by {issue.author.login}</>}
+            <IssueOpenedBy reporter={issue.reporter} author={issue.author} />
             {issue.comments > 0 && <> · 💬 {issue.comments}</>}
           </div>
         </div>
       </div>
     </a>
   )
+}
+
+function IssueOpenedBy({ reporter, author }: {
+  reporter: Issue['reporter']
+  author: IssueAuthor | null
+}) {
+  if (reporter) {
+    return (
+      <> by <span className="font-medium" title={reporter.email}>
+        {reporter.name || reporter.email}
+      </span></>
+    )
+  }
+  if (author) return <> by {author.login}</>
+  return null
 }
 
 function CreateIssueDialog({ open, onOpenChange, onCreated }: {
