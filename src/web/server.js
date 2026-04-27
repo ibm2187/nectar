@@ -126,7 +126,20 @@ function createWebServer(services, config) {
 
   // ── Webhooks (no auth) ────────────────────────────────
   const webhookRoutes = require('../api/webhooks');
-  app.use('/api/webhooks', webhookRoutes(releases, services.github, config));
+  const IssueNotifier = require('../api/issue-notifications');
+  const issueNotifier =
+    services.slack && services.peopleDirectory && services.notificationSettings
+      ? new IssueNotifier({
+          slack: services.slack,
+          github: services.github,
+          userStore: services.userStore,
+          peopleDirectory: services.peopleDirectory,
+          notificationSettings: services.notificationSettings,
+          db: require('../core/db').getDb(),
+          channel: process.env.NECTAR_SLACK_CHANNEL,
+        })
+      : null;
+  app.use('/api/webhooks', webhookRoutes(releases, services.github, config, { issueNotifier }));
 
   // ── Health check ──────────────────────────────────────
   app.get('/health', (req, res) => {

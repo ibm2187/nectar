@@ -12,6 +12,7 @@ const { buildStandupData } = require('./standup');
 const { sendTicketNotification, sendStandupReminder, CANNED_MESSAGES } = require('./ticket-notify');
 const { computeMilestones, recomputeMilestones, refreshFromTemplate, hasGateActivity, autoComputeForRelease, inferReleaseType } = require('../core/milestone-engine');
 const { getArtifactsS3 } = require('../core/s3-artifacts');
+const { appendReporterFooter, extractReporter } = require('../integrations/issue-reporter');
 
 /**
  * Evaluate a gate's auto-check function against live release data.
@@ -1838,6 +1839,16 @@ module.exports = function createRoutes(services, config) {
 
   // ── Issues (self-service bug/feedback on mavencare/nectar) ──
 
+  // Resolve a reporter email to { name, email } via UserStore. Returns null
+  // when the email is missing. Falls back to { name: null, email } when the
+  // user isn't in our DB (e.g. left the team) so the UI can still show
+  // *something* meaningful.
+  function resolveReporter(email) {
+    if (!email) return null;
+    const user = userStore && userStore.getUser ? userStore.getUser(email) : null;
+    return { email, name: (user && user.name) || null };
+  }
+
   router.get('/issues', asyncHandler(async (req, res) => {
     if (!github || !github.isConfigured()) {
       return res.status(503).json({ error: 'GitHub integration not configured' });
@@ -1859,6 +1870,9 @@ module.exports = function createRoutes(services, config) {
       closedAt: i.closed_at,
       comments: i.comments,
       author: i.user ? { login: i.user.login, avatarUrl: i.user.avatar_url } : null,
+      // Nectar user who clicked "New Issue" — resolved to { name, email }.
+      // Null when the issue was opened directly on github.com or pre-dates the tag.
+      reporter: resolveReporter(extractReporter(i.body)),
       labels: (i.labels || []).map(l => ({
         name: typeof l === 'string' ? l : l.name,
         color: typeof l === 'string' ? null : l.color,
@@ -1893,9 +1907,14 @@ module.exports = function createRoutes(services, config) {
         : embeds;
     }
 
+    // Tag the issue body with the Nectar user so we can attribute later.
+    // The PAT owner is what GitHub sees as the author, so without this
+    // the actual reporter is lost. Reporter footer goes after attachments.
+    const reporterEmail = req.user ? req.user.email : null;
+    const taggedBody = appendReporterFooter(finalBody, reporterEmail);
     const issue = await github.createIssue({
       title: title.trim(),
-      body: finalBody,
+      body: taggedBody,
       labels: Array.isArray(labels) ? labels : [],
       repoPath: NECTAR_REPO,
     });
@@ -1905,6 +1924,7 @@ module.exports = function createRoutes(services, config) {
       url: issue.html_url,
       state: issue.state,
       createdAt: issue.created_at,
+      reporter: resolveReporter(reporterEmail),
     });
   }));
 

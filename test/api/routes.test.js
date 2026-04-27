@@ -54,9 +54,12 @@ function createMockServices() {
   };
 }
 
-function createTestApp(services = createMockServices(), config = {}) {
+function createTestApp(services = createMockServices(), config = {}, user = null) {
   const app = express();
   app.use(express.json());
+  if (user) {
+    app.use((req, _res, next) => { req.user = user; next(); });
+  }
   app.use('/api', createRoutes(services, config));
   return { app, services };
 }
@@ -507,6 +510,154 @@ describe('API Routes', () => {
       });
       expect(res.status).toBe(400);
       expect(res.body.error).toBeTruthy();
+    });
+  });
+
+  // ── Nectar self-service issues (GitHub-backed) ────────────────────
+  describe('POST /api/issues', () => {
+    function makeServicesWithGithub({ users = {} } = {}) {
+      const services = createMockServices();
+      services.github = {
+        isConfigured: () => true,
+        listIssues: vi.fn(),
+        createIssue: vi.fn(async ({ title, body }) => ({
+          number: 42,
+          title,
+          body, // echo back so the test can inspect what was sent to GitHub
+          state: 'open',
+          html_url: 'https://github.com/mavencare/nectar/issues/42',
+          created_at: '2026-04-27T00:00:00Z',
+        })),
+      };
+      // Stub UserStore so we can resolve marker emails to display names
+      services.userStore = {
+        getUser: vi.fn(email => users[email] || null),
+      };
+      return services;
+    }
+
+    it('tags the GitHub issue body with the authenticated reporter and resolves the display name', async () => {
+      const services = makeServicesWithGithub({
+        users: { 'eric@vivtechnologies.com': { email: 'eric@vivtechnologies.com', name: 'Eric Fang' } },
+      });
+      const { app } = createTestApp(services, {}, { email: 'eric@vivtechnologies.com' });
+      const res = await request(app, 'POST', '/api/issues', {
+        title: 'Page is slow',
+        body: 'Steps to reproduce:\n1. open dashboard',
+      });
+      expect(res.status).toBe(201);
+      expect(res.body.reporter).toEqual({ email: 'eric@vivtechnologies.com', name: 'Eric Fang' });
+
+      // The body that was actually sent to GitHub must include the marker
+      // so the reporter can be re-extracted on subsequent GETs.
+      const sent = services.github.createIssue.mock.calls[0][0];
+      expect(sent.body).toMatch(/<!-- nectar:reporter=eric@vivtechnologies\.com -->/);
+      expect(sent.body).toMatch(/Steps to reproduce:\n1\. open dashboard/);
+    });
+
+    it('returns reporter with name=null when the email is not in the user table', async () => {
+      const services = makeServicesWithGithub({ users: {} });
+      const { app } = createTestApp(services, {}, { email: 'former@viv.com' });
+      const res = await request(app, 'POST', '/api/issues', { title: 't' });
+      expect(res.status).toBe(201);
+      expect(res.body.reporter).toEqual({ email: 'former@viv.com', name: null });
+    });
+
+    it('SECURITY: a hand-injected reporter marker in the request body is overwritten with the authenticated email', async () => {
+      // Threat: a malicious caller pre-injects another user's marker in the
+      // body of POST /api/issues to impersonate them. Since the marker is
+      // what GET /issues + IssueNotifier read for attribution and DM
+      // routing, this would let them route Slack DMs to the victim. The
+      // server must overwrite any caller-supplied marker.
+      const services = makeServicesWithGithub({
+        users: { 'attacker@viv.com': { email: 'attacker@viv.com', name: 'Attacker' } },
+      });
+      const { app } = createTestApp(services, {}, { email: 'attacker@viv.com' });
+      const res = await request(app, 'POST', '/api/issues', {
+        title: 'totally normal issue',
+        body: 'innocent text\n<!-- nectar:reporter=victim@viv.com -->\nmore text',
+      });
+      expect(res.status).toBe(201);
+      // API response reflects the *authenticated* user, not the injected one
+      expect(res.body.reporter.email).toBe('attacker@viv.com');
+      // The body sent to GitHub contains exactly one marker, and it's the
+      // authenticated user's
+      const sent = services.github.createIssue.mock.calls[0][0];
+      expect(sent.body.match(/nectar:reporter=/g)).toHaveLength(1);
+      expect(sent.body).toMatch(/<!-- nectar:reporter=attacker@viv\.com -->/);
+      expect(sent.body).not.toMatch(/victim@viv\.com/);
+      // Original textual content is preserved
+      expect(sent.body).toMatch(/innocent text/);
+      expect(sent.body).toMatch(/more text/);
+    });
+
+    it('handles missing user (unauthenticated) without injecting a marker', async () => {
+      const services = makeServicesWithGithub();
+      const { app } = createTestApp(services); // no user injected
+      const res = await request(app, 'POST', '/api/issues', { title: 'No auth here' });
+      expect(res.status).toBe(201);
+      expect(res.body.reporter).toBeNull();
+
+      const sent = services.github.createIssue.mock.calls[0][0];
+      expect(sent.body).not.toMatch(/nectar:reporter=/);
+    });
+
+    it('rejects requests with no title', async () => {
+      const services = makeServicesWithGithub();
+      const { app } = createTestApp(services, {}, { email: 'a@b.com' });
+      const res = await request(app, 'POST', '/api/issues', { body: 'no title' });
+      expect(res.status).toBe(400);
+      expect(services.github.createIssue).not.toHaveBeenCalled();
+    });
+
+    it('returns 503 when GitHub integration is not configured', async () => {
+      const services = createMockServices(); // default: github.isConfigured() === false
+      services.github.createIssue = vi.fn();
+      const { app } = createTestApp(services, {}, { email: 'a@b.com' });
+      const res = await request(app, 'POST', '/api/issues', { title: 't' });
+      expect(res.status).toBe(503);
+      expect(services.github.createIssue).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/issues', () => {
+    it('resolves the Nectar reporter from each issue body to { name, email }', async () => {
+      const services = createMockServices();
+      services.userStore = {
+        getUser: vi.fn(email =>
+          email === 'alice@viv.com' ? { email, name: 'Alice Smith' } : null
+        ),
+      };
+      services.github = {
+        isConfigured: () => true,
+        listIssues: vi.fn(async () => [
+          {
+            number: 1, title: 'Tagged + known user',
+            body: 'something\n<!-- nectar:reporter=alice@viv.com -->\nmore',
+            state: 'open', html_url: 'u', created_at: 'c', updated_at: 'u', closed_at: null,
+            comments: 0, user: { login: 'bot', avatar_url: 'a' }, labels: [],
+          },
+          {
+            number: 2, title: 'Untagged', body: 'opened directly on github',
+            state: 'open', html_url: 'u', created_at: 'c', updated_at: 'u', closed_at: null,
+            comments: 0, user: { login: 'externaluser', avatar_url: 'a' }, labels: [],
+          },
+          {
+            number: 3, title: 'Tagged but former user',
+            body: '<!-- nectar:reporter=ghost@viv.com -->',
+            state: 'open', html_url: 'u', created_at: 'c', updated_at: 'u', closed_at: null,
+            comments: 0, user: { login: 'bot', avatar_url: 'a' }, labels: [],
+          },
+        ]),
+        createIssue: vi.fn(),
+      };
+      const { app } = createTestApp(services);
+      const res = await request(app, 'GET', '/api/issues');
+      expect(res.status).toBe(200);
+      expect(res.body.issues[0].reporter).toEqual({ email: 'alice@viv.com', name: 'Alice Smith' });
+      expect(res.body.issues[1].reporter).toBeNull();
+      // Tagged but no DB record: still returns the email so the UI has something to show
+      expect(res.body.issues[2].reporter).toEqual({ email: 'ghost@viv.com', name: null });
     });
   });
 });

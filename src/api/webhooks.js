@@ -2,18 +2,30 @@ const crypto = require('crypto');
 const { Router } = require('express');
 const log = require('../core/log');
 const JiraClient = require('../integrations/jira');
+const { safeEqual } = require('../core/mcp-oauth-store');
 
 /**
  * Webhook handlers for GitHub and JIRA.
  * Faster than polling for real-time cherry-pick and ticket updates.
+ *
+ * @param {object} releases - ReleaseManager
+ * @param {object} github - integrations/github
+ * @param {object} config
+ * @param {object} [extras] - optional extras for issue notifications
+ * @param {object} [extras.issueNotifier] - IssueNotifier instance; when
+ *        provided, issue_comment + pull_request events also DM the
+ *        Nectar reporter.
  */
-module.exports = function createWebhookRoutes(releases, github, config) {
+module.exports = function createWebhookRoutes(releases, github, config, extras = {}) {
   const router = Router();
+  const { issueNotifier } = extras;
 
   // ── GitHub webhook ──────────────────────────────────────
-  // Receives PR events (opened, merged, labeled)
+  // Receives PR events (opened, merged, labeled), issue comments,
+  // and (when an IssueNotifier is wired in) reporter DMs.
   router.post('/github', (req, res) => {
-    // Verify signature if secret is configured
+    // Verify signature if secret is configured. Constant-time compare via
+    // the shared safeEqual helper — string `!==` would leak timing data.
     const secret = process.env.GITHUB_WEBHOOK_SECRET;
     if (secret) {
       const sig = req.headers['x-hub-signature-256'] || '';
@@ -21,17 +33,36 @@ module.exports = function createWebhookRoutes(releases, github, config) {
         .createHmac('sha256', secret)
         .update(JSON.stringify(req.body))
         .digest('hex');
-      if (sig !== expected) {
+      if (!safeEqual(sig, expected)) {
         return res.status(401).json({ error: 'Invalid signature' });
       }
     }
 
     const event = req.headers['x-github-event'];
     const payload = req.body;
+    const eventRepo = payload && payload.repository && payload.repository.full_name;
+    const fromConfiguredRepo = !issueNotifier || issueNotifier.isEventFromConfiguredRepo(eventRepo);
 
     if (event === 'pull_request') {
       handlePREvent(payload, releases, github).catch(err =>
         log.error('GitHub webhook PR handler error:', err.message)
+      );
+      if (issueNotifier && fromConfiguredRepo) {
+        issueNotifier.onPullRequest(payload).catch(err =>
+          log.error('IssueNotifier.onPullRequest error:', err.message)
+        );
+      }
+    }
+
+    if (event === 'issue_comment' && issueNotifier && fromConfiguredRepo) {
+      issueNotifier.onIssueComment(payload).catch(err =>
+        log.error('IssueNotifier.onIssueComment error:', err.message)
+      );
+    }
+
+    if (event === 'issues' && issueNotifier && fromConfiguredRepo) {
+      issueNotifier.onIssueOpened(payload).catch(err =>
+        log.error('IssueNotifier.onIssueOpened error:', err.message)
       );
     }
 
