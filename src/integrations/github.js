@@ -181,6 +181,73 @@ class GitHubClient {
     return this._request('GET', `/repos/${repo}/issues/${number}`);
   }
 
+  // ── Contents / attachments ─────────────────────────────
+
+  /**
+   * Get a git ref (e.g., refs/heads/main). Returns null on 404.
+   * @param {string} ref - e.g., 'heads/main'
+   * @param {string} [repoPath]
+   */
+  async getRef(ref, repoPath = null) {
+    const repo = repoPath || this.repo;
+    try {
+      return await this._request('GET', `/repos/${repo}/git/ref/${ref}`);
+    } catch (err) {
+      if (/→ 404:/.test(err.message)) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * Create a new branch at the given commit sha.
+   * @param {string} branch - Bare branch name (e.g., 'issue-attachments')
+   * @param {string} sha - Commit sha to point the new ref at
+   * @param {string} [repoPath]
+   */
+  async createBranch(branch, sha, repoPath = null) {
+    const repo = repoPath || this.repo;
+    return this._request('POST', `/repos/${repo}/git/refs`, {
+      ref: `refs/heads/${branch}`,
+      sha,
+    });
+  }
+
+  /**
+   * Ensure a branch exists; create it from the default branch's HEAD if missing.
+   * @param {string} branch - Branch name to ensure
+   * @param {string} [repoPath]
+   * @returns {Promise<{created: boolean}>}
+   */
+  async ensureBranch(branch, repoPath = null) {
+    const repo = repoPath || this.repo;
+    const existing = await this.getRef(`heads/${branch}`, repo);
+    if (existing) return { created: false };
+    const repoMeta = await this._request('GET', `/repos/${repo}`);
+    const defaultBranch = repoMeta.default_branch || 'main';
+    const baseRef = await this._request('GET', `/repos/${repo}/git/ref/heads/${defaultBranch}`);
+    await this.createBranch(branch, baseRef.object.sha, repo);
+    return { created: true };
+  }
+
+  /**
+   * PUT a file via the Contents API (creates a commit on the target branch).
+   * @param {object} opts
+   * @param {string} opts.path - Repo-relative path
+   * @param {string} opts.contentBase64 - File contents, base64-encoded (no data: prefix)
+   * @param {string} opts.message - Commit message
+   * @param {string} opts.branch - Target branch
+   * @param {string} [opts.repoPath]
+   * @returns {Promise<object>} GitHub Contents API response (has content.download_url, content.html_url)
+   */
+  async uploadContent({ path, contentBase64, message, branch, repoPath = null }) {
+    const repo = repoPath || this.repo;
+    return this._request('PUT', `/repos/${repo}/contents/${path}`, {
+      message,
+      content: contentBase64,
+      branch,
+    });
+  }
+
   // ── Helpers ─────────────────────────────────────────────
 
   /**

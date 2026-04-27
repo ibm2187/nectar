@@ -1,4 +1,4 @@
-const { Router } = require('express');
+const { Router, json: expressJson } = require('express');
 const fs = require('fs');
 const path = require('path');
 const { execSync, spawn } = require('child_process');
@@ -75,6 +75,84 @@ const DONE_STATUSES_FOR_RISK = new Set([
   'QA Certified', 'No QA - Certified', 'QA Done', 'Done', 'Closed',
   'Resolved', 'Released', 'Resolved Without Code', 'Completed',
 ]);
+
+// Issue-attachment limits — per file size, total count, and allowed image types.
+const ISSUE_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+const ISSUE_ATTACHMENT_MAX_COUNT = 5;
+const ISSUE_ATTACHMENT_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+const ISSUE_ATTACHMENT_BRANCH = 'issue-attachments';
+
+/**
+ * Validate inbound attachments[] from POST /issues. Each must be an image
+ * (png/jpeg/gif/webp) under 5 MiB; max 5 per request.
+ * @param {unknown} attachments
+ * @returns {{error?: string, attachments: Array<{filename: string, contentType: string, contentBase64: string, sizeBytes: number}>}}
+ */
+function validateIssueAttachments(attachments) {
+  if (attachments === undefined || attachments === null) return { attachments: [] };
+  if (!Array.isArray(attachments)) return { error: 'attachments must be an array', attachments: [] };
+  if (attachments.length > ISSUE_ATTACHMENT_MAX_COUNT) {
+    return { error: `at most ${ISSUE_ATTACHMENT_MAX_COUNT} attachments per issue`, attachments: [] };
+  }
+  const out = [];
+  for (const att of attachments) {
+    if (!att || typeof att !== 'object') return { error: 'attachment entries must be objects', attachments: [] };
+    const { filename, contentType, dataBase64 } = att;
+    if (typeof filename !== 'string' || !filename.trim()) return { error: 'attachment.filename is required', attachments: [] };
+    if (typeof contentType !== 'string' || !ISSUE_ATTACHMENT_MIME.has(contentType)) {
+      return { error: `attachment contentType must be one of ${[...ISSUE_ATTACHMENT_MIME].join(', ')}`, attachments: [] };
+    }
+    if (typeof dataBase64 !== 'string' || !dataBase64) return { error: 'attachment.dataBase64 is required', attachments: [] };
+    // Approximate decoded size from base64 length — exact enough for the cap.
+    const sizeBytes = Math.floor(dataBase64.length * 3 / 4);
+    if (sizeBytes > ISSUE_ATTACHMENT_MAX_BYTES) {
+      return { error: `attachment ${filename} exceeds ${ISSUE_ATTACHMENT_MAX_BYTES} bytes`, attachments: [] };
+    }
+    out.push({ filename, contentType, contentBase64: dataBase64, sizeBytes });
+  }
+  return { attachments: out };
+}
+
+/**
+ * Sanitize a user-supplied filename for use as a repo path component —
+ * keeps alphanumerics, dot, dash, underscore; collapses everything else to '-'.
+ * @param {string} name
+ */
+function sanitizeAttachmentFilename(name) {
+  return String(name).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'file';
+}
+
+/**
+ * Commit each attachment to the issue-attachments branch and return
+ * markdown-embed metadata (alt text + raw URL).
+ * @param {object} github - GitHubClient
+ * @param {string} repoPath
+ * @param {Array<{filename: string, contentType: string, contentBase64: string}>} attachments
+ * @returns {Promise<Array<{alt: string, url: string}>>}
+ */
+async function uploadIssueAttachments(github, repoPath, attachments) {
+  await github.ensureBranch(ISSUE_ATTACHMENT_BRANCH, repoPath);
+  const now = new Date();
+  const yyyy = now.getUTCFullYear();
+  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const out = [];
+  for (const att of attachments) {
+    const safe = sanitizeAttachmentFilename(att.filename);
+    const rand = Math.random().toString(36).slice(2, 8);
+    const repoFsPath = `uploads/${yyyy}/${mm}/${Date.now()}-${rand}-${safe}`;
+    const result = await github.uploadContent({
+      path: repoFsPath,
+      contentBase64: att.contentBase64,
+      message: `chore(attachments): upload ${safe} for new issue`,
+      branch: ISSUE_ATTACHMENT_BRANCH,
+      repoPath,
+    });
+    const url = (result && result.content && (result.content.download_url || result.content.html_url)) || '';
+    if (!url) throw new Error(`Attachment upload returned no URL for ${safe}`);
+    out.push({ alt: att.filename, url });
+  }
+  return out;
+}
 
 /**
  * REST API routes — primary consumer is Hive.
@@ -1764,17 +1842,34 @@ module.exports = function createRoutes(services, config) {
     res.json({ repo: NECTAR_REPO, issues: slim });
   }));
 
-  router.post('/issues', asyncHandler(async (req, res) => {
+  // Larger JSON body limit for this route — attachments are sent inline as base64.
+  const issueCreateJson = expressJson({ limit: '25mb' });
+  router.post('/issues', issueCreateJson, asyncHandler(async (req, res) => {
     if (!github || !github.isConfigured()) {
       return res.status(503).json({ error: 'GitHub integration not configured' });
     }
-    const { title, body, labels } = req.body || {};
+    const { title, body, labels, attachments } = req.body || {};
     if (!title || !title.trim()) {
       return res.status(400).json({ error: 'title is required' });
     }
+
+    const validation = validateIssueAttachments(attachments);
+    if (validation.error) {
+      return res.status(400).json({ error: validation.error });
+    }
+
+    let finalBody = body || '';
+    if (validation.attachments.length > 0) {
+      const uploaded = await uploadIssueAttachments(github, NECTAR_REPO, validation.attachments);
+      const embeds = uploaded.map(a => `![${a.alt}](${a.url})`).join('\n');
+      finalBody = finalBody.trim()
+        ? `${finalBody.trim()}\n\n${embeds}`
+        : embeds;
+    }
+
     const issue = await github.createIssue({
       title: title.trim(),
-      body: body || '',
+      body: finalBody,
       labels: Array.isArray(labels) ? labels : [],
       repoPath: NECTAR_REPO,
     });

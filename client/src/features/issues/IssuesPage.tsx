@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '../../api/client'
 import { Card, CardContent } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
@@ -218,6 +218,33 @@ function IssueRow({ issue }: { issue: Issue }) {
   )
 }
 
+const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024
+const ATTACHMENT_MAX_COUNT = 5
+const ATTACHMENT_MIME = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+
+interface PendingAttachment {
+  id: string
+  filename: string
+  contentType: string
+  dataBase64: string
+  previewUrl: string
+  sizeBytes: number
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      // Strip "data:<mime>;base64," prefix.
+      const comma = result.indexOf(',')
+      resolve(comma >= 0 ? result.slice(comma + 1) : result)
+    }
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'))
+    reader.readAsDataURL(file)
+  })
+}
+
 function CreateIssueDialog({ open, onOpenChange, onCreated }: {
   open: boolean
   onOpenChange: (v: boolean) => void
@@ -228,6 +255,8 @@ function CreateIssueDialog({ open, onOpenChange, onCreated }: {
   const [labels, setLabels] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     if (open) {
@@ -235,8 +264,65 @@ function CreateIssueDialog({ open, onOpenChange, onCreated }: {
       setBody('')
       setLabels('')
       setErr(null)
+      setAttachments(prev => {
+        prev.forEach(a => URL.revokeObjectURL(a.previewUrl))
+        return []
+      })
     }
   }, [open])
+
+  // Revoke object URLs on unmount to avoid leaks.
+  useEffect(() => {
+    return () => {
+      attachments.forEach(a => URL.revokeObjectURL(a.previewUrl))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function handleFiles(files: FileList | null) {
+    if (!files || files.length === 0) return
+    setErr(null)
+    const next: PendingAttachment[] = []
+    for (const file of Array.from(files)) {
+      if (!ATTACHMENT_MIME.includes(file.type)) {
+        setErr(`${file.name}: unsupported type (PNG, JPEG, GIF, or WebP only)`)
+        continue
+      }
+      if (file.size > ATTACHMENT_MAX_BYTES) {
+        setErr(`${file.name}: exceeds 5 MB limit`)
+        continue
+      }
+      try {
+        const dataBase64 = await readFileAsBase64(file)
+        next.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          filename: file.name,
+          contentType: file.type,
+          dataBase64,
+          previewUrl: URL.createObjectURL(file),
+          sizeBytes: file.size,
+        })
+      } catch {
+        setErr(`${file.name}: failed to read file`)
+      }
+    }
+    setAttachments(prev => {
+      const combined = [...prev, ...next].slice(0, ATTACHMENT_MAX_COUNT)
+      if (prev.length + next.length > ATTACHMENT_MAX_COUNT) {
+        setErr(`Only ${ATTACHMENT_MAX_COUNT} attachments allowed; extra files were dropped`)
+      }
+      return combined
+    })
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments(prev => {
+      const target = prev.find(a => a.id === id)
+      if (target) URL.revokeObjectURL(target.previewUrl)
+      return prev.filter(a => a.id !== id)
+    })
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -245,12 +331,18 @@ function CreateIssueDialog({ open, onOpenChange, onCreated }: {
     setErr(null)
     try {
       const labelList = labels.split(',').map(l => l.trim()).filter(Boolean)
+      const payloadAttachments = attachments.map(a => ({
+        filename: a.filename,
+        contentType: a.contentType,
+        dataBase64: a.dataBase64,
+      }))
       await apiFetch('/issues', {
         method: 'POST',
         body: JSON.stringify({
           title: title.trim(),
           body: body.trim(),
           labels: labelList,
+          attachments: payloadAttachments,
         }),
       })
       onCreated()
@@ -288,6 +380,41 @@ function CreateIssueDialog({ open, onOpenChange, onCreated }: {
               rows={8}
               className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
             />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">
+              Attachments <span className="font-normal">(images, max {ATTACHMENT_MAX_COUNT} × 5 MB)</span>
+            </label>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={ATTACHMENT_MIME.join(',')}
+              multiple
+              onChange={e => handleFiles(e.target.files)}
+              disabled={attachments.length >= ATTACHMENT_MAX_COUNT}
+              className="block text-xs text-muted-foreground file:mr-3 file:rounded-md file:border file:border-input file:bg-secondary file:text-secondary-foreground file:px-3 file:py-1.5 file:text-xs file:font-medium file:cursor-pointer hover:file:bg-accent hover:file:text-accent-foreground disabled:opacity-50"
+            />
+            {attachments.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {attachments.map(a => (
+                  <div key={a.id} className="relative group">
+                    <img
+                      src={a.previewUrl}
+                      alt={a.filename}
+                      className="h-20 w-20 rounded-md object-cover border border-border"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(a.id)}
+                      aria-label={`Remove ${a.filename}`}
+                      className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-destructive text-destructive-foreground text-xs leading-none flex items-center justify-center shadow"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div>
             <label className="text-xs font-medium text-muted-foreground mb-1 block">
