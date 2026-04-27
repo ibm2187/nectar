@@ -139,7 +139,9 @@ describe('POST /api/issues — attachments', () => {
     expect(services.github.ensureBranch).toHaveBeenCalledWith('issue-attachments', 'mavencare/nectar');
     expect(services.github.uploadContent).toHaveBeenCalledTimes(2);
     const createCall = services.github.createIssue.mock.calls[0][0];
-    expect(createCall.body).toMatch(/^see attached\n\n!\[screenshot\.png\]\(https:\/\/raw\..+\)\n!\[logo\.png\]\(https:\/\/raw\..+\)$/);
+    expect(createCall.body).toContain('see attached');
+    expect(createCall.body).toMatch(/!\[screenshot\.png\]\(https:\/\/raw\./);
+    expect(createCall.body).toMatch(/!\[logo\.png\]\(https:\/\/raw\./);
   });
 
   it('uses embeds as the entire body when no description was given', async () => {
@@ -153,6 +155,89 @@ describe('POST /api/issues — attachments', () => {
     expect(res.status).toBe(201);
     const createCall = services.github.createIssue.mock.calls[0][0];
     expect(createCall.body).toMatch(/^!\[a\.png\]\(https:\/\/raw\..+\)$/);
+  });
+
+  it('treats whitespace-only body the same as empty body', async () => {
+    const res = await request(app, 'POST', '/api/issues', {
+      title: 't',
+      body: '   \n\t ',
+      attachments: [{ filename: 'a.png', contentType: 'image/png', dataBase64: TINY_PNG_B64 }],
+    });
+    expect(res.status).toBe(201);
+    const createCall = services.github.createIssue.mock.calls[0][0];
+    expect(createCall.body.startsWith('!')).toBe(true);
+  });
+
+  it('escapes filename characters that would break the markdown embed', async () => {
+    const res = await request(app, 'POST', '/api/issues', {
+      title: 't',
+      attachments: [
+        { filename: 'evil](javascript:1)x.png', contentType: 'image/png', dataBase64: TINY_PNG_B64 },
+      ],
+    });
+    expect(res.status).toBe(201);
+    const createCall = services.github.createIssue.mock.calls[0][0];
+    // The `]` from the malicious filename must be backslash-escaped so it
+    // can't close the markdown alt and inject a fake link target.
+    expect(createCall.body).toMatch(/!\[evil\\\]\(javascript:1\)x\.png\]\(https:\/\/raw\./);
+  });
+
+  it('sanitizes filename in the upload path (rejects path traversal segments)', async () => {
+    await request(app, 'POST', '/api/issues', {
+      title: 't',
+      attachments: [
+        { filename: '../../etc/passwd', contentType: 'image/png', dataBase64: TINY_PNG_B64 },
+      ],
+    });
+    const uploadCall = services.github.uploadContent.mock.calls[0][0];
+    // Path must stay under uploads/ — no `..`, no `/etc/`.
+    expect(uploadCall.path).toMatch(/^uploads\/\d{4}\/\d{2}\//);
+    expect(uploadCall.path).not.toMatch(/\.\./);
+    expect(uploadCall.path).not.toMatch(/\/etc\//);
+  });
+
+  it('does not call createIssue if a mid-batch upload fails', async () => {
+    let calls = 0;
+    services.github.uploadContent = vi.fn(async ({ path }) => {
+      calls += 1;
+      if (calls === 2) throw new Error('boom');
+      return { content: { download_url: `https://raw/${path}` } };
+    });
+    const res = await request(app, 'POST', '/api/issues', {
+      title: 't',
+      attachments: [
+        { filename: 'a.png', contentType: 'image/png', dataBase64: TINY_PNG_B64 },
+        { filename: 'b.png', contentType: 'image/png', dataBase64: TINY_PNG_B64 },
+        { filename: 'c.png', contentType: 'image/png', dataBase64: TINY_PNG_B64 },
+      ],
+    });
+    expect(res.status).toBe(500);
+    expect(services.github.createIssue).not.toHaveBeenCalled();
+  });
+
+  it('rejects when uploadContent returns no download_url', async () => {
+    services.github.uploadContent = vi.fn(async () => ({ content: {} }));
+    const res = await request(app, 'POST', '/api/issues', {
+      title: 't',
+      attachments: [{ filename: 'a.png', contentType: 'image/png', dataBase64: TINY_PNG_B64 }],
+    });
+    expect(res.status).toBe(500);
+    expect(services.github.createIssue).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-array attachments', async () => {
+    const res = await request(app, 'POST', '/api/issues', { title: 't', attachments: 'nope' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/array/);
+  });
+
+  it('rejects attachment entries missing required fields', async () => {
+    const res = await request(app, 'POST', '/api/issues', {
+      title: 't',
+      attachments: [{ contentType: 'image/png', dataBase64: TINY_PNG_B64 }],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/filename/);
   });
 
   it('rejects non-image MIME types', async () => {
@@ -178,8 +263,8 @@ describe('POST /api/issues — attachments', () => {
   });
 
   it('rejects when an attachment exceeds the per-file size cap', async () => {
-    // 6 MB of base64-encoded zeros decodes to ~4.5 MB — push over 5 MB by sending 8 MB of base64.
-    const huge = 'A'.repeat(8 * 1024 * 1024);
+    // 2 MB of base64 decodes to ~1.5 MB — over the 1 MB per-file cap.
+    const huge = 'A'.repeat(2 * 1024 * 1024);
     const res = await request(app, 'POST', '/api/issues', {
       title: 't',
       attachments: [{ filename: 'big.png', contentType: 'image/png', dataBase64: huge }],

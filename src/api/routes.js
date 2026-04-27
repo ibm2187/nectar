@@ -77,7 +77,7 @@ const DONE_STATUSES_FOR_RISK = new Set([
 ]);
 
 // Issue-attachment limits — per file size, total count, and allowed image types.
-const ISSUE_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+const ISSUE_ATTACHMENT_MAX_BYTES = 1 * 1024 * 1024;
 const ISSUE_ATTACHMENT_MAX_COUNT = 5;
 const ISSUE_ATTACHMENT_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const ISSUE_ATTACHMENT_BRANCH = 'issue-attachments';
@@ -106,7 +106,7 @@ function validateIssueAttachments(attachments) {
     // Approximate decoded size from base64 length — exact enough for the cap.
     const sizeBytes = Math.floor(dataBase64.length * 3 / 4);
     if (sizeBytes > ISSUE_ATTACHMENT_MAX_BYTES) {
-      return { error: `attachment ${filename} exceeds ${ISSUE_ATTACHMENT_MAX_BYTES} bytes`, attachments: [] };
+      return { error: `attachment ${filename} exceeds 1 MB limit`, attachments: [] };
     }
     out.push({ filename, contentType, contentBase64: dataBase64, sizeBytes });
   }
@@ -119,7 +119,18 @@ function validateIssueAttachments(attachments) {
  * @param {string} name
  */
 function sanitizeAttachmentFilename(name) {
-  return String(name).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'file';
+  const cleaned = String(name).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|-+$/g, '').slice(0, 80);
+  if (!cleaned || /^\.+$/.test(cleaned)) return 'file';
+  return cleaned;
+}
+
+/**
+ * Escape characters that would break out of a markdown image embed
+ * `![alt](url)`. Newlines and `]` are the meaningful exits.
+ * @param {string} alt
+ */
+function escapeMarkdownAlt(alt) {
+  return String(alt).replace(/\\/g, '\\\\').replace(/\]/g, '\\]').replace(/[\r\n]+/g, ' ');
 }
 
 /**
@@ -147,9 +158,9 @@ async function uploadIssueAttachments(github, repoPath, attachments) {
       branch: ISSUE_ATTACHMENT_BRANCH,
       repoPath,
     });
-    const url = (result && result.content && (result.content.download_url || result.content.html_url)) || '';
-    if (!url) throw new Error(`Attachment upload returned no URL for ${safe}`);
-    out.push({ alt: att.filename, url });
+    const url = result && result.content && result.content.download_url;
+    if (!url) throw new Error(`Attachment upload returned no download_url for ${safe}`);
+    out.push({ alt: escapeMarkdownAlt(att.filename), url });
   }
   return out;
 }
@@ -1843,7 +1854,8 @@ module.exports = function createRoutes(services, config) {
   }));
 
   // Larger JSON body limit for this route — attachments are sent inline as base64.
-  const issueCreateJson = expressJson({ limit: '25mb' });
+  // 1 MB per file × 5 files, with base64 (~33% overhead) and JSON wrapping headroom.
+  const issueCreateJson = expressJson({ limit: '8mb' });
   router.post('/issues', issueCreateJson, asyncHandler(async (req, res) => {
     if (!github || !github.isConfigured()) {
       return res.status(503).json({ error: 'GitHub integration not configured' });

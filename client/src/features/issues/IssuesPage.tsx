@@ -218,7 +218,7 @@ function IssueRow({ issue }: { issue: Issue }) {
   )
 }
 
-const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024
+const ATTACHMENT_MAX_BYTES = 1 * 1024 * 1024
 const ATTACHMENT_MAX_COUNT = 5
 const ATTACHMENT_MIME = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
@@ -256,7 +256,11 @@ function CreateIssueDialog({ open, onOpenChange, onCreated }: {
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const attachmentsRef = useRef<PendingAttachment[]>([])
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Mirror state into a ref so the unmount cleanup always sees the latest.
+  attachmentsRef.current = attachments
 
   useEffect(() => {
     if (open) {
@@ -274,9 +278,8 @@ function CreateIssueDialog({ open, onOpenChange, onCreated }: {
   // Revoke object URLs on unmount to avoid leaks.
   useEffect(() => {
     return () => {
-      attachments.forEach(a => URL.revokeObjectURL(a.previewUrl))
+      attachmentsRef.current.forEach(a => URL.revokeObjectURL(a.previewUrl))
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function handleFiles(files: FileList | null) {
@@ -289,7 +292,7 @@ function CreateIssueDialog({ open, onOpenChange, onCreated }: {
         continue
       }
       if (file.size > ATTACHMENT_MAX_BYTES) {
-        setErr(`${file.name}: exceeds 5 MB limit`)
+        setErr(`${file.name}: exceeds 1 MB limit`)
         continue
       }
       try {
@@ -382,10 +385,16 @@ function CreateIssueDialog({ open, onOpenChange, onCreated }: {
             />
           </div>
           <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1 block">
-              Attachments <span className="font-normal">(images, max {ATTACHMENT_MAX_COUNT} × 5 MB)</span>
+            <label htmlFor="issue-attachments-input" className="text-xs font-medium text-muted-foreground mb-1 block">
+              Attachments{' '}
+              <span className="font-normal">
+                {attachments.length >= ATTACHMENT_MAX_COUNT
+                  ? '(max reached — remove one to add more)'
+                  : `(images, max ${ATTACHMENT_MAX_COUNT} × 1 MB)`}
+              </span>
             </label>
             <input
+              id="issue-attachments-input"
               ref={fileInputRef}
               type="file"
               accept={ATTACHMENT_MIME.join(',')}
@@ -427,12 +436,20 @@ function CreateIssueDialog({ open, onOpenChange, onCreated }: {
             />
           </div>
           {err && <p className="text-sm text-destructive">{err}</p>}
+          {submitting && attachments.length > 0 && (
+            <p className="text-xs text-muted-foreground flex items-center gap-2" role="status" aria-live="polite">
+              <span className="inline-block h-3 w-3 rounded-full border-2 border-muted-foreground/40 border-t-muted-foreground animate-spin" />
+              Uploading {attachments.length} attachment{attachments.length === 1 ? '' : 's'}…
+            </p>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
               Cancel
             </Button>
             <Button type="submit" disabled={submitting || !title.trim()}>
-              {submitting ? 'Creating...' : 'Create Issue'}
+              {submitting
+                ? attachments.length > 0 ? 'Uploading…' : 'Creating…'
+                : 'Create Issue'}
             </Button>
           </DialogFooter>
         </form>

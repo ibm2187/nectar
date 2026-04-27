@@ -36,7 +36,10 @@ class GitHubClient {
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      throw new Error(`GitHub ${method} ${path} → ${res.status}: ${text.slice(0, 200)}`);
+      const err = new Error(`GitHub ${method} ${path} → ${res.status}: ${text.slice(0, 200)}`);
+      err.status = res.status;
+      err.responseBody = text;
+      throw err;
     }
 
     return res.json();
@@ -193,23 +196,32 @@ class GitHubClient {
     try {
       return await this._request('GET', `/repos/${repo}/git/ref/${ref}`);
     } catch (err) {
-      if (/→ 404:/.test(err.message)) return null;
+      if (err.status === 404) return null;
       throw err;
     }
   }
 
   /**
-   * Create a new branch at the given commit sha.
+   * Create a new branch at the given commit sha. If GitHub responds 422
+   * "Reference already exists" (concurrent create race), this resolves
+   * normally with `{ raceLost: true }`.
    * @param {string} branch - Bare branch name (e.g., 'issue-attachments')
    * @param {string} sha - Commit sha to point the new ref at
    * @param {string} [repoPath]
    */
   async createBranch(branch, sha, repoPath = null) {
     const repo = repoPath || this.repo;
-    return this._request('POST', `/repos/${repo}/git/refs`, {
-      ref: `refs/heads/${branch}`,
-      sha,
-    });
+    try {
+      return await this._request('POST', `/repos/${repo}/git/refs`, {
+        ref: `refs/heads/${branch}`,
+        sha,
+      });
+    } catch (err) {
+      if (err.status === 422 && /already exists/i.test(err.responseBody || err.message)) {
+        return { raceLost: true };
+      }
+      throw err;
+    }
   }
 
   /**
