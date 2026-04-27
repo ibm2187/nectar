@@ -8,6 +8,17 @@ const ReleaseManager = require('../../src/core/release');
 const createWebhookRoutes = require('../../src/api/webhooks');
 const { createTestDb } = require('../../src/core/db');
 const TicketStore = require('../../src/core/ticket-store');
+function makeMockNotifier(repoPath = 'mavencare/nectar') {
+  return {
+    repoPath,
+    isEventFromConfiguredRepo: (eventRepo) =>
+      !repoPath || !eventRepo || eventRepo === repoPath,
+    onIssueComment: vi.fn().mockResolvedValue({ sent: true }),
+    onPullRequest: vi.fn().mockResolvedValue({ sent: true }),
+    onIssueOpened: vi.fn().mockResolvedValue({ posted: true }),
+  };
+}
+
 async function request(app, method, path, body, headers = {}) {
   return new Promise((resolve, reject) => {
     const server = http.createServer(app);
@@ -129,6 +140,90 @@ describe('Webhook Routes', () => {
         if (origSecret === undefined) delete process.env.GITHUB_WEBHOOK_SECRET;
         else process.env.GITHUB_WEBHOOK_SECRET = origSecret;
       }
+    });
+
+    it('does not call IssueNotifier on issue_comment events from a different repo', async () => {
+      // Defensive guard — if the GitHub App is ever installed on more than
+      // one repo, an issue_comment from the wrong repo would otherwise hit
+      // IssueNotifier.onIssueComment and (after extracting a marker that
+      // happens to point to a real Nectar user) DM them about an unrelated
+      // issue.
+      const issueNotifier = makeMockNotifier();
+      const app2 = express();
+      app2.use(express.json());
+      app2.use('/api/webhooks', createWebhookRoutes(releases, { isConfigured: () => true }, {}, { issueNotifier }));
+
+      const res = await request(app2, 'POST', '/api/webhooks/github', {
+        action: 'created',
+        repository: { full_name: 'mavencare/some-other-repo' },
+        issue: { number: 1, body: '<!-- nectar:reporter=eric@viv.com -->' },
+        comment: { user: { login: 'x' }, body: 'hi' },
+      }, { 'x-github-event': 'issue_comment' });
+      expect(res.status).toBe(200);
+      expect(issueNotifier.onIssueComment).not.toHaveBeenCalled();
+    });
+
+    it('still calls IssueNotifier on issue_comment events from the configured repo', async () => {
+      const issueNotifier = makeMockNotifier();
+      const app2 = express();
+      app2.use(express.json());
+      app2.use('/api/webhooks', createWebhookRoutes(releases, { isConfigured: () => true }, {}, { issueNotifier }));
+
+      await request(app2, 'POST', '/api/webhooks/github', {
+        action: 'created',
+        repository: { full_name: 'mavencare/nectar' },
+        issue: { number: 1, body: '<!-- nectar:reporter=eric@viv.com -->' },
+        comment: { user: { login: 'x' }, body: 'hi' },
+      }, { 'x-github-event': 'issue_comment' });
+      expect(issueNotifier.onIssueComment).toHaveBeenCalledTimes(1);
+    });
+
+    it('routes issues.opened events to IssueNotifier.onIssueOpened (right repo)', async () => {
+      const issueNotifier = makeMockNotifier();
+      const app2 = express();
+      app2.use(express.json());
+      app2.use('/api/webhooks', createWebhookRoutes(releases, { isConfigured: () => true }, {}, { issueNotifier }));
+      await request(app2, 'POST', '/api/webhooks/github', {
+        action: 'opened',
+        repository: { full_name: 'mavencare/nectar' },
+        issue: { number: 42, title: 't', body: 'b', html_url: 'u', user: { login: 'x' } },
+      }, { 'x-github-event': 'issues' });
+      expect(issueNotifier.onIssueOpened).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not route issues events from a wrong repo to IssueNotifier', async () => {
+      const issueNotifier = makeMockNotifier();
+      const app2 = express();
+      app2.use(express.json());
+      app2.use('/api/webhooks', createWebhookRoutes(releases, { isConfigured: () => true }, {}, { issueNotifier }));
+      await request(app2, 'POST', '/api/webhooks/github', {
+        action: 'opened',
+        repository: { full_name: 'mavencare/some-other-repo' },
+        issue: { number: 1, title: 't', body: 'b', html_url: 'u', user: { login: 'x' } },
+      }, { 'x-github-event': 'issues' });
+      expect(issueNotifier.onIssueOpened).not.toHaveBeenCalled();
+    });
+
+    it('does not pass pull_request events to IssueNotifier from a wrong repo (cherry-pick handler still runs)', async () => {
+      const issueNotifier = makeMockNotifier();
+      const app2 = express();
+      app2.use(express.json());
+      // Use a github mock that won't error on the cherry-pick path
+      const ghMock = {
+        isConfigured: () => true,
+        cherryPickLabel: 'cherry-pick',
+        extractVersionFromBranch: () => null, // no version → cherry-pick handler bails
+        parseCherryPickPR: () => ({ sha: 'x', prNumber: 0, jiraKeys: [] }),
+      };
+      app2.use('/api/webhooks', createWebhookRoutes(releases, ghMock, {}, { issueNotifier }));
+
+      const res = await request(app2, 'POST', '/api/webhooks/github', {
+        action: 'opened',
+        repository: { full_name: 'mavencare/some-other-repo' },
+        pull_request: { number: 7, body: 'Closes #42', labels: [], base: { ref: 'main' } },
+      }, { 'x-github-event': 'pull_request' });
+      expect(res.status).toBe(200);
+      expect(issueNotifier.onPullRequest).not.toHaveBeenCalled();
     });
   });
 

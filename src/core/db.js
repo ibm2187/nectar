@@ -742,6 +742,17 @@ function applySchema(db) {
     CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_user    ON mcp_oauth_tokens(userEmail);
     CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_client  ON mcp_oauth_tokens(clientId);
     CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_expires ON mcp_oauth_tokens(expiresAt);
+
+    -- ── issue_pr_notifications (Nectar Issues — PR-linked DM dedup) ──
+    -- One row per (issueNumber, prNumber) we've already DM'd the reporter
+    -- about. Prevents re-notifying when the PR body is edited or the
+    -- server restarts mid-session.
+    CREATE TABLE IF NOT EXISTS issue_pr_notifications (
+      issueNumber  INTEGER NOT NULL,
+      prNumber     INTEGER NOT NULL,
+      notifiedAt   TEXT NOT NULL,
+      PRIMARY KEY (issueNumber, prNumber)
+    );
   `);
 }
 
@@ -1318,6 +1329,20 @@ function applyMigrations(db) {
         CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_client  ON mcp_oauth_tokens(clientId);
         CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_expires ON mcp_oauth_tokens(expiresAt);
       `);
+    },
+    // v18: issue_pr_notifications — dedup PR-linked DMs sent to issue reporters
+    // when a PR references their issue (Closes #N). Composite PK prevents
+    // re-notifying on PR body edits or server restarts. Fresh installs already
+    // have it via applySchema.
+    (db) => {
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS issue_pr_notifications (
+          issueNumber  INTEGER NOT NULL,
+          prNumber     INTEGER NOT NULL,
+          notifiedAt   TEXT NOT NULL,
+          PRIMARY KEY (issueNumber, prNumber)
+        )
+      `).run();
     },
   ];
 

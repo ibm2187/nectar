@@ -325,4 +325,4 @@ function oauthErr(code, description) {
   return err;
 }
 
-module.exports = { McpOAuthStore, sha256, randomToken };
+module.exports = { McpOAuthStore, sha256, randomToken, safeEqual };
