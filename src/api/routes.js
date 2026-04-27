@@ -80,6 +80,12 @@ const DONE_STATUSES_FOR_RISK = new Set([
 const ISSUE_ATTACHMENT_MAX_BYTES = 1 * 1024 * 1024;
 const ISSUE_ATTACHMENT_MAX_COUNT = 5;
 const ISSUE_ATTACHMENT_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+// Why a branch? GitHub's web UI uploads attachments to its private
+// `user-attachments` host, but that endpoint isn't exposed via the REST API
+// and can't be reached with a PAT. So we use a dedicated branch on the same
+// repo as ad-hoc blob storage — every uploaded image is committed under
+// `uploads/{YYYY}/{MM}/...` on this branch and embedded in the issue body via
+// its raw.githubusercontent.com URL.
 const ISSUE_ATTACHMENT_BRANCH = 'issue-attachments';
 
 /**
