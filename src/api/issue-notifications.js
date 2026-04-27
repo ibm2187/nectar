@@ -70,11 +70,15 @@ class IssueNotifier {
     // Skip the strip when there's no marker — that's the github.com-direct
     // case and the body is already clean.
     const cleanBody = reporterEmail ? stripReporterFooter(issue.body || '') : (issue.body || '');
-    const snippet = slackEscape(truncate(cleanBody, 240));
+    const { text: snippetText, attachmentCount } = stripImageEmbeds(cleanBody);
+    const snippet = slackEscape(truncate(snippetText, 240));
     const titleSafe = slackEscape(issue.title);
+    const attachmentTag = attachmentCount > 0
+      ? ` · ${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'}`
+      : '';
     const text =
       `:pencil2: New issue *<${issue.html_url}|#${issue.number} ${titleSafe}>* ` +
-      `opened by ${opener}` +
+      `opened by ${opener}${attachmentTag}` +
       (snippet ? `\n> ${snippet}` : '');
 
     // slack.postMessage returns { ok, error } and never throws — check the
@@ -234,6 +238,34 @@ class IssueNotifier {
 function truncate(text, max) {
   const s = String(text || '').trim().replace(/\s+/g, ' ');
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/**
+ * Strip standalone markdown image-embed lines (e.g., `![file.png](https://…)`)
+ * from a body so the Slack snippet shows actual prose, and return the count
+ * of stripped embeds so the channel post can append "· N attachment(s)".
+ *
+ * Only matches lines that are *purely* an image embed (with surrounding
+ * whitespace allowed) — inline embeds inside a paragraph stay put so we
+ * don't lose context for embeds the author intentionally interleaved.
+ *
+ * @param {string} body
+ * @returns {{text: string, attachmentCount: number}}
+ */
+function stripImageEmbeds(body) {
+  const src = String(body || '');
+  let attachmentCount = 0;
+  const lines = src.split('\n').filter((line) => {
+    if (/^\s*!\[[^\]]*\]\([^)]+\)\s*$/.test(line)) {
+      attachmentCount += 1;
+      return false;
+    }
+    return true;
+  });
+  // Collapse runs of blank lines left behind by the strip so the snippet
+  // doesn't start with a paragraph break.
+  const text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return { text, attachmentCount };
 }
 
 // Remove Slack mrkdwn special chars so untrusted content (issue titles,

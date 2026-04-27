@@ -122,6 +122,22 @@ function createWebServer(services, config) {
     next();
   });
 
+  // POST /api/issues uploads images to GitHub on every call (5 contents
+  // commits + 1 issue create). Beyond protecting the GitHub 5000/hr token
+  // quota, this stops a single authenticated user from polluting the
+  // issue-attachments branch faster than retention can keep up.
+  const issueWriteLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many issues — slow down and try again in a minute' },
+  });
+  app.use('/api/issues', (req, res, next) => {
+    if (req.method !== 'GET') return issueWriteLimiter(req, res, next);
+    next();
+  });
+
   // ── REST API ──────────────────────────────────────────
   const apiRoutes = require('../api/routes');
   app.use('/api', apiRoutes(services, config));

@@ -433,6 +433,59 @@ describe('IssueNotifier.onIssueOpened', () => {
     expect(slack.postMessage).toHaveBeenCalledTimes(2);
   });
 
+  it('strips standalone image-embed lines from the snippet and tags the post with the count', async () => {
+    const { notifier, slack } = makeDeps();
+    const body = [
+      'Page broke after I uploaded a screenshot.',
+      '',
+      '![screenshot.png](https://raw.githubusercontent.com/mavencare/nectar/issue-attachments/uploads/2026/04/a.png)',
+      '![console.png](https://raw.githubusercontent.com/mavencare/nectar/issue-attachments/uploads/2026/04/b.png)',
+    ].join('\n');
+    await notifier.onIssueOpened(openedPayload({ body }));
+    const text = slack.postMessage.mock.calls[0][1];
+    expect(text).toMatch(/· 2 attachments/);
+    expect(text).toMatch(/> Page broke after I uploaded a screenshot\./);
+    // Raw markdown image refs must not leak into the snippet
+    expect(text).not.toMatch(/!\[/);
+    expect(text).not.toMatch(/raw\.githubusercontent/);
+  });
+
+  it('uses singular "1 attachment" when only one image is embedded', async () => {
+    const { notifier, slack } = makeDeps();
+    const body = 'Repro:\n![one.png](https://raw.example/one.png)';
+    await notifier.onIssueOpened(openedPayload({ body }));
+    const text = slack.postMessage.mock.calls[0][1];
+    expect(text).toMatch(/· 1 attachment(?!s)/);
+  });
+
+  it('produces a snippet-less post with the count tag for an attachment-only body', async () => {
+    const { notifier, slack } = makeDeps();
+    const body = '![a.png](https://raw.example/a.png)\n![b.png](https://raw.example/b.png)';
+    await notifier.onIssueOpened(openedPayload({ body }));
+    const text = slack.postMessage.mock.calls[0][1];
+    expect(text).toMatch(/· 2 attachments/);
+    // Nothing left to quote — no "> ..." snippet line at all
+    expect(text).not.toMatch(/\n> /);
+  });
+
+  it('preserves inline image refs that share a line with prose', async () => {
+    const { notifier, slack } = makeDeps();
+    // An inline embed (not a standalone line) is part of the surrounding
+    // sentence and should NOT be stripped — the author chose to weave it in.
+    const body = 'See ![tiny](https://x/y.png) here for details.';
+    await notifier.onIssueOpened(openedPayload({ body }));
+    const text = slack.postMessage.mock.calls[0][1];
+    expect(text).not.toMatch(/· \d+ attachment/);
+    expect(text).toMatch(/See !\[tiny\]\(https:\/\/x\/y\.png\) here/);
+  });
+
+  it('omits the attachment tag when there are none', async () => {
+    const { notifier, slack } = makeDeps();
+    await notifier.onIssueOpened(openedPayload({ body: 'plain text issue' }));
+    const text = slack.postMessage.mock.calls[0][1];
+    expect(text).not.toMatch(/· \d+ attachment/);
+  });
+
   it('honors a constructor-supplied channel override', () => {
     const db = createTestDb();
     const slack = { postMessage: vi.fn().mockResolvedValue(undefined), dmUser: vi.fn() };
