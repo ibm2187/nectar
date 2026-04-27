@@ -1,9 +1,10 @@
 # Nectar Cloud Deployment
 
 Deploy Nectar to a dedicated EC2 instance in the **Jenkins VPC** (Viv root AWS
-account). Direct Node.js execution (no Docker), systemd-managed, Secrets Manager
-for `.env`, ALB with TLS, automatic deploys via a systemd timer that polls
-`origin/main` every 5 minutes. Server logs rotate daily.
+account). Direct Node.js execution (no Docker), systemd-managed (a `web`
+process and a `sync` process sharing one SQLite DB), Secrets Manager for
+`.env`, ALB with TLS, automatic deploys via a systemd timer that polls
+`origin/main` every 5 minutes.
 
 ## Architecture
 
@@ -12,14 +13,22 @@ Internet
     │
     ▼
 ALB :443 (nectar.vivtechnologies.com)
-    │  (office IPs only via SG)
+    │
     ▼
-EC2 t3.medium (Ubuntu 22.04, Node 22 LTS) :4000
-    │  [Jenkins VPC, new "services" subnet, us-east-1b]
-    ├── Node.js — src/index.js (managed by systemd)
-    ├── Bare git clones — ~/.nectar/repos/
-    └── JSON state — ~/.nectar/
+EC2 t3.large (Ubuntu 22.04, Node 22 LTS) :4000
+    │  [Jenkins VPC, internal-tools-1b subnet, us-east-1b]
+    ├── nectar-web.service  — Node.js src/web-server.js  (HTTP + WS + MCP)
+    ├── nectar-sync.service — Node.js src/sync-worker.js (JIRA/GitHub polling)
+    ├── nectar-update.timer — pulls origin/main every 5 min
+    ├── SQLite state    — /home/ubuntu/nectar/.nectar.db (+ .db-wal, .db-shm)
+    └── Bare git clones — /home/ubuntu/.nectar/repos/    (read-mostly mirrors)
 ```
+
+The web server and sync worker run as two separate systemd units sharing the
+same SQLite file via WAL. They were split out of the original single-process
+`nectar.service` so a slow JIRA/GitHub poll can't block dashboard requests
+(and so each side has its own log stream and memory cap). See `How it runs`
+below for the full unit list.
 
 ## Jenkins VPC placement
 
@@ -121,7 +130,7 @@ tofu apply   # requires confirmation
 ```
 
 This creates:
-- EC2 instance (t3.medium, Ubuntu 22.04, 30GB gp3)
+- EC2 instance (t3.large, Ubuntu 22.04, 30GB gp3)
 - ALB + target group + HTTPS listener
 - Security groups (office IPs → ALB → EC2:4000)
 - IAM role with Secrets Manager + SSM access
@@ -145,40 +154,53 @@ Expected: `{"status":"ok","uptime":...,"integrations":{...}}`
 
 ## How it runs
 
-Three systemd units work together on the instance:
+Five systemd units work together on the instance (one of which — the legacy
+`nectar.service` — is intentionally inactive in steady state):
 
 | Unit | Type | What it does |
 |------|------|--------------|
-| `nectar.service` | long-running | Runs Nectar. `ExecStartPre=boot.sh` fetches the `nectar/env` secret from Secrets Manager and merges it into `.env` before the Node process starts. `Restart=on-failure` auto-recovers on crashes. |
-| `nectar-update.service` | oneshot | Runs `cloud/scripts/update.sh`: git fetch → `git pull --ff-only` → conditional `npm install` / client rebuild → `sudo systemctl restart nectar`. Logs append to `/home/ubuntu/nectar-update.log`. |
+| `nectar-web.service` | long-running | Runs the HTTP/WebSocket/MCP server (`node src/web-server.js`). `ExecStartPre=boot.sh` fetches the `nectar/env` secret from Secrets Manager and merges it into `.env` before Node starts. `Restart=on-failure`, `RestartSec=5`. Heap capped at 2 GB (`NODE_OPTIONS=--max-old-space-size=2048`). Logs append to `/home/ubuntu/nectar.log`. |
+| `nectar-sync.service` | long-running | Runs the JIRA/GitHub/Slack sync worker (`node src/sync-worker.js`). Same `ExecStartPre=boot.sh`. `Restart=on-failure`, `RestartSec=10`. Heap capped at 2 GB. Logs append to `/home/ubuntu/nectar-sync.log`. |
+| `nectar-update.service` | oneshot | Runs `cloud/scripts/update.sh`: git fetch → `git pull --ff-only` → conditional `npm install` / client rebuild → `sudo systemctl restart nectar-sync nectar-web`. Hard timeout 600 s. Logs append to `/home/ubuntu/nectar-update.log`. |
 | `nectar-update.timer` | timer | Fires `nectar-update.service` 2 min after boot, then every 5 min from the previous run's completion. `Persistent=true` catches up on missed runs after reboots. |
+| `nectar.service` | long-running (**disabled**) | Legacy single-process unit (`node src/index.js`) installed by `init.sh` on first boot. The first run of `update.sh` stops and disables it, then enables `nectar-web` + `nectar-sync` in its place. You should expect this unit to be loaded but inactive on every running prod box — that is correct steady state, not a bug. |
+
+The split into `nectar-web` + `nectar-sync` exists so the dashboard stays
+responsive during long sync passes (and so each side gets its own log file
+and own memory budget). Both processes open the same `/home/ubuntu/nectar/.nectar.db`
+file in WAL mode — SQLite handles the cross-process locking.
 
 The instance tag `nectar-secret-name` overrides the default `nectar/env` secret
 name, letting you point one instance at a different secret if needed.
 
 ### Logs
 
-| File | What's in it |
-|------|--------------|
-| `/home/ubuntu/nectar.log` | Nectar server stdout/stderr (from `nectar.service`) |
-| `/home/ubuntu/nectar-update.log` | Output of every auto-update run (from `nectar-update.service`) |
+| File | Source | Rotated? |
+|------|--------|----------|
+| `/home/ubuntu/nectar.log` | `nectar-web.service` (HTTP/WS/MCP) | Yes — daily, 100 MB cap, 14 kept, gzip |
+| `/home/ubuntu/nectar-sync.log` | `nectar-sync.service` (poller) | **No** — currently outside the logrotate config. Watch its size on long-running boxes. |
+| `/home/ubuntu/nectar-update.log` | `nectar-update.service` (every 5 min) | Yes — same policy as `nectar.log` |
 
-Both files rotate daily via `/etc/logrotate.d/nectar` — also triggered early if
-either file crosses 100 MB. 14 rotations kept, compressed with gzip. Uses
-`copytruncate` because systemd holds an append-mode file descriptor that a
-normal `mv`+`create` rotation would invalidate.
+Logrotate config lives at `/etc/logrotate.d/nectar` and uses `copytruncate`
+because the long-running units hold an append-mode file descriptor that a
+normal `mv`+`create` rotation would invalidate. The systemd journal also
+captures everything (`journalctl -u nectar-web` etc.) regardless of the file
+logs and is bounded by the journal's own retention.
 
 Tail them live via SSM Session Manager:
 ```bash
 aws ssm start-session --target <instance-id>
-sudo tail -f /home/ubuntu/nectar.log            # server output
+sudo tail -f /home/ubuntu/nectar.log            # web stdout/stderr
+sudo tail -f /home/ubuntu/nectar-sync.log       # sync worker
 sudo tail -f /home/ubuntu/nectar-update.log     # auto-update runs
 ```
 
-Or the systemd journal:
+Or the systemd journal (lets you filter by time, follow multiple units):
 ```bash
-sudo journalctl -u nectar -f                    # server
-sudo journalctl -u nectar-update.service -f     # update runs
+sudo journalctl -u nectar-web -f                       # web
+sudo journalctl -u nectar-sync -f                      # sync worker
+sudo journalctl -u nectar-update.service -f            # update runs
+sudo journalctl -u nectar-web -u nectar-sync --since '15 min ago' --no-pager
 ```
 
 ## Updating Nectar (code)
@@ -186,7 +208,8 @@ sudo journalctl -u nectar-update.service -f     # update runs
 **Automatic** — merge to `main` and wait up to 5 minutes. The `nectar-update.timer`
 on the instance polls `origin/main`, detects the new commit, runs `update.sh`
 (which git-pulls, reinstalls deps if changed, rebuilds the client if changed,
-and restarts the service), and logs everything to `/home/ubuntu/nectar-update.log`.
+and restarts both `nectar-sync` and `nectar-web`), and logs everything to
+`/home/ubuntu/nectar-update.log`.
 
 No-op when HEAD hasn't moved — safe to fire every 5 minutes forever.
 
@@ -227,7 +250,7 @@ fire (within 5 min) picks up the fix automatically.
 To skip the broken commit manually, SSM in and run the update yourself:
 ```bash
 sudo -u ubuntu bash -c 'cd ~/nectar && git pull && npm install'
-sudo systemctl restart nectar
+sudo systemctl restart nectar-sync nectar-web
 ```
 
 ## Updating Nectar (environment variables)
@@ -248,10 +271,10 @@ aws secretsmanager get-secret-value --secret-id nectar/env \
   aws secretsmanager put-secret-value --secret-id nectar/env \
   --secret-string file:///dev/stdin --region us-east-1
 
-# 2. Restart so boot.sh merges the new key into .env
+# 2. Restart both processes so boot.sh merges the new key into .env on each
 aws ssm send-command --instance-ids <instance-id> \
   --document-name "AWS-RunShellScript" \
-  --parameters 'commands=["sudo systemctl restart nectar"]' \
+  --parameters 'commands=["sudo systemctl restart nectar-sync nectar-web"]' \
   --region us-east-1
 ```
 
@@ -310,10 +333,18 @@ Nectar already polls on intervals — webhooks just make updates faster.
 ```bash
 aws ssm start-session --target <instance-id>
 
-sudo systemctl status nectar
-sudo journalctl -u nectar -n 100 --no-pager
+# Inspect both processes — they fail independently
+sudo systemctl status nectar-web nectar-sync --no-pager
+sudo journalctl -u nectar-web -n 100 --no-pager
+sudo journalctl -u nectar-sync -n 100 --no-pager
 sudo tail -100 /home/ubuntu/nectar.log
+sudo tail -100 /home/ubuntu/nectar-sync.log
 ```
+
+If only `nectar-web` is up but `nectar-sync` isn't, the dashboard renders but
+data goes stale (no JIRA/GitHub polling). If only `nectar-sync` is up,
+`/health` will fail and the ALB target group will mark the instance
+unhealthy. Both must be active for prod to be considered healthy.
 
 ### boot.sh failing to fetch secret
 - Confirm the IAM role attached to the instance has `secretsmanager:GetSecretValue`
@@ -370,11 +401,14 @@ Nectar runs Node.js directly. No Docker, no ECR, no CodeBuild, no CodePipeline.
 
 | Resource | Monthly |
 |----------|---------|
-| t3.medium EC2 | ~$30 |
+| t3.large EC2 | ~$60 |
 | 30GB gp3 EBS | ~$2.40 |
 | ALB | ~$16 |
 | Secrets Manager | ~$0.40 |
-| **Total** | **~$50** |
+| **Total** | **~$80** |
+
+(Was a t3.medium for ~$30/mo — bumped to t3.large because Node was peaking
+around 3.5 GB and OOM-looping on the 4 GB host.)
 
 Costs are tagged `Project = nectar` so they don't roll into the Jenkins daily
 cost report. Subnets themselves are free.
@@ -399,8 +433,10 @@ cloud/
 │   ├── boot.sh                  # Every-boot secret fetch (runs as ExecStartPre of nectar.service)
 │   └── update.sh                # Pull latest code + restart (invoked by the timer or manually via SSM)
 └── templates/
-    ├── nectar.service           # Main Nectar systemd unit (Node.js server, Restart=on-failure)
+    ├── nectar.service           # Legacy single-process unit — installed by init.sh on first boot, then disabled by the first update.sh run
+    ├── nectar-web.service       # HTTP/WebSocket/MCP server — long-running, logs to nectar.log
+    ├── nectar-sync.service      # JIRA/GitHub/Slack sync worker — long-running, logs to nectar-sync.log
     ├── nectar-update.service    # Oneshot unit that runs update.sh and appends output to nectar-update.log
     ├── nectar-update.timer      # Fires nectar-update.service 2 min after boot, then every 5 min
-    └── nectar.logrotate         # logrotate config for nectar.log and nectar-update.log
+    └── nectar.logrotate         # logrotate config for nectar.log and nectar-update.log (does NOT cover nectar-sync.log)
 ```
