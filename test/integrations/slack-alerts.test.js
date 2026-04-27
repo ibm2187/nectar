@@ -20,15 +20,16 @@ function makeSlack(mocks = {}, settings = {}) {
   const postMessage = mocks.postMessage || vi.fn().mockResolvedValue({ ok: true, ts: '1700000000.000100' });
   const conversationsList = mocks.conversationsList || vi.fn().mockResolvedValue({ channels: [], response_metadata: {} });
   const conversationsInfo = mocks.conversationsInfo || vi.fn().mockResolvedValue({ channel: { id: 'C1', name: 'x', is_member: true } });
+  const conversationsJoin = mocks.conversationsJoin || vi.fn().mockResolvedValue({ ok: true, channel: { id: 'C1', is_member: true } });
 
   slack.app = {
     client: {
       chat: { postMessage },
-      conversations: { list: conversationsList, info: conversationsInfo },
+      conversations: { list: conversationsList, info: conversationsInfo, join: conversationsJoin },
     },
   };
 
-  return { slack, postMessage, conversationsList, conversationsInfo };
+  return { slack, postMessage, conversationsList, conversationsInfo, conversationsJoin };
 }
 
 describe('SlackNotifier.validateChannel', () => {
@@ -102,14 +103,55 @@ describe('SlackNotifier.validateChannel', () => {
     expect(res.code).toBe('channel_not_found');
   });
 
-  it('returns not_in_channel when the bot is not a member', async () => {
+  it('returns not_in_channel for a PRIVATE channel where the bot is not a member', async () => {
+    // Private channels can't be auto-joined via API — bot must be /invite'd by a human.
+    const { slack, conversationsJoin } = makeSlack({
+      conversationsList: vi.fn().mockResolvedValue({
+        channels: [{ id: 'G1', name: 'secret-stuff' }],
+      }),
+      conversationsInfo: vi.fn().mockResolvedValue({
+        channel: { id: 'G1', name: 'secret-stuff', is_member: false, is_private: true },
+      }),
+    });
+    const res = await slack.validateChannel('#secret-stuff');
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe('not_in_channel');
+    expect(res.error).toMatch(/invite/i);
+    expect(conversationsJoin).not.toHaveBeenCalled();
+  });
+
+  it('auto-joins a PUBLIC channel where the bot is not a member', async () => {
+    const conversationsJoin = vi.fn().mockResolvedValue({
+      ok: true, channel: { id: 'C1', is_member: true },
+    });
     const { slack } = makeSlack({
       conversationsList: vi.fn().mockResolvedValue({
         channels: [{ id: 'C1', name: 'alerts-prod' }],
       }),
       conversationsInfo: vi.fn().mockResolvedValue({
-        channel: { id: 'C1', name: 'alerts-prod', is_member: false },
+        channel: { id: 'C1', name: 'alerts-prod', is_member: false, is_private: false },
       }),
+      conversationsJoin,
+    });
+    const res = await slack.validateChannel('#alerts-prod');
+    expect(res.ok).toBe(true);
+    expect(res.inChannel).toBe(true);
+    expect(res.channelId).toBe('C1');
+    expect(conversationsJoin).toHaveBeenCalledWith({ channel: 'C1' });
+  });
+
+  it('falls back to not_in_channel when auto-join fails on a public channel', async () => {
+    // e.g. workspace policy blocks the bot from joining new channels.
+    const joinErr = new Error('failed');
+    joinErr.data = { error: 'is_private' };
+    const { slack } = makeSlack({
+      conversationsList: vi.fn().mockResolvedValue({
+        channels: [{ id: 'C1', name: 'alerts-prod' }],
+      }),
+      conversationsInfo: vi.fn().mockResolvedValue({
+        channel: { id: 'C1', name: 'alerts-prod', is_member: false, is_private: false },
+      }),
+      conversationsJoin: vi.fn().mockRejectedValue(joinErr),
     });
     const res = await slack.validateChannel('#alerts-prod');
     expect(res.ok).toBe(false);
@@ -270,5 +312,89 @@ describe('SlackNotifier.postReply', () => {
     expect(r1.ok).toBe(false);
     const r2 = await slack.postReply({ channel: '#a', text: 'x' });
     expect(r2.ok).toBe(false);
+  });
+});
+
+describe('SlackNotifier.listChannels', () => {
+  it('returns ALL listed channels (members and non-members) with isMember flag', async () => {
+    // Picker shows everything; the alert-rule save flow handles the
+    // not-yet-joined case (auto-join publics, /invite hint for privates).
+    const { slack } = makeSlack({
+      conversationsList: vi.fn().mockImplementation(({ types }) => Promise.resolve({
+        channels: types === 'public_channel'
+          ? [
+              { id: 'C1', name: 'alerts-prod', is_member: true },
+              { id: 'C2', name: 'general', is_member: false },
+            ]
+          : [
+              { id: 'G1', name: 'lumen-internal', is_member: true },
+              { id: 'G2', name: 'execs-only', is_member: false },
+            ],
+      })),
+    });
+    const res = await slack.listChannels();
+    expect(res.ok).toBe(true);
+    const names = res.channels.map(c => c.name).sort();
+    expect(names).toEqual(['alerts-prod', 'execs-only', 'general', 'lumen-internal']);
+    const general = res.channels.find(c => c.name === 'general');
+    expect(general.isMember).toBe(false);
+    expect(general.isPrivate).toBe(false);
+    const lumen = res.channels.find(c => c.name === 'lumen-internal');
+    expect(lumen.isMember).toBe(true);
+    expect(lumen.isPrivate).toBe(true);
+  });
+
+  it('sorts members before non-members so the picker shows easy choices first', async () => {
+    const { slack } = makeSlack({
+      conversationsList: vi.fn().mockImplementation(({ types }) => Promise.resolve({
+        channels: types === 'public_channel'
+          ? [
+              { id: 'C1', name: 'zulu', is_member: true },
+              { id: 'C2', name: 'alpha', is_member: false },
+            ]
+          : [],
+      })),
+    });
+    const res = await slack.listChannels();
+    expect(res.channels.map(c => c.name)).toEqual(['zulu', 'alpha']);
+    // Member 'zulu' comes before non-member 'alpha' even though 'alpha' < 'zulu' alphabetically.
+  });
+
+  it('returns ok=false when slack is not configured', async () => {
+    const slack = new SlackNotifier({});
+    slack.ready = false;
+    const res = await slack.listChannels();
+    expect(res.ok).toBe(false);
+    expect(res.channels).toEqual([]);
+  });
+
+  it('returns ok=false with empty channels on Slack API failure', async () => {
+    const { slack } = makeSlack({
+      conversationsList: vi.fn().mockRejectedValue(new Error('missing_scope')),
+    });
+    const res = await slack.listChannels();
+    expect(res.ok).toBe(false);
+    expect(res.channels).toEqual([]);
+    expect(res.error).toMatch(/missing_scope/);
+  });
+
+  it('returns partial results when one channel type fails (e.g. only channels:read granted)', async () => {
+    // Bot has channels:read but not groups:read — public listing succeeds,
+    // private listing throws. We should keep the public channels we did
+    // collect rather than wipe the whole result.
+    const conversationsList = vi.fn().mockImplementation(({ types }) => {
+      if (types === 'public_channel') {
+        return Promise.resolve({
+          channels: [{ id: 'C1', name: 'general', is_member: false }],
+        });
+      }
+      const err = new Error('missing_scope');
+      err.data = { error: 'missing_scope' };
+      return Promise.reject(err);
+    });
+    const { slack } = makeSlack({ conversationsList });
+    const res = await slack.listChannels();
+    expect(res.ok).toBe(true);
+    expect(res.channels.map(c => c.name)).toEqual(['general']);
   });
 });

@@ -6,6 +6,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetBody } from '../../c
 import { Badge } from '../../components/ui/badge'
 import { SearchableSelect } from '../../components/SearchableSelect'
 import { useBasicUsers } from '../../lib/use-basic-users'
+import { slackChannelToPickerItem, type SlackChannel } from './slackChannel'
 
 const STATUS_BADGE: Record<IncidentStatus, string> = {
   open: 'bg-red-100 text-red-800 border-red-300',
@@ -33,7 +34,6 @@ const EVENT_ICON: Record<string, string> = {
   'dedup-suppressed': '🔕',
 }
 
-interface SlackChannel { id: string; name: string; isPrivate: boolean }
 interface SlackPostResult { channel: string; ok: boolean; error?: string; code?: string }
 
 interface Props {
@@ -494,16 +494,12 @@ function ChannelPickerInline({
       <div className="flex items-center gap-2">
         <SearchableSelect
           className="flex-1"
-          items={(channels || []).map(c => ({
-            value: c.name,
-            label: c.name,
-            icon: c.isPrivate ? '🔒' : '#',
-          }))}
+          items={(channels || []).map(c => slackChannelToPickerItem(c))}
           value={picked || null}
           onChange={(v) => setPicked(v || '')}
           placeholder={channels ? 'Pick a channel…' : 'Loading channels…'}
           searchPlaceholder="Search Slack channels…"
-          emptyHint="No channels — invite @Nectar to one and reload."
+          emptyHint="No Slack channels available — check Slack connection / scopes."
           disabled={!channels}
         />
         <Button size="sm" disabled={posting || !picked} onClick={postNow}>

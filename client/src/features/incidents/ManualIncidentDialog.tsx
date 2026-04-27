@@ -7,12 +7,7 @@ import { SearchableSelect } from '../../components/SearchableSelect'
 import { useCustomers } from '../../lib/customer-utils'
 import { useWsStore } from '../../stores/wsStore'
 import { useBasicUsers } from '../../lib/use-basic-users'
-
-interface SlackChannel {
-  id: string
-  name: string
-  isPrivate: boolean
-}
+import { slackChannelToPickerItem, type SlackChannel } from './slackChannel'
 
 interface SlackPostResult {
   channel: string
@@ -209,11 +204,7 @@ export function ManualIncidentDialog({ onClose, onCreated }: Props) {
           >
             <SearchableSelect
               className="w-full"
-              items={(slackChannels || []).map(c => ({
-                value: c.name,
-                label: c.name,
-                icon: c.isPrivate ? '🔒' : '#',
-              }))}
+              items={(slackChannels || []).map(c => slackChannelToPickerItem(c))}
               value={slackChannel || null}
               onChange={(v) => setSlackChannel(v || '')}
               placeholder="Don't post to Slack"
